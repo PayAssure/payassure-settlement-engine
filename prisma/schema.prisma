@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ParticipantType {
+  RETAILER
+  SUPPLIER
+}
+
+enum ParticipantStatus {
+  DRAFT
+  DOCUMENTS_SUBMITTED
+  VERIFIED
+  PILOT
+  LIVE
+  REJECTED
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  USER
+}
+
+model Hello {
+  id   Int    @id @default(autoincrement())
+  text String
+}
+
+model OnboardingParticipant {
+  id                    String             @id @default(cuid())
+  participantType       ParticipantType
+  businessName          String
+  registrationNumber    String?
+  kraPin                String?
+  businessType          String?
+  industry              String?
+  physicalAddress       String?
+  contactName           String?
+  email                 String?
+  phoneNumber           String?
+  settlementMethod      String?
+  settlementAccount     String?
+  posSystem             String?
+  webhookUrl            String?
+  settlementPreference  String?
+  status                ParticipantStatus  @default(DRAFT)
+  integrations          Integration[]
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+}
+
+model Integration {
+  id              String               @id @default(cuid())
+  participantId   String
+  participant     OnboardingParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  merchantId      String               @unique
+  apiKeyHash      String
+  apiSecretHash   String
+  environment     String               @default("production")
+  webhookUrl      String?
+  isActive        Boolean              @default(true)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+}
+
+model User {
+  id                  String   @id @default(cuid())
+  username            String   @unique
+  email               String   @unique
+  passwordHash        String
+  role                UserRole @default(USER)
+  isActive            Boolean  @default(true)
+  refreshTokenVersion Int      @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model OnboardingMessage {
+  id        Int      @id @default(autoincrement())
+  message   String
+  createdAt DateTime @default(now())
+}
