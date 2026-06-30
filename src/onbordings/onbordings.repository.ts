@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, NotFoundException, OnModuleDestroy } from '@nestjs/common';
 import { createHash, randomBytes } from 'crypto';
 import { PrismaClient } from '@prisma/client';
 import { CreateIntegrationDto } from './dto/create-integration.dto';
@@ -9,47 +9,36 @@ import { UpdateOnboardingDto } from './dto/update-onboarding.dto';
 export class OnbordingsRepository implements OnModuleDestroy {
   private prisma = new PrismaClient();
 
-  async createParticipantWithIntegration(data: CreateOnboardingDto) {
-    const merchantId = this.generateMerchantId();
-    const apiKey = this.generateCredential('pk_live');
-    const apiSecret = this.generateCredential('sk_live');
+  async findUserByEmail(email: string) {
+    return this.prisma.user.findUnique({ where: { email } });
+  }
 
-    return this.prisma.$transaction(async (tx) => {
-      const participant = await tx.onboardingParticipant.create({
-        data: {
-          participantType: data.participantType,
-          businessName: data.businessName,
-          registrationNumber: data.registrationNumber,
-          kraPin: data.kraPin,
-          businessType: data.businessType,
-          industry: data.industry,
-          physicalAddress: data.physicalAddress,
-          contactName: data.contactName,
-          email: data.email,
-          phoneNumber: data.phoneNumber,
-          settlementMethod: data.settlementMethod,
-          settlementAccount: data.settlementAccount,
-          posSystem: data.posSystem,
-          settlementPreference: data.settlementPreference,
-          status: 'DRAFT',
-        },
-      });
+  async findParticipantByEmail(email: string) {
+    return this.prisma.onboardingParticipant.findFirst({
+      where: { email },
+      include: { integrations: { orderBy: { createdAt: 'desc' }, take: 1 } },
+    });
+  }
 
-      const integration = await tx.integration.create({
-        data: {
-          participantId: participant.id,
-          merchantId,
-          apiKeyHash: this.hashSecret(apiKey),
-          apiSecretHash: this.hashSecret(apiSecret),
-          environment: 'production',
-        },
-      });
-
-      return {
-        ...participant,
-        integrations: [integration],
-        credentials: { merchantId, apiKey, apiSecret },
-      };
+  async createParticipantWithoutIntegration(data: CreateOnboardingDto) {
+    return this.prisma.onboardingParticipant.create({
+      data: {
+        participantType: data.participantType,
+        businessName: data.businessName,
+        registrationNumber: data.registrationNumber,
+        kraPin: data.kraPin,
+        businessType: data.businessType,
+        industry: data.industry,
+        physicalAddress: data.physicalAddress,
+        contactName: data.contactName,
+        email: data.email,
+        phoneNumber: data.phoneNumber,
+        settlementMethod: data.settlementMethod,
+        settlementAccount: data.settlementAccount,
+        posSystem: data.posSystem,
+        settlementPreference: data.settlementPreference,
+        status: 'DRAFT',
+      },
     });
   }
 
@@ -101,10 +90,14 @@ export class OnbordingsRepository implements OnModuleDestroy {
     const apiKey = this.generateCredential('pk_live');
     const apiSecret = this.generateCredential('sk_live');
 
+    this.validateCredentials(merchantId, apiKey, apiSecret);
+
     const integration = await this.prisma.integration.create({
       data: {
         participantId: id,
         merchantId,
+        apiKey,
+        apiSecret,
         apiKeyHash: this.hashSecret(apiKey),
         apiSecretHash: this.hashSecret(apiSecret),
         environment: data.environment ?? 'production',
@@ -113,6 +106,33 @@ export class OnbordingsRepository implements OnModuleDestroy {
     });
 
     return { ...integration, apiKey, apiSecret };
+  }
+
+  async regenerateIntegrationCredentials(integrationId: string) {
+    const apiKey = this.generateCredential('pk_live');
+    const apiSecret = this.generateCredential('sk_live');
+
+    this.validateCredentials('dummy-merchant', apiKey, apiSecret);
+
+    const integration = await this.prisma.integration.update({
+      where: { id: integrationId },
+      data: {
+        apiKey,
+        apiSecret,
+        apiKeyHash: this.hashSecret(apiKey),
+        apiSecretHash: this.hashSecret(apiSecret),
+      },
+    });
+
+    return { ...integration, apiKey, apiSecret };
+  }
+
+  private validateCredentials(merchantId: string, apiKey: string, apiSecret: string) {
+    if (!merchantId || !apiKey || !apiSecret) {
+      throw new InternalServerErrorException(
+        'Invalid API credential data generated. No partial credentials were persisted.',
+      );
+    }
   }
 
   private generateMerchantId(): string {

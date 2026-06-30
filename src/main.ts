@@ -8,6 +8,7 @@ import { OnbordingsModule } from './onbordings/onbordings.module';
 import { AuthModule } from './auth/auth.module';
 import { SettlementModule } from './settlement/settlement.module';
 import { bootstrapSuperAdmin } from './auth/bootstrap';
+import { HealthModule } from './health/health.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -16,24 +17,39 @@ async function bootstrap() {
     console.log(`[REQUEST] ${req.method} ${req.originalUrl}`);
     next();
   });
-
   const config = new DocumentBuilder()
-    .setTitle('Settlement Engine')
-    .setDescription('Settlement module API')
-    .setVersion('0.1')
+    .setTitle('PayAssure API')
+    .setDescription(`
+PayAssure is a secure financial integration and settlement platform that enables retailers, suppliers, financial institutions, and enterprise systems to automate payment processing, transaction orchestration, and settlement workflows.
+
+This API provides endpoints for:
+- Authentication and authorization
+- Participant onboarding and management
+- API integrations and webhooks
+- Transaction ingestion
+- Settlement processing
+- Payout execution
+- Reconciliation
+- Reporting and analytics
+- Notifications and event management
+
+All protected endpoints require a valid JWT access token. API integrations authenticate using merchant credentials and API keys where applicable.
+  `)
+    .setVersion('1.0.0')
     .addBearerAuth(
       {
         type: 'http',
         scheme: 'bearer',
         bearerFormat: 'JWT',
-        description: 'Enter your JWT access token to authenticate protected endpoints.',
+        description:
+          'Provide a valid JWT access token in the format: Bearer <access_token>.',
       },
       'access-token',
     )
     .build();
 
   const document = SwaggerModule.createDocument(app, config, {
-    include: [SettlementModule, OnbordingsModule, AuthModule],
+    include: [SettlementModule, OnbordingsModule, AuthModule,HealthModule],
   });
   SwaggerModule.setup('api', app, document);
 

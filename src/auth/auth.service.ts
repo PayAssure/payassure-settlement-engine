@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, ForbiddenException } from '@nestjs/common';
+import { ConflictException, Injectable, UnauthorizedException, ForbiddenException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { AuthRepository } from './auth.repository';
@@ -22,13 +22,63 @@ export class AuthService {
     return this.createUser(data.username, data.email, data.password, UserRole.ADMIN);
   }
 
+  async registerBeforeOnboarding(data: RegisterDto) {
+    const existing = await this.repository.findByEmailOrUsername(data.username, data.email);
+    if (existing) {
+      const onboarded = await this.repository.findOnboardedByEmail(data.email);
+      if (onboarded) {
+        return {
+          message: 'Account already exists. Please complete onboarding to finish your profile.',
+          profileComplete: false,
+          user: {
+            id: existing.id,
+            username: existing.username,
+            email: existing.email,
+            role: existing.role,
+          },
+        };
+      }
+      throw new ConflictException('Username or email already exists');
+    }
+
+    return this.createUser(
+      data.username,
+      data.email,
+      data.password,
+      UserRole.USER,
+      'Account created successfully. Your profile is incomplete. Please complete onboarding to finish setup.',
+      false,
+    );
+  }
+
   async registerOnboardedUser(data: RegisterDto) {
-    const onboarded = await this.repository.findOnboardedByEmail(data.email);
-    if (!onboarded) {
+    const onboarding = await this.repository.findOnboardedByEmail(data.email);
+    if (!onboarding) {
       throw new UnauthorizedException('No onboarding record found for this email address');
     }
 
-    return this.createUser(data.username, data.email, data.password, UserRole.USER);
+    const existingUser = await this.repository.findByEmailOrUsername(data.username, data.email);
+    if (existingUser) {
+      return {
+        message: 'Your profile is now complete.',
+        profileComplete: true,
+        user: {
+          id: existingUser.id,
+          username: existingUser.username,
+          email: existingUser.email,
+          role: existingUser.role,
+        },
+      };
+    }
+
+    return this.createUser(
+      data.username,
+      data.email,
+      data.password,
+      UserRole.USER,
+      'User account created successfully and profile is complete.',
+      true,
+    );
   }
 
   async login(data: LoginDto) {
@@ -90,16 +140,24 @@ export class AuthService {
     return this.repository.getAllUsers(filters);
   }
 
-  private async createUser(username: string, email: string, password: string, role: UserRole) {
+  private async createUser(
+    username: string,
+    email: string,
+    password: string,
+    role: UserRole,
+    message = 'User account created successfully',
+    profileComplete = true,
+  ) {
     const existing = await this.repository.findByEmailOrUsername(username, email);
     if (existing) {
-      throw new UnauthorizedException('Username or email already exists');
+      throw new ConflictException('Username or email already exists');
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
     const user = await this.repository.createUser({ username, email, passwordHash, role });
     return {
-      message: 'User account created successfully',
+      message,
+      profileComplete,
       user: {
         id: user.id,
         username: user.username,

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { CreateIntegrationDto } from './dto/create-integration.dto';
 import { CreateOnboardingDto } from './dto/create-onboarding.dto';
 import { OnboardingResponseDto } from './dto/onboarding-response.dto';
@@ -10,9 +10,18 @@ export class OnbordingsService {
   constructor(private readonly repository: OnbordingsRepository) {}
 
   async createParticipant(data: CreateOnboardingDto): Promise<OnboardingResponseDto> {
-    const created = await this.repository.createParticipantWithIntegration(data);
+    const user = data.email ? await this.repository.findUserByEmail(data.email) : null;
+    const existingParticipant = data.email ? await this.repository.findParticipantByEmail(data.email) : null;
+    const completionMessage = user
+      ? undefined
+      : 'Onboarding created. Please register an account to complete your profile.';
 
-    return this.toResponse(created, created.credentials);
+    if (existingParticipant && this.shouldReuseParticipant(existingParticipant, data)) {
+      return this.toResponse(existingParticipant, undefined, completionMessage);
+    }
+
+    const created = await this.repository.createParticipantWithoutIntegration(data);
+    return this.toResponse(created, undefined, completionMessage);
   }
 
   async findAllParticipants(): Promise<OnboardingResponseDto[]> {
@@ -55,6 +64,46 @@ export class OnbordingsService {
     return this.repository.createIntegrationForParticipant(id, data);
   }
 
+  async generateApiKeys(user: any): Promise<OnboardingResponseDto> {
+    const participant = await this.repository.findParticipantByEmail(user.email);
+    if (!participant) {
+      throw new NotFoundException('Onboarding participant not found for the authenticated user');
+    }
+
+    const existingIntegration = participant.integrations?.[0];
+    if (existingIntegration) {
+      if (existingIntegration.apiKey && existingIntegration.apiSecret) {
+        const credentials = {
+          merchantId: existingIntegration.merchantId,
+          apiKey: existingIntegration.apiKey,
+          apiSecret: existingIntegration.apiSecret,
+        };
+
+        return this.toResponse(
+          participant,
+          credentials,
+          'API keys were not generated because they already exist. Use the existing credentials.',
+        );
+      }
+
+      const regenerated = await this.repository.regenerateIntegrationCredentials(existingIntegration.id);
+      const participantWithIntegration = await this.repository.findParticipantById(participant.id);
+      return this.toResponse(
+        participantWithIntegration,
+        regenerated,
+        'API keys were generated and persisted because previous credentials were missing.',
+      );
+    }
+
+    const generated = await this.repository.createIntegrationForParticipant(participant.id, {});
+    const participantWithIntegration = await this.repository.findParticipantById(participant.id);
+    return this.toResponse(
+      participantWithIntegration,
+      generated,
+      'These are the API keys generated for the first time.',
+    );
+  }
+
   async updateWebhook(id: string, webhookUrl: string): Promise<OnboardingResponseDto> {
     try {
       const participant = await this.repository.updateWebhook(id, webhookUrl);
@@ -64,10 +113,42 @@ export class OnbordingsService {
     }
   }
 
-  private toResponse(participant: any, credentials?: { merchantId: string; apiKey: string; apiSecret: string }): OnboardingResponseDto {
+  private shouldReuseParticipant(existingParticipant: any, data: CreateOnboardingDto): boolean {
+    if (!existingParticipant) {
+      return false;
+    }
+
+    if (existingParticipant.participantType !== data.participantType) {
+      return false;
+    }
+
+    const comparableFields = [
+      'businessName',
+      'registrationNumber',
+      'kraPin',
+      'businessType',
+      'industry',
+      'physicalAddress',
+      'contactName',
+      'phoneNumber',
+      'settlementMethod',
+      'settlementAccount',
+      'posSystem',
+      'settlementPreference',
+    ] as const;
+
+    return comparableFields.every((field) => (existingParticipant[field] ?? null) === (data[field] ?? null));
+  }
+
+  private toResponse(
+    participant: any,
+    credentials?: { merchantId: string; apiKey: string; apiSecret: string },
+    message?: string,
+  ): OnboardingResponseDto {
     const activeIntegration = participant.integrations?.[0];
 
     return {
+      message,
       id: participant.id,
       participantType: participant.participantType,
       businessName: participant.businessName,
@@ -79,8 +160,8 @@ export class OnbordingsService {
         ? {
             id: activeIntegration.id,
             merchantId: credentials?.merchantId ?? activeIntegration.merchantId,
-            apiKey: credentials?.apiKey ?? '',
-            apiSecret: credentials?.apiSecret ?? '',
+            apiKey: credentials?.apiKey ?? activeIntegration.apiKey ?? '',
+            apiSecret: credentials?.apiSecret ?? activeIntegration.apiSecret ?? '',
             environment: activeIntegration.environment,
             createdAt: activeIntegration.createdAt,
           }

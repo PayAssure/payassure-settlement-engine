@@ -8,6 +8,13 @@ export class RegisterResponseDto {
   message!: string;
 
   @ApiProperty({
+    example: false,
+    description: 'Whether the user profile is already complete after registration',
+    required: false,
+  })
+  profileComplete?: boolean;
+
+  @ApiProperty({
     description: 'Registered user profile details',
   })
   user!: {

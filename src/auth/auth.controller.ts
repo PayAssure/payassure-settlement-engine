@@ -31,13 +31,25 @@ export class AuthController {
     return this.authService.registerAdmin(body, req.user);
   }
 
+  @Post('register-before-onboarding')
+  @ApiOperation({
+    summary: 'Register a user account before onboarding',
+    description:
+      'Creates a standard user account for a participant before onboarding is completed. The account is created immediately, but the profile remains incomplete until onboarding is finished.',
+  })
+  @ApiResponse({ status: 201, description: 'User account created successfully', type: RegisterResponseDto })
+  @ApiResponse({ status: 409, description: 'Email or username already exists' })
+  async registerBeforeOnboarding(@Body() body: RegisterDto) {
+    return this.authService.registerBeforeOnboarding(body);
+  }
+
   @Post('onboarded-register')
   @ApiOperation({
     summary: 'Register a user after onboarding',
     description:
-      'Creates a standard user account for a participant who has completed onboarding. This creates a username, email, and password-based credential set.',
+      'Creates a standard user account for a participant who has completed onboarding or marks an existing registered user as complete.',
   })
-  @ApiResponse({ status: 201, description: 'User account created successfully', type: RegisterResponseDto })
+  @ApiResponse({ status: 201, description: 'User profile is now complete', type: RegisterResponseDto })
   @ApiResponse({ status: 409, description: 'Email or username already exists' })
   async onboardedRegister(@Body() body: RegisterDto) {
     return this.authService.registerOnboardedUser(body);

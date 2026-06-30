@@ -22,6 +22,9 @@ export class IntegrationResponseDto {
 }
 
 export class OnboardingResponseDto {
+  @ApiPropertyOptional()
+  message?: string;
+
   @ApiProperty()
   id!: string;
 

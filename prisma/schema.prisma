@@ -60,6 +60,8 @@ model Integration {
   participantId   String
   participant     OnboardingParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
   merchantId      String               @unique
+  apiKey          String?
+  apiSecret       String?
   apiKeyHash      String
   apiSecretHash   String
   environment     String               @default("production")

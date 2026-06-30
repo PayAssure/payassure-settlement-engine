@@ -11,7 +11,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: process.env.JWT_SECRET || "we_are_team_payassure_credentials"
+      secretOrKey: process.env.JWT_SECRET || 'payassure-dev-secret',
     });
   }
 
