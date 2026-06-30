@@ -1,6 +1,6 @@
 import { Injectable, InternalServerErrorException, NotFoundException, OnModuleDestroy } from '@nestjs/common';
 import { createHash, randomBytes } from 'crypto';
-import { PrismaClient } from '@prisma/client';
+import { ParticipantStatus, PrismaClient } from '@prisma/client';
 import { CreateIntegrationDto } from './dto/create-integration.dto';
 import { CreateOnboardingDto } from './dto/create-onboarding.dto';
 import { UpdateOnboardingDto } from './dto/update-onboarding.dto';
@@ -37,7 +37,7 @@ export class OnbordingsRepository implements OnModuleDestroy {
         settlementAccount: data.settlementAccount,
         posSystem: data.posSystem,
         settlementPreference: data.settlementPreference,
-        status: 'DRAFT',
+        status: this.getStatusForProfile(data),
       },
     });
   }
@@ -56,9 +56,35 @@ export class OnbordingsRepository implements OnModuleDestroy {
   }
 
   async updateParticipant(id: string, data: UpdateOnboardingDto) {
+    const currentParticipant = await this.prisma.onboardingParticipant.findUnique({ where: { id } });
+    if (!currentParticipant) {
+      throw new NotFoundException('Participant not found');
+    }
+
+    const nextStatus = this.getStatusForProfile({
+      participantType: currentParticipant.participantType,
+      businessName: currentParticipant.businessName,
+      registrationNumber: currentParticipant.registrationNumber ?? undefined,
+      kraPin: currentParticipant.kraPin ?? undefined,
+      businessType: currentParticipant.businessType ?? undefined,
+      industry: currentParticipant.industry ?? undefined,
+      physicalAddress: currentParticipant.physicalAddress ?? undefined,
+      contactName: currentParticipant.contactName ?? undefined,
+      email: currentParticipant.email ?? undefined,
+      phoneNumber: currentParticipant.phoneNumber ?? undefined,
+      settlementMethod: currentParticipant.settlementMethod ?? undefined,
+      settlementAccount: currentParticipant.settlementAccount ?? undefined,
+      posSystem: currentParticipant.posSystem ?? undefined,
+      settlementPreference: currentParticipant.settlementPreference ?? undefined,
+      ...data,
+    });
+
     return this.prisma.onboardingParticipant.update({
       where: { id },
-      data,
+      data: {
+        ...data,
+        status: nextStatus,
+      },
       include: { integrations: { orderBy: { createdAt: 'desc' }, take: 1 } },
     });
   }
@@ -133,6 +159,25 @@ export class OnbordingsRepository implements OnModuleDestroy {
         'Invalid API credential data generated. No partial credentials were persisted.',
       );
     }
+  }
+
+  private getStatusForProfile(data: Partial<CreateOnboardingDto>): ParticipantStatus {
+    const requiredFields = [
+      'participantType',
+      'businessName',
+      'contactName',
+      'email',
+      'phoneNumber',
+      'settlementMethod',
+      'settlementAccount',
+    ] as const;
+
+    const isComplete = requiredFields.every((field) => {
+      const value = data[field];
+      return typeof value === 'string' ? value.trim().length > 0 : Boolean(value);
+    });
+
+    return isComplete ? ParticipantStatus.DOCUMENTS_SUBMITTED : ParticipantStatus.DRAFT;
   }
 
   private generateMerchantId(): string {

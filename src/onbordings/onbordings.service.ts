@@ -15,13 +15,24 @@ export class OnbordingsService {
     const completionMessage = user
       ? undefined
       : 'Onboarding created. Please register an account to complete your profile.';
+    const draftReasonMessage = this.isProfileIncomplete(data)
+      ? 'Your onboarding request is currently in draft because the profile is incomplete. Please complete the required details to move it forward.'
+      : undefined;
 
-    if (existingParticipant && this.shouldReuseParticipant(existingParticipant, data)) {
-      return this.toResponse(existingParticipant, undefined, completionMessage);
+    if (existingParticipant) {
+      if (existingParticipant.participantType === data.participantType) {
+        const duplicateMessage ='This onboarding request was not created because an onboarding record for the same participant type already exists for this user.';
+
+        return this.toResponse(existingParticipant, undefined, duplicateMessage);
+      }
+
+      if (this.shouldReuseParticipant(existingParticipant, data)) {
+        return this.toResponse(existingParticipant, undefined, completionMessage);
+      }
     }
 
     const created = await this.repository.createParticipantWithoutIntegration(data);
-    return this.toResponse(created, undefined, completionMessage);
+    return this.toResponse(created, undefined, draftReasonMessage ?? completionMessage);
   }
 
   async findAllParticipants(): Promise<OnboardingResponseDto[]> {
@@ -111,6 +122,20 @@ export class OnbordingsService {
     } catch {
       throw new NotFoundException('Participant not found');
     }
+  }
+
+  private isProfileIncomplete(data: CreateOnboardingDto): boolean {
+    const requiredFields = [
+      data.participantType,
+      data.businessName,
+      data.contactName,
+      data.email,
+      data.phoneNumber,
+      data.settlementMethod,
+      data.settlementAccount,
+    ];
+
+    return requiredFields.some((value) => !value || (typeof value === 'string' && value.trim().length === 0));
   }
 
   private shouldReuseParticipant(existingParticipant: any, data: CreateOnboardingDto): boolean {

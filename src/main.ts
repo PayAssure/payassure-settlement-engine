@@ -56,7 +56,7 @@ All protected endpoints require a valid JWT access token. API integrations authe
   await bootstrapSuperAdmin();
 
   await app.listen(3000);
-  console.log('Listening on http://localhost:3000');
+  console.log('Swagger documentation available on http://localhost:3000/api');
 }
 
 bootstrap();

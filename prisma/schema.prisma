@@ -27,6 +27,32 @@ enum UserRole {
   USER
 }
 
+enum SettlementStatus {
+  INITIATED
+  PENDING_PROCESSING
+  PROCESSING
+  PROCESSING_COMPLETE
+  AWAITING_RECONCILIATION
+  COMPLETED
+  PROCESSING_FAILED
+  FAILED
+}
+
+enum TransactionStatus {
+  INITIATED
+  PROCESSING
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum TransactionType {
+  SALE
+  ADJUSTMENT
+  REFUND
+  DEDUCTION
+}
+
 model Hello {
   id   Int    @id @default(autoincrement())
   text String
@@ -88,3 +114,65 @@ model OnboardingMessage {
   message   String
   createdAt DateTime @default(now())
 }
+
+model SettlementSession {
+  id            String   @id @default(cuid())
+  businessId    String
+  integrationId String
+  token         String   @unique
+  expiresAt     DateTime
+  usedAt        DateTime?
+  isUsed        Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  @@index([businessId])
+  @@index([integrationId])
+  @@index([expiresAt])
+}
+
+model Settlement {
+  id                    String              @id @default(cuid())
+  businessId            String
+  integrationId         String
+  amount                Decimal             @db.Decimal(18, 2)
+  currency              String
+  settlementMethod      String
+  settlementAccount     String
+  reference             String
+  status                SettlementStatus    @default(INITIATED)
+  description           String?
+  bankReference         String?
+  bankTransactionId     String?
+  reconciliationStatus  String?
+  failureReason         String?
+  metadata              Json?
+  transactions          Transaction[]
+  createdAt             DateTime            @default(now())
+  processedAt           DateTime?
+  completedAt           DateTime?
+  failedAt              DateTime?
+  reconciliedAt         DateTime?
+
+  @@unique([businessId, reference])
+  @@index([businessId])
+  @@index([integrationId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Transaction {
+  id          String            @id @default(cuid())
+  settlementId String
+  settlement  Settlement        @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  itemId      String
+  type        TransactionType
+  amount      Decimal           @db.Decimal(18, 2)
+  description String?
+  status      TransactionStatus @default(INITIATED)
+  createdAt   DateTime          @default(now())
+  completedAt DateTime?
+
+  @@index([settlementId])
+  @@index([status])
+}
+
