@@ -138,7 +138,6 @@ model Settlement {
   amount                Decimal             @db.Decimal(18, 2)
   currency              String
   settlementMethod      String
-  settlementAccount     String
   reference             String
   status                SettlementStatus    @default(INITIATED)
   description           String?
@@ -162,16 +161,19 @@ model Settlement {
 }
 
 model Transaction {
-  id          String            @id @default(cuid())
-  settlementId String
-  settlement  Settlement        @relation(fields: [settlementId], references: [id], onDelete: Cascade)
-  itemId      String
-  type        TransactionType
-  amount      Decimal           @db.Decimal(18, 2)
-  description String?
-  status      TransactionStatus @default(INITIATED)
-  createdAt   DateTime          @default(now())
-  completedAt DateTime?
+  id                  String            @id @default(cuid())
+  settlementId        String
+  settlement          Settlement        @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  itemId              String
+  supplierMerchantId  String?
+  type                TransactionType
+  amount              Decimal           @db.Decimal(18, 2)
+  quantity            Decimal?          @db.Decimal(12, 2)
+  unitPrice           Decimal?          @db.Decimal(12, 2)
+  description         String?
+  status              TransactionStatus @default(INITIATED)
+  createdAt           DateTime          @default(now())
+  completedAt         DateTime?
 
   @@index([settlementId])
   @@index([status])

@@ -8,14 +8,29 @@ export class TransactionItemDto {
   @IsNotEmpty()
   itemId: string = '';
 
+  @ApiProperty({ example: 'pay_sup_001', description: 'Merchant identifier of the supplier that owns this item.' })
+  @IsString()
+  @IsNotEmpty()
+  supplierMerchantId: string = '';
+
   @ApiProperty({ example: 'SALE', description: 'Type of transaction such as SALE, REFUND, or ADJUSTMENT.' })
   @IsString()
   @IsNotEmpty()
   type: string = '';
 
+  @ApiProperty({ example: 5, description: 'Quantity of the item being settled.' })
+  @IsNumber()
+  @Min(0.01)
+  quantity: number = 0;
+
+  @ApiProperty({ example: 500, description: 'Unit price per item.' })
+  @IsNumber()
+  @Min(0.01)
+  unitPrice: number = 0;
+
   @ApiProperty({ example: 2500, description: 'Amount for the transaction item.' })
   @IsNumber()
-  @Min(0)
+  @Min(0.01)
   amount: number = 0;
 
   @ApiPropertyOptional({ example: 'Sales for 2026-06-30', description: 'Optional description of the transaction item.' })
@@ -39,11 +54,6 @@ export class InitiateSettlementDto {
   @IsString()
   @IsNotEmpty()
   settlementMethod: string = '';
-
-  @ApiProperty({ example: '1234567890', description: 'Destination account or payout reference.' })
-  @IsString()
-  @IsNotEmpty()
-  settlementAccount: string = '';
 
   @ApiProperty({ example: 'settlement-001', description: 'Unique settlement reference from the caller.' })
   @IsString()

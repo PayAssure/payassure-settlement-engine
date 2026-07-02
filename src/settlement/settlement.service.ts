@@ -7,9 +7,10 @@ import {
   ConflictException,
   InternalServerErrorException,
 } from '@nestjs/common';
-import { ParticipantStatus, PrismaClient } from '@prisma/client';
+import { ParticipantStatus, ParticipantType, PrismaClient } from '@prisma/client';
 import * as crypto from 'crypto';
 import { SettlementRepository } from './settlement.repository';
+import { groupTransactionItemsBySupplier } from './settlement.utils';
 import { AuthenticateDto } from './dto/authenticate.dto';
 import { InitiateSettlementDto } from './dto/initiate-settlement.dto';
 import { ReconcileSettlementDto } from './dto/reconcile-settlement.dto';
@@ -116,40 +117,96 @@ export class SettlementService {
       }
 
       // Validate settlement data
-      this.validateSettlementData(data);
+      await this.validateSettlementData(data);
 
-      // Create settlement record
-      const settlement = await this.repository.createSettlement(
+      const transactionItems = (data.transactionItems ?? []).map((item) => ({
+        itemId: item.itemId,
+        supplierMerchantId: item.supplierMerchantId,
+        type: item.type,
+        amount: item.amount,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        description: item.description,
+      }));
+
+      const supplierGroups = groupTransactionItemsBySupplier(transactionItems);
+
+      const primarySettlement = await this.repository.createSettlement(
         session.businessId,
         session.integrationId,
         data,
       );
 
-      // Create transactions if provided
-      if (data.transactionItems && data.transactionItems.length > 0) {
+      if (supplierGroups.length === 0) {
+        return {
+          success: true,
+          settlement: {
+            settlementId: primarySettlement.id,
+            status: primarySettlement.status,
+            amount: Number(primarySettlement.amount),
+            currency: primarySettlement.currency,
+            reference: primarySettlement.reference,
+            createdAt: primarySettlement.createdAt,
+            estimatedProcessingTime: '24-48 hours',
+          },
+          message: 'Settlement request received and queued for processing',
+        };
+      }
+
+      const childSettlements = [] as Array<{ id: string; amount: number; reference: string; supplierMerchantId: string }>;
+
+      for (const group of supplierGroups) {
+        const settlement = await this.repository.createSupplierSettlement(
+          session.businessId,
+          session.integrationId,
+          {
+            amount: group.amount,
+            currency: data.currency,
+            settlementMethod: data.settlementMethod,
+            reference: `${data.reference}-${group.supplierMerchantId}`,
+            description: data.description,
+            metadata: {
+              ...(data.metadata ?? {}),
+              parentSettlementId: primarySettlement.id,
+              supplierMerchantId: group.supplierMerchantId,
+            },
+          },
+        );
+
         await this.repository.createMultipleTransactions(
           settlement.id,
-          data.transactionItems.map((item) => ({
+          group.items.map((item) => ({
             itemId: item.itemId,
+            supplierMerchantId: item.supplierMerchantId,
             type: item.type,
             amount: item.amount,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
             description: item.description,
           })),
         );
+
+        childSettlements.push({
+          id: settlement.id,
+          amount: group.amount,
+          reference: settlement.reference,
+          supplierMerchantId: group.supplierMerchantId,
+        });
       }
 
       return {
         success: true,
         settlement: {
-          settlementId: settlement.id,
-          status: settlement.status,
-          amount: Number(settlement.amount),
-          currency: settlement.currency,
-          reference: settlement.reference,
-          createdAt: settlement.createdAt,
+          settlementId: primarySettlement.id,
+          status: primarySettlement.status,
+          amount: Number(primarySettlement.amount),
+          currency: primarySettlement.currency,
+          reference: primarySettlement.reference,
+          createdAt: primarySettlement.createdAt,
           estimatedProcessingTime: '24-48 hours',
         },
         message: 'Settlement request received and queued for processing',
+        children: childSettlements,
       };
     } catch (error) {
       if (
@@ -309,7 +366,7 @@ export class SettlementService {
   /**
    * Helper: Validate settlement data
    */
-  private validateSettlementData(data: InitiateSettlementDto) {
+  private async validateSettlementData(data: InitiateSettlementDto) {
     if (data.amount <= 0) {
       throw new BadRequestException({
         statusCode: 400,
@@ -364,6 +421,59 @@ export class SettlementService {
           },
         ],
       });
+    }
+
+    if (data.transactionItems && data.transactionItems.length > 0) {
+      const errors: Array<{ field: string; message: string }> = [];
+
+      for (const [index, item] of data.transactionItems.entries()) {
+        if (!item.supplierMerchantId) {
+          errors.push({
+            field: `transactionItems[${index}].supplierMerchantId`,
+            message: 'Supplier merchant ID is required for each transaction item',
+          });
+          continue;
+        }
+
+        const integration = await this.prisma.integration.findFirst({
+          where: {
+            merchantId: item.supplierMerchantId,
+            isActive: true,
+          },
+          include: {
+            participant: true,
+          },
+        });
+
+        if (!integration?.participant) {
+          errors.push({
+            field: `transactionItems[${index}].supplierMerchantId`,
+            message: 'Supplier was not found in PayAssure',
+          });
+          continue;
+        }
+
+        const participantStatus = integration.participant.status as ParticipantStatus;
+        const isActiveSupplier =
+          integration.participant.participantType === ParticipantType.SUPPLIER &&
+          (participantStatus === ParticipantStatus.ACTIVE || participantStatus === ParticipantStatus.LIVE);
+
+        if (!isActiveSupplier) {
+          errors.push({
+            field: `transactionItems[${index}].supplierMerchantId`,
+            message: 'Supplier is not active or not eligible to receive settlements',
+          });
+        }
+      }
+
+      if (errors.length > 0) {
+        throw new BadRequestException({
+          statusCode: 400,
+          message: 'Validation failed',
+          error: 'VALIDATION_ERROR',
+          errors,
+        });
+      }
     }
   }
 

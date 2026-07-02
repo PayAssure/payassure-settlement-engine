@@ -52,6 +52,20 @@ export class TransactionResponseDto {
   status: TransactionStatus = TransactionStatus.INITIATED;
 }
 
+export class SupplierSettlementChildDto {
+  @ApiProperty({ example: 'settlement_456' })
+  id: string = '';
+
+  @ApiProperty({ example: 2500 })
+  amount: number = 0;
+
+  @ApiProperty({ example: 'settlement-001-pay_sup_001' })
+  reference: string = '';
+
+  @ApiProperty({ example: 'pay_sup_001' })
+  supplierMerchantId: string = '';
+}
+
 export class SettlementResponseDto {
   @ApiProperty({ example: true })
   success: boolean = false;
@@ -85,6 +99,9 @@ export class SettlementResponseDto {
 
   @ApiPropertyOptional({ example: 'Settlement request received and queued for processing' })
   message?: string = '';
+
+  @ApiPropertyOptional({ type: [SupplierSettlementChildDto], description: 'Optional child settlements created for each supplier group.' })
+  children?: SupplierSettlementChildDto[] = [];
 }
 
 export class TrackSettlementResponseDto {

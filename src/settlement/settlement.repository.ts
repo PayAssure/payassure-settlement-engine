@@ -66,7 +66,33 @@ export class SettlementRepository implements OnModuleDestroy {
         amount: data.amount,
         currency: data.currency,
         settlementMethod: data.settlementMethod,
-        settlementAccount: data.settlementAccount,
+        reference: data.reference,
+        description: data.description,
+        metadata: data.metadata,
+        status: SettlementStatus.INITIATED,
+      },
+    });
+  }
+
+  async createSupplierSettlement(
+    businessId: string,
+    integrationId: string,
+    data: {
+      amount: number;
+      currency: string;
+      settlementMethod: string;
+      reference: string;
+      description?: string;
+      metadata?: Record<string, any>;
+    },
+  ) {
+    return this.prisma.settlement.create({
+      data: {
+        businessId,
+        integrationId,
+        amount: data.amount,
+        currency: data.currency,
+        settlementMethod: data.settlementMethod,
         reference: data.reference,
         description: data.description,
         metadata: data.metadata,
@@ -137,16 +163,22 @@ export class SettlementRepository implements OnModuleDestroy {
   async createTransaction(
     settlementId: string,
     itemId: string,
+    supplierMerchantId: string,
     type: string,
     amount: number,
+    quantity?: number,
+    unitPrice?: number,
     description?: string,
   ) {
     return this.prisma.transaction.create({
       data: {
         settlementId,
         itemId,
+        supplierMerchantId,
         type: type.toUpperCase() as any,
         amount,
+        quantity: quantity ?? 0,
+        unitPrice: unitPrice ?? 0,
         description,
         status: TransactionStatus.INITIATED,
       },
@@ -179,15 +211,26 @@ export class SettlementRepository implements OnModuleDestroy {
   // Bulk transaction creation
   async createMultipleTransactions(
     settlementId: string,
-    items: Array<{ itemId: string; type: string; amount: number; description?: string }>,
+    items: Array<{
+      itemId: string;
+      supplierMerchantId: string;
+      type: string;
+      amount: number;
+      quantity?: number;
+      unitPrice?: number;
+      description?: string;
+    }>,
   ) {
     const transactions = [];
     for (const item of items) {
       const transaction = await this.createTransaction(
         settlementId,
         item.itemId,
+        item.supplierMerchantId,
         item.type,
         item.amount,
+        item.quantity,
+        item.unitPrice,
         item.description,
       );
       transactions.push(transaction);
