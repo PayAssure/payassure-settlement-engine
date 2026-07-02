@@ -65,4 +65,9 @@ export class InitiateSettlementDto {
   @ApiPropertyOptional({ example: { source: 'pos-system' }, description: 'Optional metadata about the settlement request.' })
   @IsOptional()
   metadata?: Record<string, any> = {};
+
+  @ApiPropertyOptional({ example: 'session_1782886649229_abc123', description: 'Optional settlement session token. Use this when the token is passed in the request body instead of the Authorization header.' })
+  @IsString()
+  @IsOptional()
+  token?: string;
 }

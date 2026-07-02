@@ -98,6 +98,25 @@ export class OnbordingsController {
     return this.service.updateParticipant(id, body);
   }
 
+  @Patch(':id/activate')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Activate a business onboarding participant' })
+  @ApiResponse({ status: 200, type: OnboardingResponseDto })
+  @ApiResponse({
+    status: 401,
+    type: ErrorResponseDto,
+    description: 'Authentication token is missing or invalid.',
+  })
+  @ApiResponse({
+    status: 404,
+    type: ErrorResponseDto,
+    description: 'Participant not found or integration missing.',
+  })
+  async activate(@Param('id') id: string): Promise<OnboardingResponseDto> {
+    return this.service.activateParticipant(id);
+  }
+
   @Delete(':id')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')

@@ -57,6 +57,11 @@ export class AuthService {
       throw new UnauthorizedException('No onboarding record found for this email address');
     }
 
+    const profileComplete = this.isProfileComplete(onboarding);
+    if (profileComplete) {
+      await this.repository.activateBusinessIfComplete(data.email);
+    }
+
     const existingUser = await this.repository.findByEmailOrUsername(data.username, data.email);
     if (existingUser) {
       return {

@@ -286,7 +286,8 @@ Data access layer for participant and integration operations.
 | DOCUMENTS_SUBMITTED | Documentation provided | VERIFIED, REJECTED |
 | VERIFIED | KYC/KYB verification passed | PILOT |
 | PILOT | Testing integration | LIVE |
-| LIVE | Production ready | (none) |
+| LIVE | Profile complete and awaiting activation | ACTIVE |
+| ACTIVE | Production ready and active | (none) |
 | REJECTED | Failed verification | (none) |
 
 ## Data Transfer Objects (DTOs)

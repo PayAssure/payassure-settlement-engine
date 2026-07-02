@@ -102,7 +102,44 @@ export class OnbordingsRepository implements OnModuleDestroy {
     });
   }
 
+  async activateParticipant(id: string) {
+    const participant = await this.prisma.onboardingParticipant.findUnique({
+      where: { id },
+      include: { integrations: { orderBy: { createdAt: 'desc' }, take: 1 } },
+    });
+
+    if (!participant) {
+      throw new NotFoundException('Participant not found');
+    }
+
+    const integration = participant.integrations?.[0];
+    if (!integration) {
+      throw new NotFoundException('Integration not found for participant');
+    }
+
+    const isAlreadyActive = integration.isActive && participant.status === ParticipantStatus.ACTIVE;
+    if (isAlreadyActive) {
+      return participant;
+    }
+
+    await this.prisma.integration.update({
+      where: { id: integration.id },
+      data: { isActive: true },
+    });
+
+    return this.prisma.onboardingParticipant.update({
+      where: { id },
+      data: { status: ParticipantStatus.ACTIVE },
+      include: { integrations: { orderBy: { createdAt: 'desc' }, take: 1 } },
+    });
+  }
+
   async deleteParticipant(id: string) {
+    const participant = await this.prisma.onboardingParticipant.findUnique({ where: { id } });
+    if (!participant) {
+      throw new NotFoundException('Participant not found');
+    }
+
     return this.prisma.onboardingParticipant.delete({ where: { id } });
   }
 

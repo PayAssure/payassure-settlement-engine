@@ -1,4 +1,5 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ParticipantStatus } from '@prisma/client';
 import { CreateIntegrationDto } from './dto/create-integration.dto';
 import { CreateOnboardingDto } from './dto/create-onboarding.dto';
 import { OnboardingResponseDto } from './dto/onboarding-response.dto';
@@ -56,6 +57,21 @@ export class OnbordingsService {
     } catch {
       throw new NotFoundException('Participant not found');
     }
+  }
+
+  async activateParticipant(id: string): Promise<OnboardingResponseDto> {
+    const participant = await this.repository.activateParticipant(id);
+
+    const integration = participant.integrations?.[0];
+    const alreadyActive = integration?.isActive && participant.status === ParticipantStatus.ACTIVE;
+
+    return this.toResponse(
+      participant,
+      undefined,
+      alreadyActive
+        ? 'Business is already active.'
+        : 'Business activation successful. Integration is now active.',
+    );
   }
 
   async deleteParticipant(id: string): Promise<void> {
@@ -188,6 +204,7 @@ export class OnbordingsService {
             apiKey: credentials?.apiKey ?? activeIntegration.apiKey ?? '',
             apiSecret: credentials?.apiSecret ?? activeIntegration.apiSecret ?? '',
             environment: activeIntegration.environment,
+            isActive: activeIntegration.isActive,
             createdAt: activeIntegration.createdAt,
           }
         : null,

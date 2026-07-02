@@ -18,6 +18,9 @@ export class IntegrationResponseDto {
   environment!: string;
 
   @ApiProperty()
+  isActive!: boolean;
+
+  @ApiProperty()
   createdAt!: Date;
 }
 

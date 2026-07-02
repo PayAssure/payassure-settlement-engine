@@ -201,7 +201,7 @@ model OnboardingParticipant {
 | `posSystem` | String | ✗ | ✗ | POS system in use |
 | `webhookUrl` | String | ✗ | ✗ | Webhook endpoint URL |
 | `settlementPreference` | String | ✗ | ✗ | Settlement frequency/preference |
-| `status` | ParticipantStatus | ✓ | ✗ | Current onboarding status |
+| `status` | ParticipantStatus | ✓ | ✗ | Current onboarding status (DRAFT, DOCUMENTS_SUBMITTED, VERIFIED, PILOT, LIVE, ACTIVE, REJECTED) |
 | `createdAt` | DateTime | ✓ | ✗ | Created timestamp |
 | `updatedAt` | DateTime | ✓ | ✗ | Last updated timestamp |
 

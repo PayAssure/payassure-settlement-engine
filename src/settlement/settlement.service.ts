@@ -7,7 +7,7 @@ import {
   ConflictException,
   InternalServerErrorException,
 } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+import { ParticipantStatus, PrismaClient } from '@prisma/client';
 import * as crypto from 'crypto';
 import { SettlementRepository } from './settlement.repository';
 import { AuthenticateDto } from './dto/authenticate.dto';
@@ -57,17 +57,17 @@ export class SettlementService {
       });
     }
 
-    // Check if business is in LIVE status
-    if (integration.participant.status !== 'LIVE') {
+    // Check if business is in ACTIVE status
+    if (integration.participant.status !== ParticipantStatus.ACTIVE) {
       throw new ForbiddenException({
         statusCode: 403,
-        message: 'Business account is not in LIVE status',
+        message: 'Business account is not active',
         error: 'BUSINESS_NOT_ACTIVE',
       });
     }
 
-    // Generate one-time token
-    const token = this.generateOneTimeToken();
+    // Generate reusable session token valid for one hour
+    const token = this.generateSessionToken();
     const expiresAt = new Date(Date.now() + this.TOKEN_EXPIRY * 1000);
 
     // Store session in database
@@ -137,9 +137,6 @@ export class SettlementService {
           })),
         );
       }
-
-      // Mark token as used (one-time use only)
-      await this.repository.markSessionAsUsed(session.id);
 
       return {
         success: true,
@@ -298,18 +295,10 @@ export class SettlementService {
       });
     }
 
-    if (session.isUsed) {
-      throw new UnauthorizedException({
-        statusCode: 401,
-        message: 'One-time token has already been used',
-        error: 'TOKEN_ALREADY_USED',
-      });
-    }
-
     if (session.expiresAt < new Date()) {
       throw new UnauthorizedException({
         statusCode: 401,
-        message: 'One-time token has expired',
+        message: 'Token has expired',
         error: 'TOKEN_EXPIRED',
       });
     }
@@ -379,10 +368,10 @@ export class SettlementService {
   }
 
   /**
-   * Helper: Generate secure one-time token
+   * Helper: Generate secure reusable session token
    */
-  private generateOneTimeToken(): string {
-    return `one_time_${Date.now()}_${crypto.randomBytes(16).toString('hex')}`;
+  private generateSessionToken(): string {
+    return `session_${Date.now()}_${crypto.randomBytes(16).toString('hex')}`;
   }
 
   /**
