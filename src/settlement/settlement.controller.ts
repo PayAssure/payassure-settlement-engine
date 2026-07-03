@@ -57,10 +57,11 @@ export class SettlementController {
    * Submit settlement payload with one-time token
    */
   @Post('initiate-settlement')
+  @ApiBearerAuth('access-token')
   @ApiOperation({
     summary: 'Initiate a settlement request',
     description:
-      'Submit settlement payload using a session token from authentication. Token expires after 1 hour and can be used multiple times until expiry.',
+      'Submit settlement payload using a session token provided in the Authorization header. Token expires after 1 hour and can be used multiple times until expiry.',
   })
   @ApiResponse({
     status: 201,
@@ -69,7 +70,7 @@ export class SettlementController {
   })
   @ApiResponse({
     status: 400,
-    description: 'Invalid settlement data',
+    description: 'Invalid settlement data or missing Authorization header',
     type: ErrorResponseDto,
   })
   @ApiResponse({
@@ -86,14 +87,11 @@ export class SettlementController {
     @Headers('authorization') authHeader: string,
     @Body() body: InitiateSettlementDto,
   ): Promise<SettlementResponseDto> {
-    const token = authHeader
-      ? this.extractBearerToken(authHeader)
-      : body.token;
-
-    if (!token) {
-      throw new BadRequestException('Authorization header or token parameter missing');
+    if (!authHeader) {
+      throw new BadRequestException('Authorization header missing');
     }
 
+    const token = this.extractBearerToken(authHeader);
     return this.settlementService.initiateSettlement(token, body);
   }
 

@@ -131,6 +131,24 @@ export class OnbordingsService {
     );
   }
 
+  async viewApiKeys(user: any): Promise<OnboardingResponseDto> {
+    const participant = await this.repository.findParticipantByEmail(user.email);
+    if (!participant) {
+      throw new NotFoundException('Onboarding participant not found for the authenticated user');
+    }
+
+    const integration = participant.integrations?.[0];
+    if (!integration || !integration.apiKey || !integration.apiSecret) {
+      throw new NotFoundException('API keys not found for the authenticated user');
+    }
+
+    return this.toResponse(participant, {
+      merchantId: integration.merchantId,
+      apiKey: integration.apiKey,
+      apiSecret: integration.apiSecret,
+    });
+  }
+
   async updateWebhook(id: string, webhookUrl: string): Promise<OnboardingResponseDto> {
     try {
       const participant = await this.repository.updateWebhook(id, webhookUrl);

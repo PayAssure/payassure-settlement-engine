@@ -46,6 +46,25 @@ export class OnbordingsController {
     return this.service.generateApiKeys(req.user);
   }
 
+  @Get('keys')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'View API keys for the authenticated user' })
+  @ApiResponse({ status: 200, type: OnboardingResponseDto })
+  @ApiResponse({
+    status: 401,
+    type: ErrorResponseDto,
+    description: 'Authentication token is missing or invalid.',
+  })
+  @ApiResponse({
+    status: 404,
+    type: ErrorResponseDto,
+    description: 'API keys not found for the authenticated user.',
+  })
+  async viewApiKeys(@Request() req: any): Promise<OnboardingResponseDto> {
+    return this.service.viewApiKeys(req.user);
+  }
+
   @Get()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
