@@ -17,6 +17,14 @@ export class AuthRepository implements OnModuleDestroy {
     });
   }
 
+  async findByEmail(email: string) {
+    return this.prisma.user.findUnique({ where: { email } });
+  }
+
+  async findByUsername(username: string) {
+    return this.prisma.user.findUnique({ where: { username } });
+  }
+
   async findByEmailOrUsername(username: string, email: string) {
     return this.prisma.user.findFirst({
       where: {

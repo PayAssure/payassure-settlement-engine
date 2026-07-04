@@ -33,6 +33,13 @@ export class SettlementRepository implements OnModuleDestroy {
     });
   }
 
+  async findIntegrationById(id: string) {
+    return this.prisma.integration.findUnique({
+      where: { id },
+      include: { participant: true },
+    });
+  }
+
   async markSessionAsUsed(sessionId: string) {
     return this.prisma.settlementSession.update({
       where: { id: sessionId },
@@ -57,18 +64,56 @@ export class SettlementRepository implements OnModuleDestroy {
   async createSettlement(
     businessId: string,
     integrationId: string,
+    payAssureReference: string,
     data: InitiateSettlementDto,
   ) {
+    const paymentPayload = {
+      merchantTransactionReference: data.merchantTransactionReference,
+      totalAmount: data.totalAmount,
+      currency: data.currency,
+      settlementMethod: data.settlementMethod,
+      description: data.description ?? undefined,
+      paymentMethod: {
+        type: data.paymentMethod.type,
+        payerPhoneNumber: data.paymentMethod.payerPhoneNumber,
+        provider: data.paymentMethod.provider ?? undefined,
+      },
+      callbackUrl: data.callbackUrl ?? undefined,
+      transactionDate: data.transactionDate,
+      suppliers: data.suppliers.map((supplier) => ({
+        supplierMerchantId: supplier.supplierMerchantId,
+        supplierTotalAmount: supplier.supplierTotalAmount ?? undefined,
+        retailerTotalAmount: supplier.retailerTotalAmount ?? undefined,
+        platformFee: supplier.platformFee ?? undefined,
+        items: supplier.items.map((item) => ({
+          itemId: item.itemId,
+          itemName: item.itemName ?? undefined,
+          supplierAmount: item.supplierAmount,
+          retailerAmount: item.retailerAmount ?? undefined,
+          platformFee: item.platformFee ?? undefined,
+          quantity: item.quantity ?? undefined,
+          unitPrice: item.unitPrice ?? undefined,
+          description: item.description ?? undefined,
+        })),
+      })),
+      metadata: data.metadata ?? undefined,
+    };
+
     return this.prisma.settlement.create({
       data: {
         businessId,
         integrationId,
-        amount: data.amount,
+        amount: data.totalAmount,
         currency: data.currency,
         settlementMethod: data.settlementMethod,
-        reference: data.reference,
-        description: data.description,
-        metadata: data.metadata,
+        reference: payAssureReference,
+        merchantTransactionReference: data.merchantTransactionReference,
+        description: data.description ?? undefined,
+        metadata: {
+          originalMerchantReference: data.merchantTransactionReference,
+          ...data.metadata,
+        },
+        paymentPayload,
         status: SettlementStatus.INITIATED,
       },
     });
@@ -82,6 +127,7 @@ export class SettlementRepository implements OnModuleDestroy {
       currency: string;
       settlementMethod: string;
       reference: string;
+      merchantTransactionReference: string;
       description?: string;
       metadata?: Record<string, any>;
     },
@@ -94,6 +140,7 @@ export class SettlementRepository implements OnModuleDestroy {
         currency: data.currency,
         settlementMethod: data.settlementMethod,
         reference: data.reference,
+        merchantTransactionReference: data.merchantTransactionReference,
         description: data.description,
         metadata: data.metadata,
         status: SettlementStatus.INITIATED,
@@ -110,14 +157,15 @@ export class SettlementRepository implements OnModuleDestroy {
     });
   }
 
-  async findSettlementByBusinessAndReference(businessId: string, reference: string) {
+  async findSettlementByBusinessAndReference(businessId: string, merchantTransactionReference: string) {
     return this.prisma.settlement.findUnique({
       where: {
-        businessId_reference: {
+        businessId_merchantTransactionReference: {
           businessId,
-          reference,
+          merchantTransactionReference,
         },
       },
+      include: { transactions: true },
     });
   }
 

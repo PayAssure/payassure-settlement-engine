@@ -16,6 +16,7 @@ export class SettlementEntity {
   reconciliationStatus?: string = '';
   failureReason?: string = '';
   metadata?: Record<string, any> = {};
+  paymentPayload?: Record<string, any> = {};
   createdAt: Date = new Date();
   processedAt?: Date;
   completedAt?: Date;

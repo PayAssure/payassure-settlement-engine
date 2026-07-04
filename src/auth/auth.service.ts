@@ -23,22 +23,29 @@ export class AuthService {
   }
 
   async registerBeforeOnboarding(data: RegisterDto) {
-    const existing = await this.repository.findByEmailOrUsername(data.username, data.email);
-    if (existing) {
-      const onboarded = await this.repository.findOnboardedByEmail(data.email);
-      if (onboarded) {
-        return {
-          message: 'Account already exists. Please complete onboarding to finish your profile.',
-          profileComplete: false,
-          user: {
-            id: existing.id,
-            username: existing.username,
-            email: existing.email,
-            role: existing.role,
-          },
-        };
+    const emailExisting = await this.repository.findByEmail(data.email);
+    const usernameExisting = await this.repository.findByUsername(data.username);
+
+    if (emailExisting || usernameExisting) {
+      if (emailExisting) {
+        const onboarded = await this.repository.findOnboardedByEmail(data.email);
+        if (onboarded) {
+          return {
+            message: 'Account already exists. Please complete onboarding to finish your profile.',
+            profileComplete: false,
+            user: {
+              id: emailExisting.id,
+              username: emailExisting.username,
+              email: emailExisting.email,
+              role: emailExisting.role,
+            },
+          };
+        }
+
+        throw new ConflictException('Email already exists');
       }
-      throw new ConflictException('Username or email already exists');
+
+      throw new ConflictException('Username already exists');
     }
 
     return this.createUser(
@@ -153,9 +160,14 @@ export class AuthService {
     message = 'User account created successfully',
     profileComplete = true,
   ) {
-    const existing = await this.repository.findByEmailOrUsername(username, email);
-    if (existing) {
-      throw new ConflictException('Username or email already exists');
+    const emailExisting = await this.repository.findByEmail(email);
+    const usernameExisting = await this.repository.findByUsername(username);
+
+    if (emailExisting || usernameExisting) {
+      if (emailExisting) {
+        throw new ConflictException('Email already exists');
+      }
+      throw new ConflictException('Username already exists');
     }
 
     const passwordHash = await bcrypt.hash(password, 10);

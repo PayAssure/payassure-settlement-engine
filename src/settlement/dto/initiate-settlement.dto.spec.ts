@@ -4,45 +4,99 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { InitiateSettlementDto } from './initiate-settlement.dto';
 
-test('rejects transaction items without supplierMerchantId', async () => {
+test('rejects settlement payload without supplier allocations', async () => {
   const dto = plainToInstance(InitiateSettlementDto, {
-    amount: 5000,
+    merchantTransactionReference: 'TXN-001',
+    totalAmount: 5000,
     currency: 'KES',
     settlementMethod: 'BANK_TRANSFER',
-    reference: 'settlement-001',
-    transactionItems: [
-      {
-        itemId: 'item_001',
-        type: 'SALE',
-        quantity: 5,
-        unitPrice: 500,
-        amount: 2500,
-      },
-    ],
+    paymentMethod: {
+      type: 'MPESA',
+      payerPhoneNumber: '254712345678',
+    },
+    transactionDate: '2026-07-03T17:30:15+03:00',
+    suppliers: [],
   });
 
   const errors = await validate(dto);
-  assert.ok(errors.length > 0, 'expected DTO validation to fail for missing supplierMerchantId');
+  assert.ok(errors.length > 0, 'expected DTO validation to fail when suppliers are missing');
 });
 
-test('accepts transaction items with supplierMerchantId and pricing fields', async () => {
+test('accepts supplier-based settlement payload with optional metadata', async () => {
   const dto = plainToInstance(InitiateSettlementDto, {
-    amount: 5000,
+    merchantTransactionReference: 'TXN-0001',
+    totalAmount: 16500,
     currency: 'KES',
     settlementMethod: 'BANK_TRANSFER',
-    reference: 'settlement-001',
-    transactionItems: [
+    paymentMethod: {
+      type: 'MPESA',
+      payerPhoneNumber: '254712345678',
+    },
+    transactionDate: '2026-07-03T17:30:15+03:00',
+    metadata: {
+      branchId: 'BR-01',
+      terminalId: 'POS-03',
+    },
+    suppliers: [
       {
-        itemId: 'item_001',
-        supplierMerchantId: 'pay_sup_001',
-        type: 'SALE',
-        quantity: 5,
-        unitPrice: 500,
-        amount: 2500,
+        supplierMerchantId: 'SUP-1001',
+        items: [
+          {
+            itemId: 'ITEM-001',
+            itemName: 'Cement 50kg',
+            supplierAmount: 3200,
+            retailerAmount: 400,
+            platformFee: 28.8,
+            quantity: 10,
+            unitPrice: 320,
+          },
+          {
+            itemId: 'ITEM-002',
+            itemName: 'Roofing Nails',
+            supplierAmount: 4000,
+            retailerAmount: 500,
+            platformFee: 36,
+            quantity: 20,
+            unitPrice: 200,
+          },
+        ],
       },
     ],
   });
 
   const errors = await validate(dto);
-  assert.equal(errors.length, 0, 'expected DTO validation to pass for valid supplier-based item payload');
+  assert.equal(errors.length, 0, 'expected DTO validation to pass for valid supplier-based settlement payload');
+});
+
+test('rejects supplier total mismatch against item allocations', async () => {
+  const dto = plainToInstance(InitiateSettlementDto, {
+    merchantTransactionReference: 'TXN-0002',
+    totalAmount: 7200,
+    currency: 'KES',
+    settlementMethod: 'BANK_TRANSFER',
+    paymentMethod: {
+      type: 'MPESA',
+      payerPhoneNumber: '254712345678',
+    },
+    transactionDate: '2026-07-03T17:30:15+03:00',
+    suppliers: [
+      {
+        supplierMerchantId: 'SUP-1001',
+        supplierTotalAmount: 7300,
+        items: [
+          {
+            itemId: 'ITEM-001',
+            supplierAmount: 3200,
+          },
+          {
+            itemId: 'ITEM-002',
+            supplierAmount: 4000,
+          },
+        ],
+      },
+    ],
+  });
+
+  const errors = await validate(dto);
+  assert.ok(errors.length > 0, 'expected DTO validation to fail for supplier total mismatch');
 });

@@ -138,7 +138,9 @@ model Settlement {
   amount                Decimal             @db.Decimal(18, 2)
   currency              String
   settlementMethod      String
-  reference             String
+  reference             String             @unique
+  merchantTransactionReference String
+  paymentPayload        Json?
   status                SettlementStatus    @default(INITIATED)
   description           String?
   bankReference         String?
@@ -153,7 +155,7 @@ model Settlement {
   failedAt              DateTime?
   reconciliedAt         DateTime?
 
-  @@unique([businessId, reference])
+  @@unique([businessId, merchantTransactionReference])
   @@index([businessId])
   @@index([integrationId])
   @@index([status])

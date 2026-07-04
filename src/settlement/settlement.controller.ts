@@ -1,5 +1,5 @@
 import { Controller, Post, Get, Param, Body, Headers, UseGuards, BadRequestException } from '@nestjs/common';
-import { ApiOperation, ApiResponse, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiOperation, ApiResponse, ApiTags, ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
 import { SettlementService } from './settlement.service';
 import { AuthenticateDto } from './dto/authenticate.dto';
 import { InitiateSettlementDto } from './dto/initiate-settlement.dto';
@@ -57,11 +57,17 @@ export class SettlementController {
    * Submit settlement payload with one-time token
    */
   @Post('initiate-settlement')
+  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
+  @ApiHeader({
+    name: 'x-settlement-session',
+    description: 'Settlement session token obtained from settlement authenticate. This is not a bearer token.',
+    required: true,
+  })
   @ApiOperation({
     summary: 'Initiate a settlement request',
     description:
-      'Submit settlement payload using a session token provided in the Authorization header. Token expires after 1 hour and can be used multiple times until expiry.',
+      'Submit settlement payload using both a user access token and a settlement session token. The access token must be sent as a bearer Authorization header and the settlement session token must be sent in the x-settlement-session header.',
   })
   @ApiResponse({
     status: 201,
@@ -70,12 +76,12 @@ export class SettlementController {
   })
   @ApiResponse({
     status: 400,
-    description: 'Invalid settlement data or missing Authorization header',
+    description: 'Invalid settlement data',
     type: ErrorResponseDto,
   })
   @ApiResponse({
     status: 401,
-    description: 'Invalid, expired, or already used token',
+    description: 'Unauthorized access token or invalid settlement session token',
     type: ErrorResponseDto,
   })
   @ApiResponse({
@@ -84,15 +90,10 @@ export class SettlementController {
     type: ErrorResponseDto,
   })
   async initiateSettlement(
-    @Headers('authorization') authHeader: string,
     @Body() body: InitiateSettlementDto,
+    @Headers('x-settlement-session') settlementSessionToken: string,
   ): Promise<SettlementResponseDto> {
-    if (!authHeader) {
-      throw new BadRequestException('Authorization header missing');
-    }
-
-    const token = this.extractBearerToken(authHeader);
-    return this.settlementService.initiateSettlement(token, body);
+    return this.settlementService.initiateSettlement(settlementSessionToken, body);
   }
 
   /**
