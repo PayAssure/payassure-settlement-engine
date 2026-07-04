@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Param, Body, Headers, UseGuards, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Get, Param, Body, Headers, UseGuards, BadRequestException, Req } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags, ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
 import { SettlementService } from './settlement.service';
 import { AuthenticateDto } from './dto/authenticate.dto';
@@ -23,6 +23,8 @@ export class SettlementController {
    * Verify API credentials and receive one-time token
    */
   @Post('authenticate')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
   @ApiOperation({
     summary: 'Authenticate business with API credentials',
     description:
@@ -48,8 +50,9 @@ export class SettlementController {
     description: 'Business account not in LIVE status',
     type: ErrorResponseDto,
   })
-  async authenticate(@Body() body: AuthenticateDto): Promise<AuthenticateResponseDto> {
-    return this.settlementService.authenticate(body);
+  async authenticate(@Body() body: AuthenticateDto, @Req() req: any): Promise<AuthenticateResponseDto> {
+    const user = req.user;
+    return this.settlementService.authenticate(body, user);
   }
 
   /**
@@ -87,6 +90,11 @@ export class SettlementController {
   @ApiResponse({
     status: 409,
     description: 'Duplicate settlement reference',
+    type: ErrorResponseDto,
+  })
+  @ApiResponse({
+    status: 500,
+    description: 'Internal server error during settlement initiation',
     type: ErrorResponseDto,
   })
   async initiateSettlement(

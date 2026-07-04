@@ -1,6 +1,6 @@
-import { Injectable, InternalServerErrorException, NotFoundException, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, ForbiddenException, NotFoundException, OnModuleDestroy } from '@nestjs/common';
 import { createHash, randomBytes } from 'crypto';
-import { ParticipantStatus, PrismaClient } from '@prisma/client';
+import { ParticipantStatus, Prisma, PrismaClient } from '@prisma/client';
 import { CreateIntegrationDto } from './dto/create-integration.dto';
 import { CreateOnboardingDto } from './dto/create-onboarding.dto';
 import { UpdateOnboardingDto } from './dto/update-onboarding.dto';
@@ -37,6 +37,7 @@ export class OnbordingsRepository implements OnModuleDestroy {
         settlementAccount: data.settlementAccount,
         posSystem: data.posSystem,
         settlementPreference: data.settlementPreference,
+        payment: data.payment ? (data.payment as unknown as Prisma.InputJsonValue) : undefined,
         status: this.getStatusForProfile(data),
       },
     });
@@ -83,6 +84,7 @@ export class OnbordingsRepository implements OnModuleDestroy {
       where: { id },
       data: {
         ...data,
+        payment: (data as any).payment ? ((data as any).payment as Prisma.InputJsonValue) : undefined,
         status: nextStatus,
       },
       include: { integrations: { orderBy: { createdAt: 'desc' }, take: 1 } },
@@ -98,6 +100,19 @@ export class OnbordingsRepository implements OnModuleDestroy {
     return this.prisma.onboardingParticipant.update({
       where: { id },
       data: { webhookUrl },
+      include: { integrations: { orderBy: { createdAt: 'desc' }, take: 1 } },
+    });
+  }
+
+  async updatePayment(id: string, payment: any) {
+    const participant = await this.prisma.onboardingParticipant.findUnique({ where: { id } });
+    if (!participant) {
+      throw new NotFoundException('Participant not found');
+    }
+
+    return this.prisma.onboardingParticipant.update({
+      where: { id },
+      data: { payment: payment as Prisma.InputJsonValue },
       include: { integrations: { orderBy: { createdAt: 'desc' }, take: 1 } },
     });
   }
@@ -120,6 +135,15 @@ export class OnbordingsRepository implements OnModuleDestroy {
     const isAlreadyActive = integration.isActive && participant.status === ParticipantStatus.ACTIVE;
     if (isAlreadyActive) {
       return participant;
+    }
+
+    if (!participant.payment) {
+      throw new ForbiddenException('Participant payment destination must be configured before activation');
+    }
+
+    const paymentIsVerified = (participant.payment as any)?.isVerified === true;
+    if (!paymentIsVerified) {
+      throw new ForbiddenException('Participant payment destination must be verified before activation');
     }
 
     await this.prisma.integration.update({
@@ -165,6 +189,7 @@ export class OnbordingsRepository implements OnModuleDestroy {
         apiSecretHash: this.hashSecret(apiSecret),
         environment: data.environment ?? 'production',
         webhookUrl: data.webhookUrl,
+        isActive: false,
       },
     });
 

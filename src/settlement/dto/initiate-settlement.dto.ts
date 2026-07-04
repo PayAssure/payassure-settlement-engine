@@ -134,6 +134,11 @@ export class TransactionItemDto {
 }
 
 export class InitiateSettlementDto {
+  @ApiPropertyOptional({ example: 'pay_d68f568ddc7d7b2a', description: 'Optional merchant identifier for the business initiating the settlement.' })
+  @IsString()
+  @IsOptional()
+  merchantId?: string = '';
+
   @ApiProperty({ example: 'TXN-20260703-000001', description: 'Merchant transaction reference for the settlement.' })
   @IsString()
   @IsNotEmpty()

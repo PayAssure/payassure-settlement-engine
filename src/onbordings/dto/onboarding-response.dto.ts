@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ParticipantStatus, ParticipantType } from '@prisma/client';
+import { PaymentMethodDto } from './payment-method.dto';
 
 export class IntegrationResponseDto {
   @ApiProperty()
@@ -51,6 +52,9 @@ export class OnboardingResponseDto {
 
   @ApiPropertyOptional({ type: IntegrationResponseDto })
   integration?: IntegrationResponseDto | null;
+
+  @ApiPropertyOptional({ type: PaymentMethodDto, description: 'Configured payout destination for this participant.' })
+  payment?: PaymentMethodDto | null;
 
   @ApiProperty()
   createdAt!: Date;

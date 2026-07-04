@@ -6,6 +6,7 @@ import { CreateOnboardingDto } from './dto/create-onboarding.dto';
 import { ErrorResponseDto } from './dto/error-response.dto';
 import { OnboardingResponseDto } from './dto/onboarding-response.dto';
 import { UpdateOnboardingDto } from './dto/update-onboarding.dto';
+import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { UpdateWebhookDto } from './dto/update-webhook.dto';
 import { OnbordingsService } from './onbordings.service';
 
@@ -173,5 +174,29 @@ export class OnbordingsController {
   })
   async updateWebhook(@Param('id') id: string, @Body() body: UpdateWebhookDto): Promise<OnboardingResponseDto> {
     return this.service.updateWebhook(id, body.webhookUrl);
+  }
+
+  @Patch(':id/payment')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Update the payout destination for a participant' })
+  @ApiResponse({ status: 200, type: OnboardingResponseDto })
+  @ApiResponse({
+    status: 400,
+    type: ErrorResponseDto,
+    description: 'Invalid payment destination data.',
+  })
+  @ApiResponse({
+    status: 401,
+    type: ErrorResponseDto,
+    description: 'Authentication token is missing or invalid.',
+  })
+  @ApiResponse({
+    status: 404,
+    type: ErrorResponseDto,
+    description: 'Participant not found.',
+  })
+  async updatePayment(@Param('id') id: string, @Body() body: UpdatePaymentDto): Promise<OnboardingResponseDto> {
+    return this.service.updatePayment(id, body.payment);
   }
 }

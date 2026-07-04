@@ -1,5 +1,5 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import { PrismaClient, SettlementStatus, TransactionStatus, Hello } from '@prisma/client';
+import { PrismaClient, Prisma, SettlementStatus, TransactionStatus, Settlement, Transaction, Hello } from '@prisma/client';
 import { InitiateSettlementDto } from './dto/initiate-settlement.dto';
 
 @Injectable()
@@ -65,6 +65,7 @@ export class SettlementRepository implements OnModuleDestroy {
     businessId: string,
     integrationId: string,
     payAssureReference: string,
+    internalMerchantTransactionReference: string,
     data: InitiateSettlementDto,
   ) {
     const paymentPayload = {
@@ -107,7 +108,7 @@ export class SettlementRepository implements OnModuleDestroy {
         currency: data.currency,
         settlementMethod: data.settlementMethod,
         reference: payAssureReference,
-        merchantTransactionReference: data.merchantTransactionReference,
+        merchantTransactionReference: internalMerchantTransactionReference,
         description: data.description ?? undefined,
         metadata: {
           originalMerchantReference: data.merchantTransactionReference,
@@ -115,7 +116,7 @@ export class SettlementRepository implements OnModuleDestroy {
         },
         paymentPayload,
         status: SettlementStatus.INITIATED,
-      },
+      } as Prisma.SettlementCreateInput,
     });
   }
 
@@ -130,6 +131,7 @@ export class SettlementRepository implements OnModuleDestroy {
       merchantTransactionReference: string;
       description?: string;
       metadata?: Record<string, any>;
+      paymentSnapshot?: any;
     },
   ) {
     return this.prisma.settlement.create({
@@ -143,8 +145,9 @@ export class SettlementRepository implements OnModuleDestroy {
         merchantTransactionReference: data.merchantTransactionReference,
         description: data.description,
         metadata: data.metadata,
+        paymentSnapshot: data.paymentSnapshot ?? undefined,
         status: SettlementStatus.INITIATED,
-      },
+      } as Prisma.SettlementCreateInput,
     });
   }
 
@@ -157,16 +160,46 @@ export class SettlementRepository implements OnModuleDestroy {
     });
   }
 
-  async findSettlementByBusinessAndReference(businessId: string, merchantTransactionReference: string) {
-    return this.prisma.settlement.findUnique({
-      where: {
-        businessId_merchantTransactionReference: {
+  async findSettlementByBusinessAndPayloadReference(
+    businessId: string,
+    payloadMerchantTransactionReference: string,
+  ): Promise<(Settlement & { transactions: Transaction[] }) | null> {
+    try {
+      return await this.prisma.settlement.findFirst({
+        where: {
           businessId,
-          merchantTransactionReference,
+          metadata: {
+            path: ['originalMerchantReference'],
+            equals: payloadMerchantTransactionReference,
+          },
         },
-      },
-      include: { transactions: true },
-    });
+        include: { transactions: true },
+      });
+    } catch (err) {
+      // If the DB is missing the expected column or the JSON operator fails,
+      // fall back to a raw SQL lookup of the settlement id via JSON path,
+      // then load the settlement by id (safer against missing columns).
+      const msg = (err as any)?.message ? String((err as any).message) : String(err);
+      if (msg.includes("does not exist") || msg.includes('column') || msg.includes('merchantTransactionReference')) {
+        // parameterized raw query for Postgres - use Prisma tagged template to avoid SQL injection
+        // The ts-ignore is to allow returning a typed row from $queryRaw in this environment
+        // @ts-ignore
+        const rows: Array<{ id: string }> = await this.prisma.$queryRaw`
+          SELECT id FROM "Settlement"
+          WHERE "businessId" = ${businessId}
+            AND metadata->>'originalMerchantReference' = ${payloadMerchantTransactionReference}
+          LIMIT 1
+        `;
+
+        if (rows && rows.length > 0) {
+          const id = rows[0].id;
+          return this.prisma.settlement.findUnique({ where: { id }, include: { transactions: true } });
+        }
+        return null;
+      }
+
+      throw err;
+    }
   }
 
   async findSettlementsByBusinessId(businessId: string, skip = 0, take = 10) {

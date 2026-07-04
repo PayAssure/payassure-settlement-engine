@@ -6,6 +6,7 @@ import {
   ForbiddenException,
   ConflictException,
   InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
 import { ParticipantStatus, ParticipantType, PrismaClient } from '@prisma/client';
 import * as crypto from 'crypto';
@@ -23,6 +24,7 @@ import {
 @Injectable()
 export class SettlementService {
   private prisma: PrismaClient;
+  private readonly logger = new Logger(SettlementService.name);
   private readonly TOKEN_EXPIRY = 3600; // 1 hour in seconds
   private readonly SUPPORTED_CURRENCIES = ['KES', 'USD', 'TZS'];
 
@@ -34,7 +36,7 @@ export class SettlementService {
    * STEP 1: Authenticate Business with API Key & Secret
    * Validates credentials and generates one-time token
    */
-  async authenticate(data: AuthenticateDto): Promise<AuthenticateResponseDto> {
+  async authenticate(data: AuthenticateDto, user: any): Promise<AuthenticateResponseDto> {
     const integration = await this.prisma.integration.findFirst({
       where: { apiKey: data.apiKey, isActive: true },
       include: { participant: true },
@@ -46,6 +48,18 @@ export class SettlementService {
         message: 'Business not found with provided API key',
         error: 'BUSINESS_NOT_FOUND',
       });
+    }
+
+    // Validate that the authenticated token belongs to the user associated with this integration's participant
+    if (user && integration.participant && integration.participant.email) {
+      const tokenEmail = (user && user.email) || '';
+      if (tokenEmail !== integration.participant.email) {
+        throw new UnauthorizedException({
+          statusCode: 401,
+          message: 'Authenticated token does not belong to the owner of the provided API credentials',
+          error: 'INVALID_TOKEN_FOR_API_KEYS',
+        });
+      }
     }
 
     const apiSecretHash = this.hashCredential(data.apiSecret);
@@ -66,6 +80,8 @@ export class SettlementService {
         error: 'BUSINESS_NOT_ACTIVE',
       });
     }
+
+    this.logger.log(`Business authentication passed for integrationId=${integration.id}, participantEmail=${integration.participant.email}`);
 
     // Generate reusable session token valid for one hour
     const token = this.generateSessionToken();
@@ -98,10 +114,14 @@ export class SettlementService {
    * Validates token, creates settlement, and marks token as used
    */
   async initiateSettlement(token: string, data: InitiateSettlementDto): Promise<SettlementResponseDto> {
+    this.logger.log(`Initiate settlement requested: session=${token}, merchantTransactionReference=${data.merchantTransactionReference}`);
     const session = await this.validateAndGetSession(token);
+    this.logger.log(`Settlement session validated for business=${session.businessId}, integration=${session.integrationId}`);
+
     const integration = await this.repository.findIntegrationById(session.integrationId);
 
     if (!integration || !integration.participant) {
+      this.logger.warn(`Invalid session context: session=${token}, integrationId=${session.integrationId}`);
       throw new UnauthorizedException({
         statusCode: 401,
         message: 'Invalid session or retailer context',
@@ -110,6 +130,7 @@ export class SettlementService {
     }
 
     const retailerMerchantId = integration.merchantId;
+    this.logger.log(`Authenticated retailer merchantId=${retailerMerchantId}, participant=${integration.participant.id}`);
 
     if (
       integration.participant.participantType !== ParticipantType.RETAILER ||
@@ -117,6 +138,7 @@ export class SettlementService {
         integration.participant.status,
       )
     ) {
+      this.logger.warn(`Retailer not authorized or inactive: merchantId=${retailerMerchantId}, status=${integration.participant.status}`);
       throw new ForbiddenException({
         statusCode: 403,
         message: 'Retailer account is not authorized to initiate settlements',
@@ -125,12 +147,14 @@ export class SettlementService {
     }
 
     try {
-      const existingSettlement = await this.repository.findSettlementByBusinessAndReference(
+      this.logger.log(`Checking for existing settlement for business=${session.businessId}, reference=${data.merchantTransactionReference}`);
+      const existingSettlement = await this.repository.findSettlementByBusinessAndPayloadReference(
         session.businessId,
         data.merchantTransactionReference,
       );
 
       if (existingSettlement) {
+        this.logger.log(`Existing settlement found for reference=${data.merchantTransactionReference}, settlementId=${existingSettlement.id}`);
         await this.repository.markSessionAsUsed(session.id);
         return {
           success: true,
@@ -155,22 +179,41 @@ export class SettlementService {
         };
       }
 
+      this.logger.log(`No existing settlement found, validating request payload for merchantTransactionReference=${data.merchantTransactionReference}`);
       await this.validateSettlementData(data);
+      this.logger.log(`Payload validation passed for merchantTransactionReference=${data.merchantTransactionReference}`);
 
       const payAssureReference = this.generatePayAssureReference();
+      const internalMerchantTransactionReference = this.generateInternalMerchantTransactionReference();
+      this.logger.log(`Creating primary settlement with payAssureReference=${payAssureReference}, internalReference=${internalMerchantTransactionReference}`);
       const primarySettlement = await this.repository.createSettlement(
         session.businessId,
         session.integrationId,
         payAssureReference,
+        internalMerchantTransactionReference,
         data,
       );
 
       await this.repository.markSessionAsUsed(session.id);
+      this.logger.log(`Session marked as used for sessionId=${session.id}`);
 
       const childSettlements = [] as Array<{ id: string; amount: number; reference: string; supplierMerchantId: string }>;
 
       for (const supplier of data.suppliers) {
+        this.logger.log(`Processing supplier ${supplier.supplierMerchantId} for settlement ${primarySettlement.id}`);
         const supplierAmount = supplier.items.reduce((sum, item) => sum + item.supplierAmount, 0);
+        this.logger.log(`Supplier ${supplier.supplierMerchantId} amount=${supplierAmount}, itemCount=${supplier.items.length}`);
+        const supplierMerchantTransactionReference = `${internalMerchantTransactionReference}-${supplier.supplierMerchantId}`;
+
+        const supplierIntegration = await this.prisma.integration.findFirst({
+          where: {
+            merchantId: supplier.supplierMerchantId,
+            isActive: true,
+          },
+          include: { participant: true },
+        });
+
+        const paymentSnapshot = supplierIntegration?.participant?.payment ?? null;
 
         const settlement = await this.repository.createSupplierSettlement(
           session.businessId,
@@ -180,14 +223,16 @@ export class SettlementService {
             currency: data.currency,
             settlementMethod: data.settlementMethod,
             reference: `${data.merchantTransactionReference}-${supplier.supplierMerchantId}`,
-            merchantTransactionReference: data.merchantTransactionReference,
+            merchantTransactionReference: supplierMerchantTransactionReference,
             description: data.description,
             metadata: {
               ...(data.metadata ?? {}),
+              originalMerchantReference: data.merchantTransactionReference,
               parentSettlementId: primarySettlement.id,
               supplierMerchantId: supplier.supplierMerchantId,
               retailerMerchantId,
             },
+            paymentSnapshot,
           },
         );
 
@@ -204,6 +249,7 @@ export class SettlementService {
           })),
         );
 
+        this.logger.log(`Created supplier settlement ${settlement.id} for supplier ${supplier.supplierMerchantId}`);
         childSettlements.push({
           id: settlement.id,
           amount: supplierAmount,
@@ -234,9 +280,22 @@ export class SettlementService {
       ) {
         throw error;
       }
+
+      const err = error as Error;
+      const contextData = {
+        requestBody: data,
+        settlementSessionToken: token,
+      };
+
+      this.logger.error(
+        `Settlement initiation failed: ${err.message ?? 'Unknown error'} | context=${JSON.stringify(contextData)}`,
+        err.stack,
+      );
+      this.logger.log(`Settlement initiation flow ended with error for merchantTransactionReference=${data.merchantTransactionReference}`);
+
       throw new InternalServerErrorException({
         statusCode: 500,
-        message: 'Failed to initiate settlement',
+        message: 'An error occurred while initiating settlement. Please check logs for details.',
         error: 'INITIATION_FAILED',
       });
     }
@@ -363,6 +422,7 @@ export class SettlementService {
     const session = await this.repository.findSettlementSessionByToken(token);
 
     if (!session) {
+      this.logger.warn(`Settlement token validation failed: token=${token} not found`);
       throw new UnauthorizedException({
         statusCode: 401,
         message: 'Invalid or expired one-time token',
@@ -371,6 +431,7 @@ export class SettlementService {
     }
 
     if (session.expiresAt < new Date()) {
+      this.logger.warn(`Settlement token validation failed: token=${token} expired at=${session.expiresAt.toISOString()}`);
       throw new UnauthorizedException({
         statusCode: 401,
         message: 'Token has expired',
@@ -379,6 +440,7 @@ export class SettlementService {
     }
 
     if (session.isUsed) {
+      this.logger.warn(`Settlement token validation failed: token=${token} already used`);
       throw new UnauthorizedException({
         statusCode: 401,
         message: 'Token has already been used',
@@ -386,6 +448,7 @@ export class SettlementService {
       });
     }
 
+    this.logger.log(`Settlement token validated successfully: sessionId=${session.id}`);
     return session;
   }
 
@@ -471,6 +534,7 @@ export class SettlementService {
       });
     }
 
+    this.logger.log(`Starting settlement payload validation: totalAmount=${data.totalAmount}, supplierGroups=${data.suppliers?.length ?? 0}`);
     let computedTotal = 0;
 
     for (const [supplierIndex, supplier] of (data.suppliers ?? []).entries()) {
@@ -530,21 +594,21 @@ export class SettlementService {
       if (supplier.supplierTotalAmount !== undefined && !this.areAmountsEqual(supplier.supplierTotalAmount, supplierAmount)) {
         errors.push({
           field: `suppliers[${supplierIndex}].supplierTotalAmount`,
-          message: 'Supplier total amount does not match the sum of its item supplier amounts',
+          message: `Supplier total amount ${supplier.supplierTotalAmount} does not match sum of item supplier amounts ${supplierAmount}`,
         });
       }
 
       if (supplier.retailerTotalAmount !== undefined && !this.areAmountsEqual(supplier.retailerTotalAmount, retailerAmount)) {
         errors.push({
           field: `suppliers[${supplierIndex}].retailerTotalAmount`,
-          message: 'Retailer total amount does not match the sum of its item retailer amounts',
+          message: `Retailer total amount ${supplier.retailerTotalAmount} does not match sum of item retailer amounts ${retailerAmount}`,
         });
       }
 
       if (supplier.platformFee !== undefined && !this.areAmountsEqual(supplier.platformFee, platformFee)) {
         errors.push({
           field: `suppliers[${supplierIndex}].platformFee`,
-          message: 'Platform fee does not match the sum of its item platform fees',
+          message: `Platform fee ${supplier.platformFee} does not match sum of item platform fees ${platformFee}`,
         });
       }
 
@@ -561,11 +625,13 @@ export class SettlementService {
       });
 
       if (!supplierIntegration?.participant) {
+        this.logger.warn(`Supplier lookup failed during validation: supplierMerchantId=${supplier.supplierMerchantId}`);
         errors.push({
           field: `suppliers[${supplierIndex}].supplierMerchantId`,
           message: 'Supplier was not found in PayAssure',
         });
       } else {
+        this.logger.log(`Supplier found during validation: supplierMerchantId=${supplier.supplierMerchantId}, status=${supplierIntegration.participant.status}`);
         const supplierStatus = supplierIntegration.participant.status as ParticipantStatus;
         const isActiveSupplier =
           supplierIntegration.participant.participantType === ParticipantType.SUPPLIER &&
@@ -574,9 +640,25 @@ export class SettlementService {
           );
 
         if (!isActiveSupplier) {
+          this.logger.warn(`Supplier not eligible during validation: supplierMerchantId=${supplier.supplierMerchantId}, status=${supplierStatus}`);
           errors.push({
             field: `suppliers[${supplierIndex}].supplierMerchantId`,
             message: 'Supplier is not active or not eligible to receive settlements',
+          });
+        }
+
+        const supplierPayment = supplierIntegration.participant.payment as any;
+        if (!supplierPayment) {
+          this.logger.warn(`Supplier has no configured payment destination: supplierMerchantId=${supplier.supplierMerchantId}`);
+          errors.push({
+            field: `suppliers[${supplierIndex}].supplierMerchantId`,
+            message: 'Supplier payout destination is not configured',
+          });
+        } else if (supplierPayment.isVerified !== true) {
+          this.logger.warn(`Supplier payout destination not verified: supplierMerchantId=${supplier.supplierMerchantId}`);
+          errors.push({
+            field: `suppliers[${supplierIndex}].supplierMerchantId`,
+            message: 'Supplier payout destination must be verified before settlement',
           });
         }
       }
@@ -585,9 +667,11 @@ export class SettlementService {
     if (!this.areAmountsEqual(data.totalAmount, computedTotal)) {
       errors.push({
         field: 'totalAmount',
-        message: 'Total amount does not match the sum of supplier allocations for the transaction',
+        message: `Total amount ${data.totalAmount} does not match sum of supplier allocations ${computedTotal}`,
       });
     }
+
+    this.logger.log(`Settlement payload validation completed: computedTotal=${computedTotal}, errors=${errors.length}`);
 
     if (errors.length > 0) {
       throw new BadRequestException({
@@ -621,6 +705,12 @@ export class SettlementService {
     const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
     const randomSuffix = crypto.randomBytes(4).toString('hex').toUpperCase();
     return `PASTL-${timestamp}-${randomSuffix}`;
+  }
+
+  private generateInternalMerchantTransactionReference(): string {
+    const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+    const randomSuffix = crypto.randomBytes(6).toString('hex').toUpperCase();
+    return `MTXN-${timestamp}-${randomSuffix}`;
   }
 
   async onModuleDestroy() {

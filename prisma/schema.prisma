@@ -76,6 +76,7 @@ model OnboardingParticipant {
   posSystem             String?
   webhookUrl            String?
   settlementPreference  String?
+  payment               Json?
   status                ParticipantStatus  @default(DRAFT)
   integrations          Integration[]
   createdAt             DateTime           @default(now())
@@ -148,6 +149,7 @@ model Settlement {
   reconciliationStatus  String?
   failureReason         String?
   metadata              Json?
+  paymentSnapshot       Json?
   transactions          Transaction[]
   createdAt             DateTime            @default(now())
   processedAt           DateTime?

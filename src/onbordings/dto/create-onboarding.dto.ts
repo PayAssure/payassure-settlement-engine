@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ParticipantType } from '@prisma/client';
-import { IsEmail, IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsEmail, IsEnum, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+import { PaymentMethodDto } from './payment-method.dto';
 
 export class CreateOnboardingDto {
   @ApiProperty({ enum: ParticipantType, example: ParticipantType.RETAILER })
@@ -70,4 +72,22 @@ export class CreateOnboardingDto {
   @IsOptional()
   @IsString()
   settlementPreference?: string;
+
+  @ApiPropertyOptional({
+    type: PaymentMethodDto,
+    description: 'Optional payout destination details for this participant.',
+    example: {
+      type: 'MPESA',
+      accountName: 'John Doe',
+      isVerified: true,
+      payerPhoneNumber: '254712345678',
+      provider: 'Safaricom',
+      bankCode: '07',
+      accountNumber: '1234567890',
+    },
+  })
+  @ValidateNested()
+  @Type(() => PaymentMethodDto)
+  @IsOptional()
+  payment?: PaymentMethodDto;
 }

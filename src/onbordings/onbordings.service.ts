@@ -3,6 +3,7 @@ import { ParticipantStatus } from '@prisma/client';
 import { CreateIntegrationDto } from './dto/create-integration.dto';
 import { CreateOnboardingDto } from './dto/create-onboarding.dto';
 import { OnboardingResponseDto } from './dto/onboarding-response.dto';
+import { PaymentMethodDto } from './dto/payment-method.dto';
 import { UpdateOnboardingDto } from './dto/update-onboarding.dto';
 import { OnbordingsRepository } from './onbordings.repository';
 
@@ -11,6 +12,10 @@ export class OnbordingsService {
   constructor(private readonly repository: OnbordingsRepository) {}
 
   async createParticipant(data: CreateOnboardingDto): Promise<OnboardingResponseDto> {
+    if (data.payment) {
+      this.validatePaymentMethod(data.payment);
+    }
+
     const user = data.email ? await this.repository.findUserByEmail(data.email) : null;
     const existingParticipant = data.email ? await this.repository.findParticipantByEmail(data.email) : null;
     const completionMessage = user
@@ -158,6 +163,38 @@ export class OnbordingsService {
     }
   }
 
+  async updatePayment(id: string, payment: PaymentMethodDto): Promise<OnboardingResponseDto> {
+    this.validatePaymentMethod(payment);
+    const participant = await this.repository.updatePayment(id, payment);
+    return this.toResponse(participant);
+  }
+
+  private validatePaymentMethod(payment: PaymentMethodDto) {
+    if (!payment.type || !['MPESA', 'BANK'].includes(payment.type)) {
+      throw new ForbiddenException('Payment type must be MPESA or BANK');
+    }
+
+    if (!payment.accountName) {
+      throw new ForbiddenException('Payment accountName is required');
+    }
+
+    if (payment.isVerified !== true) {
+      throw new ForbiddenException('Payment destination must be verified before it can be used for payouts');
+    }
+
+    if (payment.type === 'MPESA') {
+      if (!payment.payerPhoneNumber) {
+        throw new ForbiddenException('payerPhoneNumber is required for MPESA payout destinations');
+      }
+    }
+
+    if (payment.type === 'BANK') {
+      if (!payment.bankCode || !payment.accountNumber) {
+        throw new ForbiddenException('bankCode and accountNumber are required for BANK payout destinations');
+      }
+    }
+  }
+
   private isProfileIncomplete(data: CreateOnboardingDto): boolean {
     const requiredFields = [
       data.participantType,
@@ -226,6 +263,7 @@ export class OnbordingsService {
             createdAt: activeIntegration.createdAt,
           }
         : null,
+      payment: participant.payment ?? null,
       createdAt: participant.createdAt,
       updatedAt: participant.updatedAt,
     };
