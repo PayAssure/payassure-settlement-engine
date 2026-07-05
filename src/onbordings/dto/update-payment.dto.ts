@@ -9,11 +9,8 @@ export class UpdatePaymentDto {
     example: {
       type: 'MPESA',
       accountName: 'John Doe',
-      isVerified: true,
       payerPhoneNumber: '254712345678',
       provider: 'Safaricom',
-      bankCode: '07',
-      accountNumber: '1234567890',
     },
   })
   @ValidateNested()

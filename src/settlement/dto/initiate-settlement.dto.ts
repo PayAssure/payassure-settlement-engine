@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNumber, IsString, IsNotEmpty, IsOptional, IsArray, ValidateNested, Min, IsUrl, IsISO8601 } from 'class-validator';
+import { IsNumber, IsString, IsNotEmpty, IsOptional, IsArray, ValidateNested, Min, IsUrl, IsISO8601, ArrayMinSize } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class PaymentMethodDto {
@@ -170,9 +170,9 @@ export class InitiateSettlementDto {
   paymentMethod: PaymentMethodDto = new PaymentMethodDto();
 
   @ApiPropertyOptional({ example: 'https://merchant.example.com/api/payassure/callback', description: 'Optional callback URL for settlement status notifications.' })
-  @IsUrl()
+  @IsUrl({ require_tld: false })
   @IsOptional()
-  callbackUrl?: string = '';
+  callbackUrl?: string = undefined;
 
   @ApiProperty({ example: '2026-07-03T17:30:15+03:00', description: 'ISO timestamp for when the transaction occurred.' })
   @IsISO8601()
@@ -184,6 +184,7 @@ export class InitiateSettlementDto {
 
   @ApiProperty({ type: [SupplierDto], description: 'Supplier-based allocations representing settlement units.' })
   @IsArray()
+  @ArrayMinSize(1)
   @ValidateNested({ each: true })
   @Type(() => SupplierDto)
   suppliers: SupplierDto[] = [];

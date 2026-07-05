@@ -71,7 +71,8 @@ export class AuthRepository implements OnModuleDestroy {
       return;
     }
 
-    const paymentVerified = participant.payment && (participant.payment as any).isVerified === true;
+    const payment = participant.payment as any;
+    const paymentVerified = payment?.status === 'VERIFIED' || payment?.isVerified === true;
     if (!paymentVerified) {
       return;
     }

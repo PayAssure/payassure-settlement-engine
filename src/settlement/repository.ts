@@ -1,5 +1,5 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import { PrismaClient, Hello } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import { SessionRepository } from './repository/session/session.repository';
 import { IntegrationRepository } from './repository/integration/integration.repository';
 import { SettlementRecordRepository } from './repository/settlement/settlement.repository';
@@ -8,13 +8,16 @@ import { TransactionRepository } from './repository/transaction/transaction.repo
 @Injectable()
 export class SettlementRepository implements OnModuleDestroy {
   private readonly prisma = new PrismaClient();
-  private readonly sessions = new SessionRepository(this.prisma);
-  private readonly integrations = new IntegrationRepository(this.prisma);
-  private readonly settlements = new SettlementRecordRepository(this.prisma);
-  private readonly transactions = new TransactionRepository(this.prisma);
+  readonly sessions: SessionRepository;
+  readonly integrations: IntegrationRepository;
+  readonly settlements: SettlementRecordRepository;
+  readonly transactions: TransactionRepository;
 
-  async findFirstHello(): Promise<Hello | null> {
-    return this.prisma.hello.findFirst();
+  constructor() {
+    this.sessions = new SessionRepository(this.prisma);
+    this.integrations = new IntegrationRepository(this.prisma);
+    this.settlements = new SettlementRecordRepository(this.prisma);
+    this.transactions = new TransactionRepository(this.prisma);
   }
 
   async createSettlementSession(businessId: string, integrationId: string, token: string, expiresAt: Date) {

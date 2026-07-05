@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsBoolean, IsIn, IsNotEmpty, IsOptional, IsString, ValidateIf } from 'class-validator';
 
+export type PaymentVerificationStatus = 'PENDING_VERIFICATION' | 'VERIFIED' | 'FAILED' | 'SUSPENDED' | 'DISABLED';
+
 export class PaymentMethodDto {
   @ApiProperty({ example: 'MPESA', description: 'Payout method type. Only one payout destination may be configured at a time.' })
   @IsIn(['MPESA', 'BANK'])
@@ -11,9 +13,15 @@ export class PaymentMethodDto {
   @IsString()
   accountName!: string;
 
-  @ApiProperty({ example: true, description: 'Whether the payout destination has been verified.' })
+  @ApiPropertyOptional({ readOnly: true, example: 'PENDING_VERIFICATION', description: 'Backend-managed lifecycle status for the payout destination.' })
+  @IsOptional()
+  @IsString()
+  status?: PaymentVerificationStatus;
+
+  @ApiPropertyOptional({ readOnly: true, example: false, description: 'Backend-managed verification state for the payout destination.' })
+  @IsOptional()
   @IsBoolean()
-  isVerified!: boolean;
+  isVerified?: boolean;
 
   @ApiPropertyOptional({ example: '254712345678', description: 'Phone number for MPESA payouts.' })
   @ValidateIf((o) => o.type === 'MPESA')
@@ -37,4 +45,33 @@ export class PaymentMethodDto {
   @IsNotEmpty()
   @IsString()
   accountNumber?: string;
+
+  @ApiPropertyOptional({ example: 'paysec_7f3c9a2b6d...', description: 'Raw activation secret returned to the merchant for the pending verification flow.' })
+  @IsOptional()
+  @IsString()
+  paymentActivationSecret?: string;
+
+  @ApiPropertyOptional({ example: 'paysec_7f3c9a2b6d...', description: 'Hashed activation secret for the pending verification flow.' })
+  @IsOptional()
+  @IsString()
+  paymentActivationSecretHash?: string;
+
+  @ApiPropertyOptional({ example: '2026-07-05T12:00:00.000Z', description: 'Expiry time for the payment activation secret.' })
+  @IsOptional()
+  @IsString()
+  paymentActivationSecretExpiresAt?: string;
+
+  @ApiPropertyOptional({ example: 0, description: 'How many times the activation secret has been attempted.' })
+  @IsOptional()
+  verificationAttempts?: number;
+
+  @ApiPropertyOptional({ example: 'PAYMENT_ACTIVATION_SECRET', description: 'Verification method used to confirm ownership.' })
+  @IsOptional()
+  @IsString()
+  verificationMethod?: string;
+
+  @ApiPropertyOptional({ example: '2026-07-05T12:00:00.000Z', description: 'Timestamp when the payout destination was verified.' })
+  @IsOptional()
+  @IsString()
+  verifiedAt?: string;
 }

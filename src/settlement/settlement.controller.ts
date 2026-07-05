@@ -4,6 +4,7 @@ import { SettlementService } from './settlement.service';
 import { AuthenticateDto } from './dto/authenticate.dto';
 import { InitiateSettlementDto } from './dto/initiate-settlement.dto';
 import { ReconcileSettlementDto } from './dto/reconcile-settlement.dto';
+import { RunScenarioDto, RunScenarioResponseDto } from './dto/run-scenario.dto';
 import {
   AuthenticateResponseDto,
   SettlementResponseDto,
@@ -32,7 +33,7 @@ export class SettlementController {
   })
   @ApiResponse({
     status: 200,
-    description: 'Authentication successful. Returns a one-time token and business profile details.',
+    description: 'Authentication successful. Returns a one-time token and business profile details. Use this token in the x-settlement-session header for the initiate endpoint.',
     type: AuthenticateResponseDto,
   })
   @ApiResponse({
@@ -198,6 +199,129 @@ export class SettlementController {
    * Health Check Endpoint
    * Verify settlement service is running
    */
+  @Post('scenarios/run')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Run a documented settlement scenario from Swagger',
+    description:
+      'Executes a predefined success or rejection scenario for settlement authentication and initiation. Useful for manual API testing and demonstrating how the platform behaves under fake or real credentials.',
+  })
+  @ApiResponse({ status: 200, description: 'Scenario executed successfully', type: RunScenarioResponseDto })
+  @ApiResponse({ status: 400, description: 'Scenario request validation failed', type: ErrorResponseDto })
+  async runScenario(@Body() body: RunScenarioDto): Promise<RunScenarioResponseDto> {
+    const scenario = body.scenario;
+    const credentialMode = body.credentialMode ?? 'fake';
+    const apiKey = body.apiKey ?? 'pk_live_test123';
+    const apiSecret = body.apiSecret ?? 'sk_live_test123';
+    const merchantTransactionReference = body.merchantTransactionReference ?? `TXN-${scenario}`;
+    const sessionToken = body.sessionToken ?? 'session-1';
+
+    try {
+      const authResult = await this.settlementService.authenticate({ apiKey, apiSecret } as AuthenticateDto, { email: body.userEmail ?? 'merchant@example.com' });
+      const token = authResult.token;
+
+      if (scenario === 'happy-path') {
+        const result = await this.settlementService.initiateSettlement(token, {
+          merchantTransactionReference,
+          totalAmount: body.totalAmount ?? 7200,
+          currency: body.currency ?? 'KES',
+          settlementMethod: body.settlementMethod ?? 'BANK_TRANSFER',
+          paymentMethod: {
+            type: body.paymentMethodType ?? 'MPESA',
+            payerPhoneNumber: body.payerPhoneNumber ?? '254700000000',
+          },
+          transactionDate: '2026-07-03T17:30:15+03:00',
+          suppliers: [
+            {
+              supplierMerchantId: body.supplierMerchantId ?? 'SUP-1001',
+              items: [{ itemId: body.itemId ?? 'ITEM-001', supplierAmount: body.supplierAmount ?? 7200 }],
+            },
+          ],
+        } as InitiateSettlementDto);
+
+        return {
+          status: 'passed',
+          scenario,
+          message: 'Happy-path settlement scenario completed successfully.',
+          details: { credentialMode, settlementId: result.settlement?.settlementId, merchantTransactionReference, token },
+        };
+      }
+
+      if (scenario === 'expired-session') {
+        try {
+          await this.settlementService.initiateSettlement(sessionToken, {
+            merchantTransactionReference,
+            totalAmount: body.totalAmount ?? 7200,
+            currency: body.currency ?? 'KES',
+            settlementMethod: body.settlementMethod ?? 'BANK_TRANSFER',
+            paymentMethod: {
+              type: body.paymentMethodType ?? 'MPESA',
+              payerPhoneNumber: body.payerPhoneNumber ?? '254700000000',
+            },
+            transactionDate: '2026-07-03T17:30:15+03:00',
+            suppliers: [{ supplierMerchantId: body.supplierMerchantId ?? 'SUP-1001', items: [{ itemId: body.itemId ?? 'ITEM-001', supplierAmount: body.supplierAmount ?? 7200 }] }],
+          } as InitiateSettlementDto);
+          return { status: 'failed', scenario, message: 'Expired-session scenario unexpectedly succeeded.' };
+        } catch (error: any) {
+          return {
+            status: 'passed',
+            scenario,
+            message: 'Expired-session scenario rejected as expected.',
+            details: { credentialMode, error: error?.response?.message ?? error?.message },
+          };
+        }
+      }
+
+      if (scenario === 'invalid-payload') {
+        try {
+          await this.settlementService.initiateSettlement(token, {
+            merchantTransactionReference,
+            totalAmount: 0,
+            currency: body.currency ?? 'KES',
+            settlementMethod: body.settlementMethod ?? 'BANK_TRANSFER',
+            paymentMethod: {
+              type: body.paymentMethodType ?? 'MPESA',
+              payerPhoneNumber: body.payerPhoneNumber ?? '254700000000',
+            },
+            transactionDate: '2026-07-03T17:30:15+03:00',
+            suppliers: [{ supplierMerchantId: body.supplierMerchantId ?? 'SUP-1001', items: [{ itemId: body.itemId ?? 'ITEM-001', supplierAmount: body.supplierAmount ?? 7200 }] }],
+          } as InitiateSettlementDto);
+          return { status: 'failed', scenario, message: 'Invalid-payload scenario unexpectedly succeeded.' };
+        } catch (error: any) {
+          return {
+            status: 'passed',
+            scenario,
+            message: 'Invalid-payload scenario rejected as expected.',
+            details: { credentialMode, error: error?.response?.message ?? error?.message },
+          };
+        }
+      }
+    } catch (error: any) {
+      if (scenario === 'invalid-credentials') {
+        return {
+          status: 'passed',
+          scenario,
+          message: 'Invalid credentials scenario rejected as expected.',
+          details: { credentialMode, error: error?.response?.message ?? error?.message },
+        };
+      }
+
+      return {
+        status: 'failed',
+        scenario,
+        message: 'Scenario execution failed unexpectedly.',
+        details: { credentialMode, error: error?.response?.message ?? error?.message },
+      };
+    }
+
+    if (scenario === 'invalid-credentials') {
+      return { status: 'failed', scenario, message: 'Invalid credentials scenario unexpectedly succeeded.' };
+    }
+
+    return { status: 'failed', scenario, message: 'Unsupported scenario requested.' };
+  }
+
   @Get('health')
   @ApiOperation({ summary: 'Get settlement module health status' })
   @ApiResponse({ status: 200, schema: { example: { status: 'ok' } } })

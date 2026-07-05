@@ -79,7 +79,7 @@ export class CreateOnboardingDto {
     example: {
       type: 'MPESA',
       accountName: 'John Doe',
-      isVerified: true,
+      isVerified: false,
       payerPhoneNumber: '254712345678',
       provider: 'Safaricom',
       bankCode: '07',

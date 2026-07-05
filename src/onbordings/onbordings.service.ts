@@ -1,4 +1,5 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { createHash, randomBytes } from 'crypto';
 import { ParticipantStatus } from '@prisma/client';
 import { CreateIntegrationDto } from './dto/create-integration.dto';
 import { CreateOnboardingDto } from './dto/create-onboarding.dto';
@@ -16,29 +17,34 @@ export class OnbordingsService {
       this.validatePaymentMethod(data.payment);
     }
 
-    const user = data.email ? await this.repository.findUserByEmail(data.email) : null;
-    const existingParticipant = data.email ? await this.repository.findParticipantByEmail(data.email) : null;
+    const preparedPayment = data.payment ? this.preparePaymentForStorage(data.payment) : undefined;
+    const normalizedData = preparedPayment
+      ? { ...data, payment: preparedPayment.payment }
+      : data;
+
+    const user = normalizedData.email ? await this.repository.findUserByEmail(normalizedData.email) : null;
+    const existingParticipant = normalizedData.email ? await this.repository.findParticipantByEmail(normalizedData.email) : null;
     const completionMessage = user
       ? undefined
       : 'Onboarding created. Please register an account to complete your profile.';
-    const draftReasonMessage = this.isProfileIncomplete(data)
+    const draftReasonMessage = this.isProfileIncomplete(normalizedData)
       ? 'Your onboarding request is currently in draft because the profile is incomplete. Please complete the required details to move it forward.'
       : undefined;
 
     if (existingParticipant) {
-      if (existingParticipant.participantType === data.participantType) {
+      if (existingParticipant.participantType === normalizedData.participantType) {
         const duplicateMessage ='This onboarding request was not created because an onboarding record for the same participant type already exists for this user.';
 
         return this.toResponse(existingParticipant, undefined, duplicateMessage);
       }
 
-      if (this.shouldReuseParticipant(existingParticipant, data)) {
+      if (this.shouldReuseParticipant(existingParticipant, normalizedData)) {
         return this.toResponse(existingParticipant, undefined, completionMessage);
       }
     }
 
-    const created = await this.repository.createParticipantWithoutIntegration(data);
-    return this.toResponse(created, undefined, draftReasonMessage ?? completionMessage);
+    const created = await this.repository.createParticipantWithoutIntegration(normalizedData);
+    return this.toResponse(this.attachActivationSecret(created, preparedPayment?.paymentActivationSecret), undefined, draftReasonMessage ?? completionMessage);
   }
 
   async findAllParticipants(): Promise<OnboardingResponseDto[]> {
@@ -56,9 +62,18 @@ export class OnbordingsService {
   }
 
   async updateParticipant(id: string, data: UpdateOnboardingDto): Promise<OnboardingResponseDto> {
+    if (data.payment) {
+      this.validatePaymentMethod(data.payment);
+    }
+
+    const preparedPayment = data.payment ? this.preparePaymentForStorage(data.payment) : undefined;
+    const normalizedData = preparedPayment
+      ? { ...data, payment: preparedPayment.payment }
+      : data;
+
     try {
-      const participant = await this.repository.updateParticipant(id, data);
-      return this.toResponse(participant);
+      const participant = await this.repository.updateParticipant(id, normalizedData);
+      return this.toResponse(this.attachActivationSecret(participant, preparedPayment?.paymentActivationSecret));
     } catch {
       throw new NotFoundException('Participant not found');
     }
@@ -165,7 +180,13 @@ export class OnbordingsService {
 
   async updatePayment(id: string, payment: PaymentMethodDto): Promise<OnboardingResponseDto> {
     this.validatePaymentMethod(payment);
-    const participant = await this.repository.updatePayment(id, payment);
+    const preparedPayment = this.preparePaymentForStorage(payment);
+    const participant = await this.repository.updatePayment(id, preparedPayment.payment);
+    return this.toResponse(this.attachActivationSecret(participant, preparedPayment.paymentActivationSecret));
+  }
+
+  async activatePayment(id: string, data: { paymentActivationSecret: string }): Promise<OnboardingResponseDto> {
+    const participant = await this.repository.activatePayment(id, data.paymentActivationSecret);
     return this.toResponse(participant);
   }
 
@@ -178,21 +199,67 @@ export class OnbordingsService {
       throw new ForbiddenException('Payment accountName is required');
     }
 
-    if (payment.isVerified !== true) {
-      throw new ForbiddenException('Payment destination must be verified before it can be used for payouts');
+    if (payment.isVerified !== undefined) {
+      throw new ForbiddenException('isVerified is managed by the backend and must not be provided in the request payload');
     }
 
     if (payment.type === 'MPESA') {
+      if (payment.bankCode || payment.accountNumber) {
+        throw new ForbiddenException('MPESA payouts do not accept bankCode or accountNumber in the request payload');
+      }
+
       if (!payment.payerPhoneNumber) {
         throw new ForbiddenException('payerPhoneNumber is required for MPESA payout destinations');
       }
     }
 
     if (payment.type === 'BANK') {
+      if (payment.payerPhoneNumber) {
+        throw new ForbiddenException('BANK payouts do not accept payerPhoneNumber in the request payload');
+      }
+
       if (!payment.bankCode || !payment.accountNumber) {
         throw new ForbiddenException('bankCode and accountNumber are required for BANK payout destinations');
       }
     }
+  }
+
+  private preparePaymentForStorage(payment: PaymentMethodDto): { payment: PaymentMethodDto; paymentActivationSecret?: string } {
+    const activationSecret = `paysec_${randomBytes(16).toString('hex')}`;
+    const activationSecretHash = createHash('sha256').update(activationSecret).digest('hex');
+
+    return {
+      payment: {
+        ...payment,
+        status: 'PENDING_VERIFICATION',
+        isVerified: false,
+        paymentActivationSecretHash: activationSecretHash,
+        paymentActivationSecretExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        verificationAttempts: 0,
+        verificationMethod: undefined,
+        verifiedAt: undefined,
+      },
+      paymentActivationSecret: activationSecret,
+    };
+  }
+
+  private attachActivationSecret(participant: any, paymentActivationSecret?: string) {
+    if (!participant || !paymentActivationSecret) {
+      return participant;
+    }
+
+    const existingPayment = participant.payment as any;
+    if (!existingPayment) {
+      return participant;
+    }
+
+    return {
+      ...participant,
+      payment: {
+        ...existingPayment,
+        paymentActivationSecret,
+      },
+    };
   }
 
   private isProfileIncomplete(data: CreateOnboardingDto): boolean {

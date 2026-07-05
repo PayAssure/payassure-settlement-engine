@@ -6,6 +6,7 @@ import { CreateOnboardingDto } from './dto/create-onboarding.dto';
 import { ErrorResponseDto } from './dto/error-response.dto';
 import { OnboardingResponseDto } from './dto/onboarding-response.dto';
 import { UpdateOnboardingDto } from './dto/update-onboarding.dto';
+import { ActivatePaymentDto } from './dto/activate-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { UpdateWebhookDto } from './dto/update-webhook.dto';
 import { OnbordingsService } from './onbordings.service';
@@ -198,5 +199,16 @@ export class OnbordingsController {
   })
   async updatePayment(@Param('id') id: string, @Body() body: UpdatePaymentDto): Promise<OnboardingResponseDto> {
     return this.service.updatePayment(id, body.payment);
+  }
+
+  @Patch(':id/payment/activate')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Activate a pending payout destination using the generated secret' })
+  @ApiResponse({ status: 200, type: OnboardingResponseDto })
+  @ApiResponse({ status: 401, type: ErrorResponseDto, description: 'Authentication token is missing or invalid.' })
+  @ApiResponse({ status: 403, type: ErrorResponseDto, description: 'The payment activation secret is invalid or expired.' })
+  async activatePayment(@Param('id') id: string, @Body() body: ActivatePaymentDto): Promise<OnboardingResponseDto> {
+    return this.service.activatePayment(id, { paymentActivationSecret: body.paymentActivationSecret });
   }
 }

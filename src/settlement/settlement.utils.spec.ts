@@ -46,8 +46,8 @@ test('groups transaction items by supplier merchant ID and aggregates amounts', 
   assert.deepEqual(
     groups.map((group) => ({ supplierMerchantId: group.supplierMerchantId, amount: group.amount })),
     [
-      { supplierMerchantId: 'pay_sup_001', amount: 1300 },
-      { supplierMerchantId: 'pay_sup_002', amount: 750 },
+      { supplierMerchantId: 'SUP-1001', amount: 1300 },
+      { supplierMerchantId: 'SUP-1002', amount: 750 },
     ],
   );
 });
