@@ -52,18 +52,52 @@ export class TransactionResponseDto {
   status: TransactionStatus = TransactionStatus.INITIATED;
 }
 
-export class SupplierSettlementChildDto {
-  @ApiProperty({ example: 'settlement_456' })
-  id: string = '';
+export class PaymentResponseDto {
+  @ApiProperty({ example: 'MPESA', description: 'Payment type for the displayed payment details.' })
+  type: string = '';
 
-  @ApiProperty({ example: 2500 })
+  @ApiPropertyOptional({ example: 'John Doe', description: 'Optional account or beneficiary name for the payout destination.' })
+  accountName?: string = '';
+
+  @ApiPropertyOptional({ example: 'Safaricom', description: 'Optional payment provider or network name.' })
+  provider?: string = '';
+
+  @ApiPropertyOptional({ example: '254712345678', description: 'M-Pesa phone number for MPESA payouts.' })
+  payerPhoneNumber?: string = '';
+
+  @ApiPropertyOptional({ example: '07', description: 'Bank code for BANK payouts.' })
+  bankCode?: string = '';
+
+  @ApiPropertyOptional({ example: '1234567890', description: 'Bank account number for BANK payouts.' })
+  accountNumber?: string = '';
+}
+
+export class SettlementPartyDetailsDto {
+  @ApiProperty({ example: 15000, description: 'Amount allocated to this party in the child settlement.' })
   amount: number = 0;
 
-  @ApiProperty({ example: 'settlement-001-pay_sup_001' })
+  @ApiPropertyOptional({ type: PaymentResponseDto, description: 'Relevant payment details for this party.' })
+  paymentDetails?: PaymentResponseDto = undefined;
+}
+
+export class SupplierSettlementChildDto {
+  @ApiProperty({ example: 'settlement_456', description: 'Identifier for the child settlement record.' })
+  id: string = '';
+
+  @ApiProperty({ example: 'settlement-001-pay_sup_001', description: 'Child settlement reference for this supplier group.' })
   reference: string = '';
 
-  @ApiProperty({ example: 'pay_sup_001' })
-  supplierMerchantId: string = '';
+  @ApiProperty({ type: SettlementPartyDetailsDto, description: 'Supplier-specific settlement amount and payment details.' })
+  supplier: SettlementPartyDetailsDto = new SettlementPartyDetailsDto();
+
+  @ApiProperty({ type: SettlementPartyDetailsDto, description: 'Retailer-specific settlement amount and payment details.' })
+  retailer: SettlementPartyDetailsDto = new SettlementPartyDetailsDto();
+
+  @ApiProperty({ example: 1000, description: 'System fee or platform amount retained for this child settlement.' })
+  systemAmount: number = 0;
+
+  @ApiProperty({ example: 16500, description: 'Total amount covered by this child settlement, including supplier, retailer, and system allocations.' })
+  amount: number = 0;
 }
 
 export class SettlementResponseDto {
@@ -72,8 +106,13 @@ export class SettlementResponseDto {
 
   @ApiProperty({ type: Object, example: {
     settlementId: 'settlement_123',
+    merchantId: 'pay_d68f568ddc7d7b2a',
     status: 'INITIATED',
-    amount: 5000,
+    amount: 16500,
+    retailerAmount: 500,
+    supplierAmount: 15000,
+    systemAmount: 1500,
+    paymentDetails: { type: 'MPESA', payerPhoneNumber: '254712345678', provider: 'Safaricom' },
     currency: 'KES',
     reference: 'settlement-001',
     createdAt: '2026-06-30T09:00:00.000Z',
@@ -81,8 +120,13 @@ export class SettlementResponseDto {
   } })
   settlement: {
     settlementId: string;
+    merchantId: string;
     status: SettlementStatus;
     amount: number;
+    retailerAmount: number;
+    supplierAmount: number;
+    systemAmount: number;
+    paymentDetails: PaymentResponseDto;
     currency: string;
     reference: string;
     createdAt: Date;
@@ -90,8 +134,13 @@ export class SettlementResponseDto {
     transactions?: TransactionResponseDto[];
   } = {
     settlementId: '',
+    merchantId: '',
     status: SettlementStatus.INITIATED,
     amount: 0,
+    retailerAmount: 0,
+    supplierAmount: 0,
+    systemAmount: 0,
+    paymentDetails: new PaymentResponseDto(),
     currency: '',
     reference: '',
     createdAt: new Date(),

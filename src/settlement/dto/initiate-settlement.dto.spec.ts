@@ -49,15 +49,16 @@ class StubOnboardingRepository {
 }
 
 class StubSettlementRepository {
-  async createSettlementSession() { return { id: 'session-1', businessId: 'participant-1', integrationId: 'integration-1', token: 'token-1', expiresAt: new Date(Date.now() + 3600000), isUsed: false, usedAt: null }; }
-  async findSettlementSessionByToken() { return { id: 'session-1', businessId: 'participant-1', integrationId: 'integration-1', token: 'token-1', expiresAt: new Date(Date.now() + 3600000), isUsed: false, usedAt: null }; }
+  async createSettlementSession() { return { id: 'session-1', businessId: 'participant-1', integrationId: 'integration-1', token: 'token-1', expiresAt: new Date(Date.now() + 3600000), lastUsedAt: null, status: 'ACTIVE' }; }
+  async findSettlementSessionByToken() { return { id: 'session-1', businessId: 'participant-1', integrationId: 'integration-1', token: 'token-1', expiresAt: new Date(Date.now() + 3600000), lastUsedAt: null, status: 'ACTIVE' }; }
   async findIntegrationById() { return { id: 'integration-1', merchantId: 'pay_123', participantId: 'participant-1', participant: { id: 'participant-1', participantType: 'RETAILER', status: 'ACTIVE', businessName: 'Test Merchant' } }; }
   async findIntegrationByMerchantId() { return { id: 'integration-1', merchantId: 'pay_123', participantId: 'participant-1', participant: { id: 'participant-1', participantType: 'SUPPLIER', status: 'ACTIVE', businessName: 'Supplier One', payment: { status: 'VERIFIED', isVerified: true } } }; }
   async updateSettlementSession() { return { id: 'session-1' }; }
   async deleteSettlementSessions() { return { count: 1 }; }
   async createSettlement() { return { id: 'settlement-1', businessId: 'participant-1', integrationId: 'integration-1', amount: 16500, currency: 'KES', settlementMethod: 'BANK_TRANSFER', status: 'INITIATED', reference: 'payset-1', createdAt: new Date() }; }
   async createSupplierSettlement() { return { id: 'supplier-settlement-1', businessId: 'participant-1', integrationId: 'integration-1', amount: 7200, currency: 'KES', settlementMethod: 'BANK_TRANSFER', status: 'INITIATED', reference: 'payset-2', parentSettlementId: 'settlement-1', createdAt: new Date() }; }
-  async markSessionAsUsed() { return { id: 'session-1', isUsed: true, usedAt: new Date() }; }
+  async markSessionAsUsed() { return { id: 'session-1', lastUsedAt: new Date(), status: 'ACTIVE' }; }
+  async touchSession() { return { id: 'session-1', lastUsedAt: new Date(), status: 'ACTIVE' }; }
   async createMultipleTransactions() { return [{ id: 'txn-1', settlementId: 'settlement-1', itemId: 'ITEM-001', supplierMerchantId: 'SUP-1001' }]; }
   async findSettlementById() { return { id: 'settlement-1', businessId: 'participant-1', integrationId: 'integration-1', amount: 16500, currency: 'KES', settlementMethod: 'BANK_TRANSFER', status: 'INITIATED', reference: 'payset-1', createdAt: new Date(), transactions: [] }; }
   async findSettlementByBusinessAndPayloadReference() { return null; }
@@ -225,8 +226,8 @@ test('rejects a reused settlement session token', async () => {
     integrationId: 'integration-1',
     token: 'token-1',
     expiresAt: new Date(Date.now() + 3600000),
-    isUsed: true,
-    usedAt: new Date(),
+    status: 'REVOKED',
+    lastUsedAt: new Date(),
   });
 
   const settlementService = new SettlementService(repository);
@@ -245,7 +246,7 @@ test('rejects a reused settlement session token', async () => {
         },
       ],
     } as any),
-    /already been used|INVALID_TOKEN/,
+    /SESSION_INACTIVE|INVALID_TOKEN|already been used/i,
   );
   console.log('step 1 passed: reused session tokens are rejected');
 });

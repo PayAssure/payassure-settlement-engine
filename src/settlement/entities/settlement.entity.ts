@@ -42,7 +42,7 @@ export class SettlementSessionEntity {
   integrationId: string = '';
   token: string = '';
   expiresAt: Date = new Date();
-  usedAt?: Date;
-  isUsed: boolean = false;
+  lastUsedAt?: Date;
+  status: 'ACTIVE' | 'REVOKED' | 'EXPIRED' = 'ACTIVE';
   createdAt: Date = new Date();
 }

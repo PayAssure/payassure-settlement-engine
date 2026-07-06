@@ -75,8 +75,40 @@ export class SettlementController {
   })
   @ApiResponse({
     status: 201,
-    description: 'Settlement initiated successfully. Returns the created settlement record and processing details.',
+    description: 'Settlement initiated successfully. Returns the created settlement record, merchant and payment breakdown, supplier settlement children, and processing details.',
     type: SettlementResponseDto,
+    schema: {
+      example: {
+        success: true,
+        settlement: {
+          settlementId: 'cmr8yjs6g0007axv90bap9n48',
+          merchantId: 'pay_d68f568ddc7d7b2a',
+          status: 'INITIATED',
+          amount: 16500,
+          retailerAmount: 1500,
+          supplierAmount: 15000,
+          systemAmount: 1000,
+          paymentDetails: {
+            type: 'MPESA',
+            payerPhoneNumber: '254712345678',
+            provider: 'Safaricom',
+          },
+          currency: 'KES',
+          reference: 'PASTL-20260706082812-EE8AE32E',
+          createdAt: '2026-07-06T08:28:12.520Z',
+          estimatedProcessingTime: '24-48 hours',
+        },
+        message: 'Settlement request received and queued for processing',
+        children: [
+          {
+            id: 'cmr8yjs6z0008axv9e4jvi7w3',
+            amount: 15000,
+            reference: 'TXN-20260703-000003-pay_d68f568ddc7d7b2a',
+            supplierMerchantId: 'pay_d68f568ddc7d7b2a',
+          },
+        ],
+      },
+    },
   })
   @ApiResponse({
     status: 400,

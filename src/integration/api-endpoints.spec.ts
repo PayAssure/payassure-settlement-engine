@@ -211,7 +211,7 @@ class SettlementRepositoryStub {
   private transactions: Array<any> = [];
 
   async createSettlementSession(businessId: string, integrationId: string, token: string, expiresAt: Date) {
-    const session = { id: 'session-1', businessId, integrationId, token, expiresAt, isUsed: false, usedAt: null };
+    const session = { id: 'session-1', businessId, integrationId, token, expiresAt, lastUsedAt: null, status: 'ACTIVE' };
     this.sessions.push(session);
     return session;
   }
@@ -236,10 +236,14 @@ class SettlementRepositoryStub {
   async markSessionAsUsed(sessionId: string) {
     const session = this.sessions.find((entry) => entry.id === sessionId);
     if (session) {
-      session.isUsed = true;
-      session.usedAt = new Date();
+      session.lastUsedAt = new Date();
     }
     return session;
+  }
+
+  // New API: touchSession updates lastUsedAt
+  async touchSession(sessionId: string) {
+    return this.markSessionAsUsed(sessionId);
   }
 
   async createSettlement(businessId: string, integrationId: string, payAssureReference: string, internalMerchantTransactionReference: string, data: any) {

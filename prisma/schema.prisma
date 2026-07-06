@@ -123,13 +123,19 @@ model SettlementSession {
   integrationId String
   token         String   @unique
   expiresAt     DateTime
-  usedAt        DateTime?
-  isUsed        Boolean  @default(false)
+  lastUsedAt    DateTime?
+  status        SettlementSessionStatus @default(ACTIVE)
   createdAt     DateTime @default(now())
 
   @@index([businessId])
   @@index([integrationId])
   @@index([expiresAt])
+}
+
+enum SettlementSessionStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
 }
 
 model Settlement {

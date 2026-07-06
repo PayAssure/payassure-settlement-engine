@@ -5,6 +5,35 @@ import { validateAndGetSession } from '../helpers/session.helpers';
 import { validateSettlementData } from '../helpers/validation.helpers';
 import { generateInternalMerchantTransactionReference, generatePayAssureReference } from '../helpers/reference.helpers';
 
+function toPublicPaymentDetails(payment: any) {
+  if (!payment || !payment.type) {
+    return undefined;
+  }
+
+  const base: any = {
+    type: payment.type,
+    accountName: payment.accountName ?? undefined,
+    provider: payment.provider ?? undefined,
+  };
+
+  if (payment.type === 'MPESA') {
+    return {
+      ...base,
+      payerPhoneNumber: payment.payerPhoneNumber ?? undefined,
+    };
+  }
+
+  if (payment.type === 'BANK') {
+    return {
+      ...base,
+      bankCode: payment.bankCode ?? undefined,
+      accountNumber: payment.accountNumber ?? undefined,
+    };
+  }
+
+  return base;
+}
+
 export async function initiateOperation(
   prisma: any,
   repository: any,
@@ -37,25 +66,39 @@ export async function initiateOperation(
     const existingSettlement = await repository.findSettlementByBusinessAndPayloadReference(businessId, data.merchantTransactionReference);
     if (existingSettlement) {
       logger.log(`Existing settlement found for reference=${data.merchantTransactionReference}, settlementId=${existingSettlement.id}`);
-      await repository.markSessionAsUsed(session.id);
-      return {
-        success: true,
-        settlement: {
-          settlementId: existingSettlement.id,
-          status: existingSettlement.status,
-          amount: Number(existingSettlement.amount),
-          currency: existingSettlement.currency,
-          reference: existingSettlement.reference,
-          createdAt: existingSettlement.createdAt,
-          estimatedProcessingTime: '10 minutes',
-          transactions: existingSettlement.transactions.map((txn: any) => ({
+      await repository.touchSession(session.id);
+      const existingTransactions = Array.isArray(existingSettlement.transactions)
+        ? existingSettlement.transactions.map((txn: any) => ({
             transactionId: txn.id,
             itemId: txn.itemId,
             type: txn.type,
             amount: Number(txn.amount),
             description: txn.description ?? undefined,
             status: txn.status,
-          })),
+          }))
+        : [];
+
+      const retailerAmount = existingSettlement.retailerAmount ?? 0;
+      const supplierAmount = existingSettlement.supplierAmount ?? Number(existingSettlement.amount);
+      const systemAmount = existingSettlement.systemAmount ?? 0;
+      const paymentDetails = toPublicPaymentDetails(data.paymentMethod);
+
+      return {
+        success: true,
+        settlement: {
+          settlementId: existingSettlement.id,
+          merchantId: retailerMerchantId,
+          status: existingSettlement.status,
+          amount: Number(existingSettlement.amount),
+          retailerAmount,
+          supplierAmount,
+          systemAmount,
+          paymentDetails,
+          currency: existingSettlement.currency,
+          reference: existingSettlement.reference,
+          createdAt: existingSettlement.createdAt,
+          estimatedProcessingTime: '10 minutes',
+          transactions: existingTransactions,
         },
         message: 'Settlement already processed for this merchant transaction reference',
       };
@@ -70,19 +113,37 @@ export async function initiateOperation(
     logger.log(`Creating primary settlement with payAssureReference=${payAssureReference}, internalReference=${internalMerchantTransactionReference}`);
     const primarySettlement = await repository.createSettlement(businessId, integrationId, payAssureReference, internalMerchantTransactionReference, data);
 
-    await repository.markSessionAsUsed(session.id);
-    logger.log(`Session marked as used for sessionId=${session.id}`);
+    await repository.touchSession(session.id);
+    logger.log(`Session touched (lastUsedAt updated) for sessionId=${session.id}`);
 
-    const childSettlements: Array<{ id: string; amount: number; reference: string; supplierMerchantId: string }> = [];
+    const childSettlements: Array<{
+      id: string;
+      reference: string;
+      supplier: { amount: number; paymentDetails?: any };
+      retailer: { amount: number; paymentDetails?: any };
+      systemAmount: number;
+      amount: number;
+    }> = [];
+    let totalSupplierAmount = 0;
+    let totalRetailerAmount = 0;
+    let totalSystemAmount = 0;
 
     for (const supplier of data.suppliers) {
       logger.log(`Processing supplier ${supplier.supplierMerchantId} for settlement ${primarySettlement.id}`);
       const supplierAmount = supplier.items.reduce((sum: number, item: any) => sum + item.supplierAmount, 0);
-      logger.log(`Supplier ${supplier.supplierMerchantId} amount=${supplierAmount}, itemCount=${supplier.items.length}`);
+      const retailerAmount = supplier.retailerTotalAmount ?? supplier.items.reduce((sum: number, item: any) => sum + (item.retailerAmount ?? 0), 0);
+      const platformFee = supplier.platformFee ?? supplier.items.reduce((sum: number, item: any) => sum + (item.platformFee ?? 0), 0);
+      totalSupplierAmount += supplierAmount;
+      totalRetailerAmount += retailerAmount;
+      totalSystemAmount += platformFee;
+
+      logger.log(`Supplier ${supplier.supplierMerchantId} amount=${supplierAmount}, retailerAmount=${retailerAmount}, platformFee=${platformFee}, itemCount=${supplier.items.length}`);
       const supplierMerchantTransactionReference = `${internalMerchantTransactionReference}-${supplier.supplierMerchantId}`;
 
       const supplierIntegration = await prisma.integration.findFirst({ where: { merchantId: supplier.supplierMerchantId, isActive: true }, include: { participant: true } });
+      const supplierIntegration = await prisma.integration.findFirst({ where: { merchantId: supplier.supplierMerchantId, isActive: true }, include: { participant: true } });
       const paymentSnapshot = supplierIntegration?.participant?.payment ?? null;
+      const supplierPaymentDetails = toPublicPaymentDetails(paymentSnapshot);
 
       const settlement = await repository.createSupplierSettlement(session.businessId, session.integrationId, {
         amount: supplierAmount,
@@ -112,15 +173,35 @@ export async function initiateOperation(
       })));
 
       logger.log(`Created supplier settlement ${settlement.id} for supplier ${supplier.supplierMerchantId}`);
-      childSettlements.push({ id: settlement.id, amount: supplierAmount, reference: settlement.reference, supplierMerchantId: supplier.supplierMerchantId });
+      childSettlements.push({
+        id: settlement.id,
+        reference: settlement.reference,
+        supplier: {
+          amount: supplierAmount,
+          paymentDetails: supplierPaymentDetails,
+        },
+        retailer: {
+          amount: retailerAmount,
+          paymentDetails: toPublicPaymentDetails(data.paymentMethod),
+        },
+        systemAmount: platformFee,
+        amount: supplierAmount + retailerAmount + platformFee,
+      });
     }
+
+    const requestPaymentDetails = toPublicPaymentDetails(data.paymentMethod);
 
     return {
       success: true,
       settlement: {
         settlementId: primarySettlement.id,
+        merchantId: retailerMerchantId,
         status: primarySettlement.status,
         amount: Number(primarySettlement.amount),
+        retailerAmount: totalRetailerAmount,
+        supplierAmount: totalSupplierAmount,
+        systemAmount: totalSystemAmount,
+        paymentDetails: requestPaymentDetails,
         currency: primarySettlement.currency,
         reference: primarySettlement.reference,
         createdAt: primarySettlement.createdAt,

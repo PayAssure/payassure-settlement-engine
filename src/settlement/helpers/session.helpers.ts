@@ -23,13 +23,21 @@ export async function validateAndGetSession(token: string, repository: Settlemen
     });
   }
 
-  if (session.isUsed) {
-    logger.warn(`Settlement token validation failed: token=${token} already used`);
+  // check session status (allow reusable short-lived sessions)
+  if ((session as any).status && (session as any).status !== 'ACTIVE') {
+    logger.warn(`Settlement token validation failed: token=${token} status=${(session as any).status}`);
     throw new UnauthorizedException({
       statusCode: 401,
-      message: 'Token has already been used',
-      error: 'TOKEN_ALREADY_USED',
+      message: 'Session is not active',
+      error: 'SESSION_INACTIVE',
     });
+  }
+
+  // Update last used timestamp to support sliding expiration and auditing
+  try {
+    await repository.touchSession(session.id);
+  } catch (err) {
+    logger.warn(`Failed to update session lastUsedAt for sessionId=${session.id}: ${(err as Error).message}`);
   }
 
   logger.log(`Settlement token validated successfully: sessionId=${session.id}`);

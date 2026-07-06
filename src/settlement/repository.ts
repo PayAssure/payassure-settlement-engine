@@ -37,7 +37,12 @@ export class SettlementRepository implements OnModuleDestroy {
   }
 
   async markSessionAsUsed(sessionId: string) {
-    return this.sessions.markSessionAsUsed(sessionId);
+    // Deprecated: maintain compatibility by touching session lastUsedAt
+    return this.sessions.touchSession(sessionId);
+  }
+
+  async touchSession(sessionId: string) {
+    return this.sessions.touchSession(sessionId);
   }
 
   async deleteExpiredSessions() {
