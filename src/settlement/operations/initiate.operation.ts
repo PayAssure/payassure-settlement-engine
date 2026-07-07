@@ -130,17 +130,18 @@ export async function initiateOperation(
 
     for (const supplier of data.suppliers) {
       logger.log(`Processing supplier ${supplier.supplierMerchantId} for settlement ${primarySettlement.id}`);
-      const supplierAmount = supplier.items.reduce((sum: number, item: any) => sum + item.supplierAmount, 0);
-      const retailerAmount = supplier.retailerTotalAmount ?? supplier.items.reduce((sum: number, item: any) => sum + (item.retailerAmount ?? 0), 0);
-      const platformFee = supplier.platformFee ?? supplier.items.reduce((sum: number, item: any) => sum + (item.platformFee ?? 0), 0);
+      const supplierItems = Array.isArray(supplier.items) ? supplier.items : [];
+      const hasItems = supplierItems.length > 0;
+      const supplierAmount = hasItems ? supplierItems.reduce((sum: number, item: any) => sum + Number(item.supplierAmount ?? 0), 0) : Number(supplier.supplierTotalAmount ?? 0);
+      const retailerAmount = Number(supplier.retailerTotalAmount ?? 0);
+      const platformFee = Number(supplier.platformFee ?? 0);
       totalSupplierAmount += supplierAmount;
       totalRetailerAmount += retailerAmount;
       totalSystemAmount += platformFee;
 
-      logger.log(`Supplier ${supplier.supplierMerchantId} amount=${supplierAmount}, retailerAmount=${retailerAmount}, platformFee=${platformFee}, itemCount=${supplier.items.length}`);
+      logger.log(`Supplier ${supplier.supplierMerchantId} amount=${supplierAmount}, retailerAmount=${retailerAmount}, platformFee=${platformFee}, itemCount=${hasItems ? supplierItems.length : 0}`);
       const supplierMerchantTransactionReference = `${internalMerchantTransactionReference}-${supplier.supplierMerchantId}`;
 
-      const supplierIntegration = await prisma.integration.findFirst({ where: { merchantId: supplier.supplierMerchantId, isActive: true }, include: { participant: true } });
       const supplierIntegration = await prisma.integration.findFirst({ where: { merchantId: supplier.supplierMerchantId, isActive: true }, include: { participant: true } });
       const paymentSnapshot = supplierIntegration?.participant?.payment ?? null;
       const supplierPaymentDetails = toPublicPaymentDetails(paymentSnapshot);
@@ -160,17 +161,36 @@ export async function initiateOperation(
           retailerMerchantId,
         },
         paymentSnapshot,
+        paymentPayload: {
+          paymentMethod: data.paymentMethod,
+          suppliers: [{
+            supplierMerchantId: supplier.supplierMerchantId,
+            supplierTotalAmount: supplierAmount,
+            retailerTotalAmount: retailerAmount,
+            platformFee,
+            items: hasItems ? supplierItems.map((item: any) => ({
+              itemReference: item.itemReference ?? item.itemId,
+              supplierAmount: item.supplierAmount,
+            })) : [],
+          }],
+        },
       });
 
-      await repository.createMultipleTransactions(settlement.id, supplier.items.map((item: any) => ({
-        itemId: item.itemId,
-        supplierMerchantId: supplier.supplierMerchantId,
-        type: 'SALE',
-        amount: item.supplierAmount,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        description: item.description,
-      })));
+      const transactionItems = hasItems
+        ? supplierItems.map((item: any) => ({
+            itemId: item.itemReference ?? item.itemId ?? 'supplier-summary',
+            supplierMerchantId: supplier.supplierMerchantId,
+            type: 'SALE',
+            amount: Number(item.supplierAmount ?? 0),
+          }))
+        : [{
+            itemId: `${supplier.supplierMerchantId}-summary`,
+            supplierMerchantId: supplier.supplierMerchantId,
+            type: 'SALE',
+            amount: supplierAmount,
+          }];
+
+      await repository.createMultipleTransactions(settlement.id, transactionItems);
 
       logger.log(`Created supplier settlement ${settlement.id} for supplier ${supplier.supplierMerchantId}`);
       childSettlements.push({

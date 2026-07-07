@@ -63,36 +63,42 @@ export async function validateSettlementData(
       errors.push({ field: `suppliers[${supplierIndex}].supplierMerchantId`, message: 'Supplier merchant ID is required for each supplier group' });
     }
 
-    if (!supplier.items || supplier.items.length === 0) {
-      errors.push({ field: `suppliers[${supplierIndex}].items`, message: 'Each supplier must include at least one item' });
-      continue;
-    }
-
+    const supplierItems = Array.isArray(supplier.items) ? supplier.items : [];
+    const hasItems = supplierItems.length > 0;
     let supplierAmount = 0;
     let retailerAmount = 0;
     let platformFee = 0;
 
-    for (const [itemIndex, item] of supplier.items.entries()) {
-      if (!item.itemId) {
-        errors.push({ field: `suppliers[${supplierIndex}].items[${itemIndex}].itemId`, message: 'Item ID is required for each supplier item' });
-      }
+    if (!hasItems) {
+      supplierAmount = supplier.supplierTotalAmount ?? 0;
+      retailerAmount = supplier.retailerTotalAmount ?? 0;
+      platformFee = supplier.platformFee ?? 0;
+    } else {
+      for (const [itemIndex, item] of supplierItems.entries()) {
+        const itemReference = item.itemReference ?? item.itemId;
+        if (!itemReference) {
+          errors.push({ field: `suppliers[${supplierIndex}].items[${itemIndex}].itemReference`, message: 'Item reference is required for each supplier item' });
+        }
 
-      if (item.supplierAmount <= 0) {
-        errors.push({ field: `suppliers[${supplierIndex}].items[${itemIndex}].supplierAmount`, message: 'Supplier amount must be greater than 0' });
-      }
+        const itemSupplierAmount = item.supplierAmount ?? 0;
+        if (itemSupplierAmount <= 0) {
+          errors.push({ field: `suppliers[${supplierIndex}].items[${itemIndex}].supplierAmount`, message: 'Supplier amount must be greater than 0' });
+        }
 
-      if (item.retailerAmount && item.retailerAmount < 0) {
-        errors.push({ field: `suppliers[${supplierIndex}].items[${itemIndex}].retailerAmount`, message: 'Retailer amount cannot be negative' });
+        supplierAmount += itemSupplierAmount;
       }
-
-      if (item.platformFee && item.platformFee < 0) {
-        errors.push({ field: `suppliers[${supplierIndex}].items[${itemIndex}].platformFee`, message: 'Platform fee cannot be negative' });
-      }
-
-      supplierAmount += item.supplierAmount;
-      retailerAmount += item.retailerAmount ?? 0;
-      platformFee += item.platformFee ?? 0;
     }
+
+    if (supplier.retailerTotalAmount !== undefined && supplier.retailerTotalAmount < 0) {
+      errors.push({ field: `suppliers[${supplierIndex}].retailerTotalAmount`, message: 'Retailer total amount cannot be negative' });
+    }
+
+    if (supplier.platformFee !== undefined && supplier.platformFee < 0) {
+      errors.push({ field: `suppliers[${supplierIndex}].platformFee`, message: 'Platform fee cannot be negative' });
+    }
+
+    retailerAmount = supplier.retailerTotalAmount ?? retailerAmount;
+    platformFee = supplier.platformFee ?? platformFee;
 
     if (supplier.supplierTotalAmount !== undefined && !areAmountsEqual(supplier.supplierTotalAmount, supplierAmount)) {
       errors.push({ field: `suppliers[${supplierIndex}].supplierTotalAmount`, message: `Supplier total amount ${supplier.supplierTotalAmount} does not match sum of item supplier amounts ${supplierAmount}` });

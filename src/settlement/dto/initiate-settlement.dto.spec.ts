@@ -107,22 +107,12 @@ test('accepts supplier-based settlement payload with optional metadata', async (
         supplierMerchantId: 'SUP-1001',
         items: [
           {
-            itemId: 'ITEM-001',
-            itemName: 'Cement 50kg',
+            itemReference: 'ITEM-001',
             supplierAmount: 3200,
-            retailerAmount: 400,
-            platformFee: 28.8,
-            quantity: 10,
-            unitPrice: 320,
           },
           {
-            itemId: 'ITEM-002',
-            itemName: 'Roofing Nails',
+            itemReference: 'ITEM-002',
             supplierAmount: 4000,
-            retailerAmount: 500,
-            platformFee: 36,
-            quantity: 20,
-            unitPrice: 200,
           },
         ],
       },
@@ -132,6 +122,33 @@ test('accepts supplier-based settlement payload with optional metadata', async (
   const errors = await validate(dto);
   assert.equal(errors.length, 0, 'expected DTO validation to pass for valid supplier-based settlement payload');
   console.log('step 1 passed: valid supplier-based payload is accepted');
+});
+
+test('accepts a simplified supplier-only settlement payload without item details', async () => {
+  console.log('step 1: validate a supplier summary payload that omits detailed item arrays');
+  const dto = plainToInstance(InitiateSettlementDto, {
+    merchantTransactionReference: 'TXN-0009',
+    totalAmount: 16500,
+    currency: 'KES',
+    settlementMethod: 'BANK_TRANSFER',
+    paymentMethod: {
+      type: 'MPESA',
+      payerPhoneNumber: '254712345678',
+    },
+    transactionDate: '2026-07-03T17:30:15+03:00',
+    suppliers: [
+      {
+        supplierMerchantId: 'SUP-1001',
+        supplierTotalAmount: 7200,
+        retailerTotalAmount: 900,
+        platformFee: 64.8,
+      },
+    ],
+  });
+
+  const errors = await validate(dto);
+  assert.equal(errors.length, 0, 'expected DTO validation to pass for a simplified supplier summary payload');
+  console.log('step 1 passed: simplified supplier summary payload is accepted');
 });
 
 test('rejects unsupported currency and negative supplier allocations', async () => {
@@ -149,7 +166,7 @@ test('rejects unsupported currency and negative supplier allocations', async () 
     suppliers: [
       {
         supplierMerchantId: 'SUP-1001',
-        items: [{ itemId: 'ITEM-001', supplierAmount: -500 }],
+        items: [{ itemReference: 'ITEM-001', supplierAmount: -500 }],
       },
     ],
   });

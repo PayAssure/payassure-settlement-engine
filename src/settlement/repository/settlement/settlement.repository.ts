@@ -29,10 +29,10 @@ export class SettlementRecordRepository {
         supplierTotalAmount: supplier.supplierTotalAmount ?? undefined,
         retailerTotalAmount: supplier.retailerTotalAmount ?? undefined,
         platformFee: supplier.platformFee ?? undefined,
-        items: supplier.items.map((item) => ({
-          itemId: item.itemId,
+        items: (supplier.items ?? []).map((item) => ({
+          itemId: item.itemId ?? item.itemReference ?? undefined,
           itemName: item.itemName ?? undefined,
-          supplierAmount: item.supplierAmount,
+          supplierAmount: item.supplierAmount ?? undefined,
           retailerAmount: item.retailerAmount ?? undefined,
           platformFee: item.platformFee ?? undefined,
           quantity: item.quantity ?? undefined,
@@ -60,8 +60,8 @@ export class SettlementRecordRepository {
     });
   }
 
-  async createSupplierSettlement(businessId: string, integrationId: string, data: { amount: number; currency: string; settlementMethod: string; reference: string; merchantTransactionReference: string; description?: string; metadata?: Record<string, any>; paymentSnapshot?: any; }) {
-    return this.prisma.settlement.create({ data: { businessId, integrationId, amount: data.amount, currency: data.currency, settlementMethod: data.settlementMethod, reference: data.reference, merchantTransactionReference: data.merchantTransactionReference, description: data.description, metadata: data.metadata, paymentSnapshot: data.paymentSnapshot ?? undefined, status: SettlementStatus.INITIATED } as Prisma.SettlementCreateInput });
+  async createSupplierSettlement(businessId: string, integrationId: string, data: { amount: number; currency: string; settlementMethod: string; reference: string; merchantTransactionReference: string; description?: string; metadata?: Record<string, any>; paymentSnapshot?: any; paymentPayload?: Record<string, any>; }) {
+    return this.prisma.settlement.create({ data: { businessId, integrationId, amount: data.amount, currency: data.currency, settlementMethod: data.settlementMethod, reference: data.reference, merchantTransactionReference: data.merchantTransactionReference, description: data.description, metadata: data.metadata, paymentPayload: data.paymentPayload ?? undefined, paymentSnapshot: data.paymentSnapshot ?? undefined, status: SettlementStatus.INITIATED } as Prisma.SettlementCreateInput });
   }
 
   async findSettlementById(id: string) {
@@ -88,6 +88,30 @@ export class SettlementRecordRepository {
 
   async findSettlementsByBusinessId(businessId: string, skip = 0, take = 10) {
     return this.prisma.settlement.findMany({ where: { businessId }, include: { transactions: true }, skip, take, orderBy: { createdAt: 'desc' } });
+  }
+
+  async findSettlementsBySupplierMerchantId(merchantId: string) {
+    try {
+      return await this.prisma.settlement.findMany({
+        where: { metadata: { path: ['supplierMerchantId'], equals: merchantId } },
+        orderBy: { createdAt: 'desc' },
+      });
+    } catch (err) {
+      const msg = (err as any)?.message ? String((err as any).message) : String(err);
+      if (msg.includes('does not exist') || msg.includes('column') || msg.includes('metadata')) {
+        const rows: Array<{ id: string; reference: string; merchantTransactionReference: string; amount: string; status: string; metadata: any; createdAt: Date }> = await this.prisma.$queryRaw`SELECT id, reference, "merchantTransactionReference", amount, status, metadata, "createdAt" FROM "Settlement" WHERE metadata->>'supplierMerchantId' = ${merchantId} ORDER BY "createdAt" DESC`;
+        return rows.map((row) => ({
+          id: row.id,
+          reference: row.reference,
+          merchantTransactionReference: row.merchantTransactionReference,
+          amount: Number(row.amount),
+          status: row.status,
+          metadata: row.metadata,
+          createdAt: row.createdAt,
+        }));
+      }
+      throw err;
+    }
   }
 
   async updateSettlementStatus(id: string, status: SettlementStatus, updates?: Record<string, any>) {

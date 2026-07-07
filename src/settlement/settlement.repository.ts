@@ -66,6 +66,10 @@ export class SettlementRepository implements OnModuleDestroy {
     return this.settlements.findSettlementsByBusinessId(businessId, skip, take);
   }
 
+  async findSettlementsBySupplierMerchantId(merchantId: string) {
+    return this.settlements.findSettlementsBySupplierMerchantId(merchantId);
+  }
+
   async updateSettlementStatus(id: string, status: any, updates?: Record<string, any>) {
     return this.settlements.updateSettlementStatus(id, status, updates);
   }

@@ -1,5 +1,5 @@
 import { Controller, Post, Get, Param, Body, Headers, UseGuards, BadRequestException, Req } from '@nestjs/common';
-import { ApiOperation, ApiResponse, ApiTags, ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
+import { ApiOperation, ApiResponse, ApiTags, ApiBearerAuth, ApiHeader, ApiBody } from '@nestjs/swagger';
 import { SettlementService } from './settlement.service';
 import { AuthenticateDto } from './dto/authenticate.dto';
 import { InitiateSettlementDto } from './dto/initiate-settlement.dto';
@@ -56,6 +56,14 @@ export class SettlementController {
     return this.settlementService.authenticate(body, user);
   }
 
+  async authenticateSupplier(@Body() body: AuthenticateDto, @Req() req: any) {
+    return this.settlementService.authenticateSupplier(body, req?.user ?? req);
+  }
+
+  async getSupplierSettlements(sessionToken: string) {
+    return this.settlementService.getSupplierSettlements(sessionToken);
+  }
+
   /**
    * ENDPOINT 2: Initiate Settlement
    * Submit settlement payload with one-time token
@@ -73,6 +81,38 @@ export class SettlementController {
     description:
       'Submit settlement payload using both a user access token and a settlement session token. The access token must be sent as a bearer Authorization header and the settlement session token must be sent in the x-settlement-session header.',
   })
+  @ApiBody({
+    description: 'Retailer settlement initiation payload submitted to PayAssure.',
+    schema: {
+      example: {
+        merchantId: 'pay_d68f568ddc7d7b2a',
+        merchantTransactionReference: 'TXN-20260703-000001',
+        totalAmount: 16500,
+        currency: 'KES',
+        settlementMethod: 'BANK_TRANSFER',
+        description: 'Daily settlement batch',
+        paymentMethod: {
+          type: 'MPESA',
+          payerPhoneNumber: '254712345678',
+          provider: 'Safaricom',
+        },
+        callbackUrl: 'https://merchant.example.com/api/payassure/callback',
+        transactionDate: '2026-07-03T17:30:15+03:00',
+        metadata: {
+          branchId: 'BR-01',
+          terminalId: 'POS-03',
+        },
+        suppliers: [
+          {
+            supplierMerchantId: 'SUP-1001',
+            supplierTotalAmount: 7200,
+            retailerTotalAmount: 900,
+            platformFee: 64.8,
+          },
+        ],
+      },
+    },
+  })
   @ApiResponse({
     status: 201,
     description: 'Settlement initiated successfully. Returns the created settlement record, merchant and payment breakdown, supplier settlement children, and processing details.',
@@ -85,9 +125,9 @@ export class SettlementController {
           merchantId: 'pay_d68f568ddc7d7b2a',
           status: 'INITIATED',
           amount: 16500,
-          retailerAmount: 1500,
+          retailerAmount: 1200,
           supplierAmount: 15000,
-          systemAmount: 1000,
+          systemAmount: 300,
           paymentDetails: {
             type: 'MPESA',
             payerPhoneNumber: '254712345678',
@@ -163,8 +203,8 @@ export class SettlementController {
     description: 'Settlement not found',
     type: ErrorResponseDto,
   })
-  async trackSettlement(@Param('settlementId') settlementId: string): Promise<TrackSettlementResponseDto> {
-    return this.settlementService.trackSettlement(settlementId);
+  async trackSettlement(@Param('settlementId') settlementId: string, view: 'retailer' | 'supplier' | 'payassure' = 'retailer'): Promise<any> {
+    return this.settlementService.trackSettlement(settlementId, view);
   }
 
   /**
