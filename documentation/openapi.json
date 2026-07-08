@@ -1,0 +1,2858 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/settlement/authenticate": {
+      "post": {
+        "operationId": "SettlementController_authenticate",
+        "summary": "Authenticate business with API credentials",
+        "description": "Verify API key and secret to receive a one-time token for settlement operations. Token expires in 1 hour and can only be used once.",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthenticateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authentication successful. Returns a one-time token and business profile details. Use this token in the x-settlement-session header for the initiate endpoint.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthenticateResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid API credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Business account not in LIVE status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Business not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "settlement"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/settlement/initiate-settlement": {
+      "post": {
+        "operationId": "SettlementController_initiateSettlement",
+        "summary": "Initiate a settlement request",
+        "description": "Submit settlement payload using both a user access token and a settlement session token. The access token must be sent as a bearer Authorization header and the settlement session token must be sent in the x-settlement-session header.",
+        "parameters": [
+          {
+            "name": "x-settlement-session",
+            "required": true,
+            "in": "header",
+            "description": "Settlement session token obtained from settlement authenticate. This is not a bearer token.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Retailer settlement initiation payload submitted to PayAssure.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "example": {
+                  "merchantId": "pay_d68f568ddc7d7b2a",
+                  "merchantTransactionReference": "TXN-20260703-000001",
+                  "totalAmount": 16500,
+                  "currency": "KES",
+                  "settlementMethod": "BANK_TRANSFER",
+                  "description": "Daily settlement batch",
+                  "paymentMethod": {
+                    "type": "MPESA",
+                    "payerPhoneNumber": "254712345678",
+                    "provider": "Safaricom"
+                  },
+                  "callbackUrl": "https://merchant.example.com/api/payassure/callback",
+                  "transactionDate": "2026-07-03T17:30:15+03:00",
+                  "metadata": {
+                    "branchId": "BR-01",
+                    "terminalId": "POS-03"
+                  },
+                  "suppliers": [
+                    {
+                      "supplierMerchantId": "SUP-1001",
+                      "supplierTotalAmount": 7200,
+                      "retailerTotalAmount": 900,
+                      "platformFee": 64.8
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Settlement initiated successfully. Returns the created settlement record, merchant and payment breakdown, supplier settlement children, and processing details.",
+            "schema": {
+              "example": {
+                "success": true,
+                "settlement": {
+                  "settlementId": "cmr8yjs6g0007axv90bap9n48",
+                  "merchantId": "pay_d68f568ddc7d7b2a",
+                  "status": "INITIATED",
+                  "amount": 16500,
+                  "retailerAmount": 1200,
+                  "supplierAmount": 15000,
+                  "systemAmount": 300,
+                  "paymentDetails": {
+                    "type": "MPESA",
+                    "payerPhoneNumber": "254712345678",
+                    "provider": "Safaricom"
+                  },
+                  "currency": "KES",
+                  "reference": "PASTL-20260706082812-EE8AE32E",
+                  "createdAt": "2026-07-06T08:28:12.520Z",
+                  "estimatedProcessingTime": "24-48 hours"
+                },
+                "message": "Settlement request received and queued for processing",
+                "children": [
+                  {
+                    "id": "cmr8yjs6z0008axv9e4jvi7w3",
+                    "amount": 15000,
+                    "reference": "TXN-20260703-000003-pay_d68f568ddc7d7b2a",
+                    "supplierMerchantId": "pay_d68f568ddc7d7b2a"
+                  }
+                ]
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettlementResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid settlement data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized access token or invalid settlement session token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate settlement reference",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error during settlement initiation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "settlement"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/settlement/payment-callback": {
+      "post": {
+        "operationId": "SettlementController_handlePaymentCallback",
+        "summary": "Handle customer payment callback",
+        "description": "Accepts a payment confirmation from the payment provider and triggers the settlement workflow without initiating payouts directly.",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentCallbackDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Payment callback accepted and settlement workflow triggered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid callback payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No settlement matched the callback reference",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "settlement"
+        ]
+      }
+    },
+    "/settlement/track/{settlementId}": {
+      "get": {
+        "operationId": "SettlementController_trackSettlement",
+        "summary": "Track settlement status",
+        "description": "Retrieve current status and transaction details for a settlement",
+        "parameters": [
+          {
+            "name": "settlementId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Settlement status retrieved successfully. Returns current status and transaction summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackSettlementResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - invalid or missing authentication token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Settlement not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "settlement"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/settlement/transactions/{transactionId}": {
+      "get": {
+        "operationId": "SettlementController_getTransaction",
+        "summary": "Get transaction details",
+        "description": "Retrieve detailed information about a specific transaction",
+        "parameters": [
+          {
+            "name": "transactionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transaction details retrieved successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Transaction not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "settlement"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/settlement/reconcile": {
+      "post": {
+        "operationId": "SettlementController_reconcileSettlement",
+        "summary": "Reconcile settlement",
+        "description": "Submit bank reference and reconciliation data to confirm settlement completion",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconcileSettlementDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Settlement reconciliation successful. Returns the updated reconciliation state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconcileResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Settlement not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "settlement"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/settlement/scenarios/run": {
+      "post": {
+        "operationId": "SettlementController_runScenario",
+        "summary": "Run a documented settlement scenario from Swagger",
+        "description": "Executes a predefined success or rejection scenario for settlement authentication and initiation. Useful for manual API testing and demonstrating how the platform behaves under fake or real credentials.",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunScenarioDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Scenario executed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunScenarioResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Scenario request validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "settlement"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/settlement/health": {
+      "get": {
+        "operationId": "SettlementController_getHealth",
+        "summary": "Get settlement module health status",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "example": {
+                    "status": "ok"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "settlement"
+        ]
+      }
+    },
+    "/supplier/authenticate": {
+      "post": {
+        "operationId": "SupplierController_authenticate",
+        "summary": "Authenticate a supplier with API credentials",
+        "description": "Validates supplier API credentials and issues a supplier session token for settlement lookups.",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthenticateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Supplier authentication succeeded."
+          }
+        },
+        "tags": [
+          "supplier"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/supplier/settlements": {
+      "get": {
+        "operationId": "SupplierController_getSettlements",
+        "summary": "List supplier settlements",
+        "description": "Returns only child settlements allocated to the authenticated supplier.",
+        "parameters": [
+          {
+            "name": "x-supplier-session",
+            "required": true,
+            "in": "header",
+            "description": "Supplier session token returned from supplier authentication.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Supplier settlements returned successfully."
+          }
+        },
+        "tags": [
+          "supplier"
+        ]
+      }
+    },
+    "/onbordings": {
+      "post": {
+        "operationId": "OnbordingsController_create",
+        "summary": "Create a retailer or supplier onboarding record",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOnboardingDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingResponseDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected error occurred while creating the onboarding record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "onbordings"
+        ]
+      },
+      "get": {
+        "operationId": "OnbordingsController_findAll",
+        "summary": "List onboarding participants",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OnboardingResponseDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication token is missing or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "onbordings"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/onbordings/generate-keys": {
+      "post": {
+        "operationId": "OnbordingsController_generateApiKeys",
+        "summary": "Generate API keys for the authenticated user",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication token is missing or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "API key generation failed because generated credential data was invalid. No partial credentials were persisted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "onbordings"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/onbordings/keys": {
+      "get": {
+        "operationId": "OnbordingsController_viewApiKeys",
+        "summary": "View API keys for the authenticated user",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication token is missing or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "API keys not found for the authenticated user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "onbordings"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/onbordings/{id}": {
+      "get": {
+        "operationId": "OnbordingsController_findOne",
+        "summary": "Get an onboarding participant by id",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication token is missing or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Participant not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "onbordings"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "OnbordingsController_update",
+        "summary": "Update an onboarding participant",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateOnboardingDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication token is missing or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Participant not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "onbordings"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "OnbordingsController_remove",
+        "summary": "Delete an onboarding participant",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Participant deleted"
+          },
+          "401": {
+            "description": "Authentication token is missing or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Participant not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "onbordings"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/onbordings/{id}/activate": {
+      "patch": {
+        "operationId": "OnbordingsController_activate",
+        "summary": "Activate a business onboarding participant",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication token is missing or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Participant not found or integration missing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "onbordings"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/onbordings/{id}/webhook": {
+      "patch": {
+        "operationId": "OnbordingsController_updateWebhook",
+        "summary": "Update the webhook URL for a participant integration",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWebhookDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication token is missing or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Participant not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "onbordings"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/onbordings/{id}/payment": {
+      "patch": {
+        "operationId": "OnbordingsController_updatePayment",
+        "summary": "Update the payout destination for a participant",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePaymentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payment destination data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication token is missing or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Participant not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "onbordings"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/onbordings/{id}/payment/activate": {
+      "patch": {
+        "operationId": "OnbordingsController_activatePayment",
+        "summary": "Activate a pending payout destination using the generated secret",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivatePaymentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication token is missing or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The payment activation secret is invalid or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "onbordings"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "operationId": "AuthController_register",
+        "summary": "Register a new admin user",
+        "description": "Creates a new administrator account. This endpoint requires a valid access token from an existing super admin account.",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterAdminDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Admin account created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication token is missing or invalid"
+          },
+          "403": {
+            "description": "The caller is not a super admin"
+          }
+        },
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/auth/register-before-onboarding": {
+      "post": {
+        "operationId": "AuthController_registerBeforeOnboarding",
+        "summary": "Register a user account before onboarding",
+        "description": "Creates a standard user account for a participant before onboarding is completed. The account is created immediately, but the profile remains incomplete until onboarding is finished.",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "User account created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterResponseDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Email or username already exists"
+          }
+        },
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/onboarded-register": {
+      "post": {
+        "operationId": "AuthController_onboardedRegister",
+        "summary": "Register a user after onboarding",
+        "description": "Creates a standard user account for a participant who has completed onboarding or marks an existing registered user as complete.",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "User profile is now complete",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterResponseDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Email or username already exists"
+          }
+        },
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "operationId": "AuthController_login",
+        "summary": "Authenticate a user",
+        "description": "Authenticates a user using either their email or username and password. Returns a short-lived access token and a refresh token.",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Authentication succeeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials"
+          }
+        },
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/users": {
+      "get": {
+        "operationId": "AuthController_getUsers",
+        "summary": "Get all users with filtering",
+        "description": "Retrieves all users with optional filtering by role, active status, and search. Requires super admin authentication. Supports pagination and sorting.",
+        "parameters": [
+          {
+            "name": "role",
+            "required": false,
+            "in": "query",
+            "description": "Filter by user role",
+            "schema": {
+              "enum": [
+                "SUPER_ADMIN",
+                "ADMIN",
+                "USER"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "isActive",
+            "required": false,
+            "in": "query",
+            "description": "Filter by active status",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "Search by username or email (partial match)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of records to skip (for pagination)",
+            "schema": {
+              "default": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "description": "Number of records to return (for pagination)",
+            "schema": {
+              "default": 10,
+              "type": "number"
+            }
+          },
+          {
+            "name": "sortBy",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by",
+            "schema": {
+              "default": "createdAt",
+              "enum": [
+                "username",
+                "email",
+                "role",
+                "createdAt",
+                "updatedAt"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "sortOrder",
+            "required": false,
+            "in": "query",
+            "description": "Sort order (asc or desc)",
+            "schema": {
+              "default": "desc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Users retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetUsersResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication token is missing or invalid"
+          },
+          "403": {
+            "description": "Only super admins can view all users"
+          }
+        },
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "operationId": "AuthController_refresh",
+        "summary": "Refresh an access token",
+        "description": "Issues a new access token and refresh token when the supplied refresh token is still valid. Refresh tokens are rotated on logout and are rejected after invalidation.",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshTokenDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Tokens refreshed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refresh token is missing, expired, or invalid"
+          }
+        },
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "AuthController_logout",
+        "summary": "Logout the current user",
+        "description": "Invalidates the current refresh token version for the signed-in user so future refresh attempts fail until the user logs in again.",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Logged out successfully"
+          },
+          "401": {
+            "description": "Authentication token is missing or invalid"
+          }
+        },
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/auth/{id}": {
+      "delete": {
+        "operationId": "AuthController_deleteUser",
+        "summary": "Delete a user",
+        "description": "Allows the authenticated user to delete their own account or allows a super admin to delete any user account.",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User deleted successfully"
+          },
+          "403": {
+            "description": "Only a super admin can delete another user"
+          },
+          "404": {
+            "description": "User not found"
+          }
+        },
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
+    "/payassure/health": {
+      "get": {
+        "operationId": "HealthController_getHealth",
+        "summary": "Get payassure health status",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "example": {
+                    "status": "ok"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "payassure health"
+        ]
+      }
+    }
+  },
+  "info": {
+    "title": "PayAssure API",
+    "description": "OpenAPI specification for PayAssure settlement and onboarding APIs",
+    "version": "1.0.0",
+    "contact": {}
+  },
+  "tags": [],
+  "servers": [],
+  "components": {
+    "securitySchemes": {
+      "access-token": {
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "type": "http",
+        "description": "Provide a valid JWT access token in the format: Bearer <access_token>."
+      }
+    },
+    "schemas": {
+      "AuthenticateDto": {
+        "type": "object",
+        "properties": {
+          "apiKey": {
+            "type": "string",
+            "example": "pk_live_abc123",
+            "description": "API key issued to the business during onboarding."
+          },
+          "apiSecret": {
+            "type": "string",
+            "example": "sk_live_xyz789",
+            "description": "API secret issued to the business during onboarding."
+          }
+        },
+        "required": [
+          "apiKey",
+          "apiSecret"
+        ]
+      },
+      "BusinessDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "business_123"
+          },
+          "businessName": {
+            "type": "string",
+            "example": "ABC Supermarket"
+          },
+          "participantType": {
+            "type": "string",
+            "example": "RETAILER"
+          },
+          "status": {
+            "type": "string",
+            "example": "LIVE"
+          }
+        },
+        "required": [
+          "id",
+          "businessName",
+          "participantType",
+          "status"
+        ]
+      },
+      "AuthenticateResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "token": {
+            "type": "string",
+            "example": "one_time_abc123"
+          },
+          "expiresIn": {
+            "type": "number",
+            "example": 3600
+          },
+          "tokenType": {
+            "type": "string",
+            "example": "Bearer"
+          },
+          "business": {
+            "$ref": "#/components/schemas/BusinessDto"
+          }
+        },
+        "required": [
+          "success",
+          "token",
+          "expiresIn",
+          "tokenType",
+          "business"
+        ]
+      },
+      "ErrorResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message"
+        ]
+      },
+      "PaymentResponseDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "example": "MPESA",
+            "description": "Payment type for the displayed payment details."
+          },
+          "accountName": {
+            "type": "string",
+            "example": "John Doe",
+            "description": "Optional account or beneficiary name for the payout destination."
+          },
+          "provider": {
+            "type": "string",
+            "example": "Safaricom",
+            "description": "Optional payment provider or network name."
+          },
+          "payerPhoneNumber": {
+            "type": "string",
+            "example": "254712345678",
+            "description": "M-Pesa phone number for MPESA payouts."
+          },
+          "bankCode": {
+            "type": "string",
+            "example": "07",
+            "description": "Bank code for BANK payouts."
+          },
+          "accountNumber": {
+            "type": "string",
+            "example": "1234567890",
+            "description": "Bank account number for BANK payouts."
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "SettlementPartyDetailsDto": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number",
+            "example": 15000,
+            "description": "Amount allocated to this party in the child settlement."
+          },
+          "paymentDetails": {
+            "description": "Relevant payment details for this party.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PaymentResponseDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "amount"
+        ]
+      },
+      "SupplierSettlementChildDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "settlement_456",
+            "description": "Identifier for the child settlement record."
+          },
+          "reference": {
+            "type": "string",
+            "example": "settlement-001-pay_sup_001",
+            "description": "Child settlement reference for this supplier group."
+          },
+          "supplier": {
+            "description": "Supplier-specific settlement amount and payment details.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SettlementPartyDetailsDto"
+              }
+            ]
+          },
+          "retailer": {
+            "description": "Retailer-specific settlement amount and payment details.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SettlementPartyDetailsDto"
+              }
+            ]
+          },
+          "systemAmount": {
+            "type": "number",
+            "example": 1000,
+            "description": "System fee or platform amount retained for this child settlement."
+          },
+          "amount": {
+            "type": "number",
+            "example": 16500,
+            "description": "Total amount covered by this child settlement, including supplier, retailer, and system allocations."
+          }
+        },
+        "required": [
+          "id",
+          "reference",
+          "supplier",
+          "retailer",
+          "systemAmount",
+          "amount"
+        ]
+      },
+      "SettlementResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "settlement": {
+            "type": "object",
+            "example": {
+              "settlementId": "settlement_123",
+              "merchantId": "pay_d68f568ddc7d7b2a",
+              "status": "INITIATED",
+              "amount": 16500,
+              "retailerAmount": 500,
+              "supplierAmount": 15000,
+              "systemAmount": 1500,
+              "paymentDetails": {
+                "type": "MPESA",
+                "payerPhoneNumber": "254712345678",
+                "provider": "Safaricom"
+              },
+              "currency": "KES",
+              "reference": "settlement-001",
+              "createdAt": "2026-06-30T09:00:00.000Z",
+              "estimatedProcessingTime": "24-48 hours"
+            }
+          },
+          "message": {
+            "type": "string",
+            "example": "Settlement request received and queued for processing"
+          },
+          "children": {
+            "description": "Optional child settlements created for each supplier group.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupplierSettlementChildDto"
+            }
+          }
+        },
+        "required": [
+          "success",
+          "settlement"
+        ]
+      },
+      "PaymentCallbackDto": {
+        "type": "object",
+        "properties": {
+          "merchantTransactionReference": {
+            "type": "string",
+            "example": "TXN-20260703-000001",
+            "description": "Merchant transaction reference tied to the settlement."
+          },
+          "status": {
+            "type": "string",
+            "example": "SUCCESS",
+            "description": "Callback status reported by the payment provider."
+          },
+          "provider": {
+            "type": "string",
+            "example": "M-PESA",
+            "description": "Provider that delivered the callback."
+          },
+          "providerReference": {
+            "type": "string",
+            "example": "MPESA-12345",
+            "description": "Provider transaction identifier."
+          },
+          "amount": {
+            "type": "number",
+            "example": 16500,
+            "description": "Confirmed payment amount."
+          },
+          "currency": {
+            "type": "string",
+            "example": "KES",
+            "description": "Currency for the confirmed payment."
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Any additional provider metadata."
+          }
+        },
+        "required": [
+          "merchantTransactionReference"
+        ]
+      },
+      "TrackSettlementResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "settlement": {
+            "type": "object",
+            "example": {
+              "settlementId": "settlement_123",
+              "businessId": "business_123",
+              "businessName": "ABC Supermarket",
+              "status": "PROCESSING",
+              "amount": 5000,
+              "currency": "KES",
+              "reference": "settlement-001",
+              "createdAt": "2026-06-30T09:00:00.000Z",
+              "transactions": []
+            }
+          }
+        },
+        "required": [
+          "success",
+          "settlement"
+        ]
+      },
+      "ReconcileSettlementDto": {
+        "type": "object",
+        "properties": {
+          "settlementId": {
+            "type": "string",
+            "example": "settlement_123",
+            "description": "Settlement identifier to reconcile."
+          },
+          "bankReference": {
+            "type": "string",
+            "example": "BANK_REF_001",
+            "description": "Bank reference returned by the financial institution."
+          },
+          "bankTransactionId": {
+            "type": "string",
+            "example": "txn_987654",
+            "description": "Optional bank transaction identifier."
+          },
+          "notes": {
+            "type": "string",
+            "example": "Settlement completed successfully.",
+            "description": "Optional reconciliation note."
+          }
+        },
+        "required": [
+          "settlementId",
+          "bankReference"
+        ]
+      },
+      "ReconcileResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "settlement": {
+            "type": "object",
+            "example": {
+              "settlementId": "settlement_123",
+              "status": "COMPLETED",
+              "reconciliationStatus": "VERIFIED",
+              "reconciliationDetails": {
+                "bankReference": "BANK_REF_001",
+                "reconcileAt": "2026-06-30T09:30:00.000Z"
+              }
+            }
+          }
+        },
+        "required": [
+          "success",
+          "settlement"
+        ]
+      },
+      "RunScenarioDto": {
+        "type": "object",
+        "properties": {
+          "scenario": {
+            "type": "string",
+            "enum": [
+              "happy-path",
+              "invalid-credentials",
+              "expired-session",
+              "invalid-payload"
+            ],
+            "example": "happy-path",
+            "description": "Choose the settlement scenario to execute from Swagger. Happy-path validates the full flow, while the others intentionally trigger rejection behavior.",
+            "examples": {
+              "happy-path": {
+                "value": "happy-path",
+                "summary": "Runs a complete settlement success flow."
+              },
+              "invalid-credentials": {
+                "value": "invalid-credentials",
+                "summary": "Exercises authentication failure with bad API credentials."
+              },
+              "expired-session": {
+                "value": "expired-session",
+                "summary": "Exercises session expiry handling for settlement initiation."
+              },
+              "invalid-payload": {
+                "value": "invalid-payload",
+                "summary": "Exercises validation failure with an invalid settlement request."
+              }
+            }
+          },
+          "credentialMode": {
+            "type": "string",
+            "enum": [
+              "fake",
+              "real"
+            ],
+            "example": "fake",
+            "description": "Use fake demo credentials for local testing, or real supplied credentials when you want to test against a configured environment.",
+            "examples": {
+              "fake": {
+                "value": "fake",
+                "summary": "Use the built-in demo credentials for local Swagger testing."
+              },
+              "real": {
+                "value": "real",
+                "summary": "Use your own configured credentials in a real environment."
+              }
+            }
+          },
+          "apiKey": {
+            "type": "string",
+            "example": "pk_live_test123",
+            "description": "API key to use when credentialMode is real. If omitted, a fake demo key is used.",
+            "examples": {
+              "fake": {
+                "value": "pk_live_test123",
+                "summary": "Demo API key used by the local scenario runner."
+              },
+              "real": {
+                "value": "pk_live_your_real_key",
+                "summary": "Real API key for a production-like environment."
+              }
+            }
+          },
+          "apiSecret": {
+            "type": "string",
+            "example": "sk_live_test123",
+            "description": "API secret to use when credentialMode is real. If omitted, a fake demo secret is used.",
+            "examples": {
+              "fake": {
+                "value": "sk_live_test123",
+                "summary": "Demo API secret used by the local scenario runner."
+              },
+              "real": {
+                "value": "sk_live_your_real_secret",
+                "summary": "Real API secret for a production-like environment."
+              }
+            }
+          },
+          "userEmail": {
+            "type": "string",
+            "example": "merchant@example.com",
+            "description": "Email to use for the auth context while executing the scenario. This is used by the auth layer to match the owner of the provided credentials.",
+            "examples": {
+              "demo": {
+                "value": "merchant@example.com",
+                "summary": "Demo merchant email used in local examples."
+              },
+              "alternate": {
+                "value": "ops@payassure.example",
+                "summary": "Alternate business owner email for integration testing."
+              }
+            }
+          },
+          "merchantTransactionReference": {
+            "type": "string",
+            "example": "TXN-SWAGGER-001",
+            "description": "Merchant transaction reference to use for the settlement attempt. This should be unique for repeatable happy-path runs.",
+            "examples": {
+              "happyPath": {
+                "value": "TXN-SWAGGER-001",
+                "summary": "Reference used for the success scenario."
+              },
+              "duplicateCheck": {
+                "value": "TXN-SWAGGER-DUPLICATE",
+                "summary": "Reference used to test duplicate settlement handling."
+              }
+            }
+          },
+          "totalAmount": {
+            "type": "number",
+            "example": 7200,
+            "description": "Optional override for the settlement amount used in the request payload. For the invalid-payload scenario, set this to 0 to trigger validation failure.",
+            "examples": {
+              "success": {
+                "value": 7200,
+                "summary": "Typical successful settlement value."
+              },
+              "invalidPayload": {
+                "value": 0,
+                "summary": "Used to force the validation failure scenario."
+              }
+            }
+          },
+          "currency": {
+            "type": "string",
+            "example": "KES",
+            "description": "Optional override for the settlement currency. Supported currencies in the demo environment are KES, USD, and TZS.",
+            "examples": {
+              "kes": {
+                "value": "KES",
+                "summary": "Kenyan shillings used in the primary demo flow."
+              },
+              "usd": {
+                "value": "USD",
+                "summary": "United States dollars for multi-currency testing."
+              },
+              "btc": {
+                "value": "BTC",
+                "summary": "Unsupported currency example for validation failure testing."
+              }
+            }
+          },
+          "settlementMethod": {
+            "type": "string",
+            "example": "BANK_TRANSFER",
+            "description": "Optional override for the settlement method. Use BANK_TRANSFER or another supported method that your integration accepts.",
+            "examples": {
+              "bankTransfer": {
+                "value": "BANK_TRANSFER",
+                "summary": "Bank transfer settlement flow."
+              },
+              "cash": {
+                "value": "CASH",
+                "summary": "Cash-based settlement route for internal testing."
+              }
+            }
+          },
+          "paymentMethodType": {
+            "type": "string",
+            "example": "MPESA",
+            "description": "Optional override for the payment method type. Supported examples are MPESA and CASH.",
+            "examples": {
+              "mpesa": {
+                "value": "MPESA",
+                "summary": "Mobile money payout flow."
+              },
+              "cash": {
+                "value": "CASH",
+                "summary": "Cash-based payout flow."
+              },
+              "unsupported": {
+                "value": "APPLEPAY",
+                "summary": "Unsupported payment method example to trigger validation failure."
+              }
+            }
+          },
+          "payerPhoneNumber": {
+            "type": "string",
+            "example": "254700000000",
+            "description": "Optional override for the payer phone number. This is required for MPESA-based payments.",
+            "examples": {
+              "kenya": {
+                "value": "254700000000",
+                "summary": "Kenyan mobile number for MPESA testing."
+              },
+              "empty": {
+                "value": "",
+                "summary": "Leave empty to trigger validation failure for MPESA flows."
+              }
+            }
+          },
+          "supplierMerchantId": {
+            "type": "string",
+            "example": "SUP-1001",
+            "description": "Optional override for the supplier merchant ID. This must resolve to an active supplier integration in the demo environment.",
+            "examples": {
+              "demoSupplier": {
+                "value": "SUP-1001",
+                "summary": "Demo supplier merchant ID used by the happy path."
+              },
+              "missingSupplier": {
+                "value": "SUP-999999",
+                "summary": "Unknown supplier example for validation failure."
+              }
+            }
+          },
+          "itemId": {
+            "type": "string",
+            "example": "ITEM-001",
+            "description": "Optional override for the supplier item identifier. Each item should have a unique ID per supplier allocation.",
+            "examples": {
+              "firstItem": {
+                "value": "ITEM-001",
+                "summary": "First demo allocation item."
+              },
+              "secondItem": {
+                "value": "ITEM-002",
+                "summary": "Second demo allocation item."
+              }
+            }
+          },
+          "supplierAmount": {
+            "type": "number",
+            "example": 7200,
+            "description": "Optional override for the supplier allocation amount. Used to simulate the supplier payout portion of the settlement.",
+            "examples": {
+              "successAmount": {
+                "value": 7200,
+                "summary": "Approved supplier allocation amount."
+              },
+              "negativeAmount": {
+                "value": -500,
+                "summary": "Negative amount example for validation failure."
+              }
+            }
+          },
+          "sessionToken": {
+            "type": "string",
+            "example": "expired-session",
+            "description": "Optional explicit session token for expired-session or other token-based scenarios. The demo runner uses this to simulate replayed or expired sessions.",
+            "examples": {
+              "expired": {
+                "value": "expired-session",
+                "summary": "Simulates a stale settlement session."
+              },
+              "valid": {
+                "value": "session-1",
+                "summary": "Uses the current valid session token for happy-path runs."
+              }
+            }
+          }
+        },
+        "required": [
+          "scenario",
+          "credentialMode"
+        ]
+      },
+      "RunScenarioResponseDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "passed",
+            "description": "Whether the scenario behaved as expected."
+          },
+          "scenario": {
+            "type": "string",
+            "example": "happy-path",
+            "description": "The scenario that was executed."
+          },
+          "message": {
+            "type": "string",
+            "example": "Happy-path settlement scenario completed successfully.",
+            "description": "A human-readable summary of the scenario outcome."
+          },
+          "details": {
+            "type": "object",
+            "example": {
+              "credentialMode": "fake",
+              "settlementId": "settlement-1"
+            },
+            "description": "Additional scenario details such as identifiers, tokens, or error metadata."
+          }
+        },
+        "required": [
+          "status",
+          "scenario",
+          "message"
+        ]
+      },
+      "PaymentMethodDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "example": "MPESA",
+            "description": "Payout method type. Only one payout destination may be configured at a time."
+          },
+          "accountName": {
+            "type": "string",
+            "example": "John Doe",
+            "description": "Account or beneficiary name for payout verification."
+          },
+          "status": {
+            "type": "string",
+            "readOnly": true,
+            "example": "PENDING_VERIFICATION",
+            "description": "Backend-managed lifecycle status for the payout destination."
+          },
+          "isVerified": {
+            "type": "boolean",
+            "readOnly": true,
+            "example": false,
+            "description": "Backend-managed verification state for the payout destination."
+          },
+          "payerPhoneNumber": {
+            "type": "string",
+            "example": "254712345678",
+            "description": "Phone number for MPESA payouts."
+          },
+          "provider": {
+            "type": "string",
+            "example": "Safaricom",
+            "description": "Optional payment provider or network name."
+          },
+          "bankCode": {
+            "type": "string",
+            "example": "07",
+            "description": "Bank code for BANK payouts."
+          },
+          "accountNumber": {
+            "type": "string",
+            "example": "1234567890",
+            "description": "Bank account number for BANK payouts."
+          },
+          "paymentActivationSecret": {
+            "type": "string",
+            "example": "paysec_7f3c9a2b6d...",
+            "description": "Raw activation secret returned to the merchant for the pending verification flow."
+          },
+          "paymentActivationSecretHash": {
+            "type": "string",
+            "example": "paysec_7f3c9a2b6d...",
+            "description": "Hashed activation secret for the pending verification flow."
+          },
+          "paymentActivationSecretExpiresAt": {
+            "type": "string",
+            "example": "2026-07-05T12:00:00.000Z",
+            "description": "Expiry time for the payment activation secret."
+          },
+          "verificationAttempts": {
+            "type": "number",
+            "example": 0,
+            "description": "How many times the activation secret has been attempted."
+          },
+          "verificationMethod": {
+            "type": "string",
+            "example": "PAYMENT_ACTIVATION_SECRET",
+            "description": "Verification method used to confirm ownership."
+          },
+          "verifiedAt": {
+            "type": "string",
+            "example": "2026-07-05T12:00:00.000Z",
+            "description": "Timestamp when the payout destination was verified."
+          }
+        },
+        "required": [
+          "type",
+          "accountName"
+        ]
+      },
+      "CreateOnboardingDto": {
+        "type": "object",
+        "properties": {
+          "participantType": {
+            "type": "string",
+            "enum": [
+              "RETAILER",
+              "SUPPLIER"
+            ],
+            "example": "RETAILER"
+          },
+          "businessName": {
+            "type": "string",
+            "example": "ABC Supermarket"
+          },
+          "registrationNumber": {
+            "type": "string",
+            "example": "REG-1001"
+          },
+          "kraPin": {
+            "type": "string",
+            "example": "A123456789Z"
+          },
+          "businessType": {
+            "type": "string",
+            "example": "Limited Company"
+          },
+          "industry": {
+            "type": "string",
+            "example": "Retail"
+          },
+          "physicalAddress": {
+            "type": "string",
+            "example": "Nairobi, Kenya"
+          },
+          "contactName": {
+            "type": "string",
+            "example": "Jane Doe"
+          },
+          "email": {
+            "type": "string",
+            "example": "jane@example.com"
+          },
+          "phoneNumber": {
+            "type": "string",
+            "example": "+254700000000"
+          },
+          "settlementMethod": {
+            "type": "string",
+            "example": "BANK"
+          },
+          "settlementAccount": {
+            "type": "string",
+            "example": "123456789"
+          },
+          "posSystem": {
+            "type": "string",
+            "example": "Odoo"
+          },
+          "settlementPreference": {
+            "type": "string",
+            "example": "DAILY"
+          },
+          "payment": {
+            "description": "Optional payout destination details for this participant.",
+            "example": {
+              "type": "MPESA",
+              "accountName": "John Doe",
+              "isVerified": false,
+              "payerPhoneNumber": "254712345678",
+              "provider": "Safaricom",
+              "bankCode": "07",
+              "accountNumber": "1234567890"
+            },
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PaymentMethodDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "participantType",
+          "businessName"
+        ]
+      },
+      "IntegrationResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "merchantId": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "apiSecret": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "merchantId",
+          "apiKey",
+          "apiSecret",
+          "environment",
+          "isActive",
+          "createdAt"
+        ]
+      },
+      "OnboardingResponseDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "participantType": {
+            "type": "string",
+            "enum": [
+              "RETAILER",
+              "SUPPLIER"
+            ]
+          },
+          "businessName": {
+            "type": "string"
+          },
+          "businessType": {
+            "type": "object"
+          },
+          "contactName": {
+            "type": "object"
+          },
+          "email": {
+            "type": "object"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "DOCUMENTS_SUBMITTED",
+              "VERIFIED",
+              "PILOT",
+              "LIVE",
+              "ACTIVE",
+              "REJECTED"
+            ]
+          },
+          "integration": {
+            "$ref": "#/components/schemas/IntegrationResponseDto"
+          },
+          "payment": {
+            "description": "Configured payout destination for this participant.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PaymentMethodDto"
+              }
+            ]
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "participantType",
+          "businessName",
+          "status",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "UpdateOnboardingDto": {
+        "type": "object",
+        "properties": {
+          "participantType": {
+            "type": "string",
+            "enum": [
+              "RETAILER",
+              "SUPPLIER"
+            ],
+            "example": "RETAILER"
+          },
+          "businessName": {
+            "type": "string",
+            "example": "ABC Supermarket"
+          },
+          "registrationNumber": {
+            "type": "string",
+            "example": "REG-1001"
+          },
+          "kraPin": {
+            "type": "string",
+            "example": "A123456789Z"
+          },
+          "businessType": {
+            "type": "string",
+            "example": "Limited Company"
+          },
+          "industry": {
+            "type": "string",
+            "example": "Retail"
+          },
+          "physicalAddress": {
+            "type": "string",
+            "example": "Nairobi, Kenya"
+          },
+          "contactName": {
+            "type": "string",
+            "example": "Jane Doe"
+          },
+          "email": {
+            "type": "string",
+            "example": "jane@example.com"
+          },
+          "phoneNumber": {
+            "type": "string",
+            "example": "+254700000000"
+          },
+          "settlementMethod": {
+            "type": "string",
+            "example": "BANK"
+          },
+          "settlementAccount": {
+            "type": "string",
+            "example": "123456789"
+          },
+          "posSystem": {
+            "type": "string",
+            "example": "Odoo"
+          },
+          "settlementPreference": {
+            "type": "string",
+            "example": "DAILY"
+          },
+          "payment": {
+            "description": "Optional payout destination details for this participant.",
+            "example": {
+              "type": "MPESA",
+              "accountName": "John Doe",
+              "isVerified": false,
+              "payerPhoneNumber": "254712345678",
+              "provider": "Safaricom",
+              "bankCode": "07",
+              "accountNumber": "1234567890"
+            },
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PaymentMethodDto"
+              }
+            ]
+          }
+        }
+      },
+      "UpdateWebhookDto": {
+        "type": "object",
+        "properties": {
+          "webhookUrl": {
+            "type": "string",
+            "example": "https://example.com/webhook"
+          }
+        },
+        "required": [
+          "webhookUrl"
+        ]
+      },
+      "UpdatePaymentDto": {
+        "type": "object",
+        "properties": {
+          "payment": {
+            "example": {
+              "type": "MPESA",
+              "accountName": "John Doe",
+              "payerPhoneNumber": "254712345678",
+              "provider": "Safaricom"
+            },
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PaymentMethodDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "payment"
+        ]
+      },
+      "ActivatePaymentDto": {
+        "type": "object",
+        "properties": {
+          "paymentActivationSecret": {
+            "type": "string",
+            "example": "paysec_7f3c9a2b6d...",
+            "description": "Payment activation secret issued during payout destination setup."
+          }
+        },
+        "required": [
+          "paymentActivationSecret"
+        ]
+      },
+      "RegisterAdminDto": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string",
+            "example": "admin",
+            "description": "Unique username for the new administrator account."
+          },
+          "email": {
+            "type": "string",
+            "example": "admin@example.com",
+            "description": "Unique email address for the new administrator account."
+          },
+          "password": {
+            "type": "string",
+            "example": "123456",
+            "description": "Password for the new administrator account. Minimum length is 6 characters."
+          }
+        },
+        "required": [
+          "username",
+          "email",
+          "password"
+        ]
+      },
+      "RegisterResponseDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "example": "User account created successfully",
+            "description": "Status message indicating successful registration"
+          },
+          "profileComplete": {
+            "type": "boolean",
+            "example": false,
+            "description": "Whether the user profile is already complete after registration"
+          },
+          "user": {
+            "type": "object",
+            "description": "Registered user profile details"
+          }
+        },
+        "required": [
+          "message",
+          "user"
+        ]
+      },
+      "RegisterDto": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string",
+            "example": "wilfred",
+            "description": "Unique username for the newly created user account."
+          },
+          "email": {
+            "type": "string",
+            "example": "kimaniwilfred95@gmail.com",
+            "description": "Required email address from your onboarding record. This is used as the lookup value to verify you are registered with PayAssure."
+          },
+          "password": {
+            "type": "string",
+            "example": "123456",
+            "description": "Password for the new user account. Minimum length is 6 characters."
+          }
+        },
+        "required": [
+          "username",
+          "email",
+          "password"
+        ]
+      },
+      "LoginDto": {
+        "type": "object",
+        "properties": {
+          "identifier": {
+            "type": "string",
+            "example": "wilfred",
+            "description": "The user identifier. This can be either the email address or the username."
+          },
+          "password": {
+            "type": "string",
+            "example": "123456",
+            "description": "The user password submitted during login."
+          }
+        },
+        "required": [
+          "identifier",
+          "password"
+        ]
+      },
+      "AuthResponseDto": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+            "description": "JWT access token used to authenticate protected API requests."
+          },
+          "refreshToken": {
+            "type": "string",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+            "description": "JWT refresh token used to obtain a new access token when the current one expires."
+          },
+          "profileComplete": {
+            "type": "boolean",
+            "example": true,
+            "description": "Indicates whether the user profile is complete and onboarding is finished."
+          },
+          "message": {
+            "type": "string",
+            "example": "Your profile is incomplete. Please finish onboarding to get API keys access.",
+            "description": "Guidance shown to the user when onboarding is still required."
+          },
+          "user": {
+            "type": "object",
+            "description": "Authenticated user profile returned with the token pair."
+          }
+        },
+        "required": [
+          "accessToken",
+          "refreshToken",
+          "profileComplete",
+          "message",
+          "user"
+        ]
+      },
+      "UserDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "email",
+          "role",
+          "isActive",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "GetUsersResponseDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserDto"
+            }
+          },
+          "total": {
+            "type": "number"
+          },
+          "skip": {
+            "type": "number"
+          },
+          "take": {
+            "type": "number"
+          },
+          "hasMore": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "data",
+          "total",
+          "skip",
+          "take",
+          "hasMore"
+        ]
+      },
+      "RefreshTokenDto": {
+        "type": "object",
+        "properties": {
+          "refreshToken": {
+            "type": "string",
+            "example": "refresh-token-here",
+            "description": "A valid refresh token previously returned by the login or refresh endpoint."
+          }
+        },
+        "required": [
+          "refreshToken"
+        ]
+      }
+    }
+  }
+}

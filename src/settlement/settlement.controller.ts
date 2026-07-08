@@ -3,6 +3,7 @@ import { ApiOperation, ApiResponse, ApiTags, ApiBearerAuth, ApiHeader, ApiBody }
 import { SettlementService } from './settlement.service';
 import { AuthenticateDto } from './dto/authenticate.dto';
 import { InitiateSettlementDto } from './dto/initiate-settlement.dto';
+import   PaymentCallbackDto  from './dto/payment-callback.dto';
 import { ReconcileSettlementDto } from './dto/reconcile-settlement.dto';
 import { RunScenarioDto, RunScenarioResponseDto } from './dto/run-scenario.dto';
 import {
@@ -181,6 +182,31 @@ export class SettlementController {
    * ENDPOINT 3: Track Settlement Status
    * Get current status of a settlement
    */
+  @Post('payment-callback')
+  @ApiOperation({
+    summary: 'Handle customer payment callback',
+    description: 'Accepts a payment confirmation from the payment provider and triggers the settlement workflow without initiating payouts directly.',
+  })
+  @ApiBody({ type: PaymentCallbackDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Payment callback accepted and settlement workflow triggered.',
+    type: Object,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid callback payload',
+    type: ErrorResponseDto,
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'No settlement matched the callback reference',
+    type: ErrorResponseDto,
+  })
+  async handlePaymentCallback(@Body() body: PaymentCallbackDto): Promise<any> {
+    return this.settlementService.handlePaymentCallback(body);
+  }
+
   @Get('track/:settlementId')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')

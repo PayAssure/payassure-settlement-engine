@@ -86,6 +86,19 @@ export class SettlementRecordRepository {
     }
   }
 
+  async findSettlementByReference(reference: string): Promise<(Settlement & { transactions: Transaction[] }) | null> {
+    return this.prisma.settlement.findFirst({
+      where: {
+        OR: [
+          { merchantTransactionReference: reference },
+          { reference },
+          { metadata: { path: ['originalMerchantReference'], equals: reference } },
+        ],
+      },
+      include: { transactions: true },
+    });
+  }
+
   async findSettlementsByBusinessId(businessId: string, skip = 0, take = 10) {
     return this.prisma.settlement.findMany({ where: { businessId }, include: { transactions: true }, skip, take, orderBy: { createdAt: 'desc' } });
   }
