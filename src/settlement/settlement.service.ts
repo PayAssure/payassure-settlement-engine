@@ -1,9 +1,10 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
-import { ParticipantStatus, ParticipantType, PrismaClient, SettlementStatus } from '@prisma/client';
+import { ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ParticipantStatus, ParticipantType, PrismaClient } from '@prisma/client';
 import { SettlementRepository } from './settlement.repository';
 import { AuthenticateDto } from './dto/authenticate.dto';
 import { InitiateSettlementDto } from './dto/initiate-settlement.dto';
 import { ReconcileSettlementDto } from './dto/reconcile-settlement.dto';
+import PaymentCallbackDto from './dto/payment-callback.dto';
 import {
   AuthenticateResponseDto,
   SettlementResponseDto,
@@ -135,6 +136,41 @@ export class SettlementService {
     return initiateOperation(this.prisma, this.repository, this.logger, token, data, this.SUPPORTED_CURRENCIES);
   }
 
+  async handlePaymentCallback(data: PaymentCallbackDto): Promise<any> {
+    const settlement = await this.repository.findSettlementByReference(data.merchantTransactionReference);
+
+    if (!settlement) {
+      throw new NotFoundException({ statusCode: 404, message: 'Settlement not found for the provided merchant transaction reference', error: 'SETTLEMENT_NOT_FOUND' });
+    }
+
+    const paymentCallback = {
+      merchantTransactionReference: data.merchantTransactionReference,
+      status: data.status ?? 'SUCCESS',
+      provider: data.provider ?? null,
+      providerReference: data.providerReference ?? null,
+      amount: data.amount ?? null,
+      currency: data.currency ?? null,
+      metadata: data.metadata ?? {},
+      receivedAt: new Date().toISOString(),
+    };
+
+    const existingMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
+
+    await this.repository.updateSettlementStatus(settlement.id, 'PENDING_PROCESSING', {
+      metadata: {
+        ...existingMetadata,
+        paymentCallback,
+      },
+    });
+
+    return {
+      success: true,
+      status: 'PENDING_PROCESSING',
+      message: 'Payment callback received and settlement moved to pending processing',
+      settlementId: settlement.id,
+    };
+  }
+
   /**
    * STEP 3: Track Settlement Status
    * Retrieve current status and transaction details
@@ -159,64 +195,6 @@ export class SettlementService {
     return reconcileOperation(this.repository, data);
   }
 
-  async handlePaymentCallback(callback: any): Promise<any> {
-    const merchantTransactionReference = callback?.merchantTransactionReference
-      ?? callback?.reference
-      ?? callback?.settlementReference
-      ?? callback?.merchantReference
-      ?? callback?.metadata?.merchantTransactionReference;
-
-    if (!merchantTransactionReference) {
-      throw new BadRequestException({ statusCode: 400, message: 'merchantTransactionReference is required for payment callback processing', error: 'INVALID_CALLBACK_PAYLOAD' });
-    }
-
-    const settlement = await (this.repository as any).findSettlementByReference?.(merchantTransactionReference);
-    if (!settlement) {
-      throw new NotFoundException({ statusCode: 404, message: 'Settlement not found for payment callback', error: 'SETTLEMENT_NOT_FOUND' });
-    }
-
-    const callbackStatus = String(callback?.status ?? 'SUCCESS').toUpperCase();
-    const isSuccess = ['SUCCESS', 'PAID', 'COMPLETED', 'CONFIRMED'].includes(callbackStatus);
-    const nextStatus = isSuccess ? SettlementStatus.PENDING_PROCESSING : SettlementStatus.PROCESSING_FAILED;
-    const processedAt = new Date();
-    const metadata = {
-      ...(settlement.metadata ?? {}),
-      paymentCallback: {
-        receivedAt: processedAt.toISOString(),
-        merchantTransactionReference,
-        provider: callback?.provider ?? 'UNKNOWN',
-        providerReference: callback?.providerReference ?? callback?.transactionId ?? null,
-        status: callbackStatus,
-        amount: callback?.amount ?? null,
-        currency: callback?.currency ?? settlement.currency ?? null,
-        metadata: callback?.metadata ?? undefined,
-      },
-    };
-
-    const updates: Record<string, any> = {
-      metadata,
-      processedAt,
-      paymentSnapshot: {
-        ...(settlement.paymentSnapshot ?? {}),
-        paymentCallback: metadata.paymentCallback,
-      },
-    };
-
-    if (!isSuccess) {
-      updates.failureReason = 'Payment callback reported a failed or rejected payment';
-    }
-
-    const updatedSettlement = await this.repository.updateSettlementStatus(settlement.id, nextStatus, updates);
-
-    this.logger.log(`Payment callback accepted for settlement=${settlement.id}, status=${updatedSettlement.status}, reference=${merchantTransactionReference}`);
-
-    return {
-      success: true,
-      settlementId: updatedSettlement.id,
-      status: updatedSettlement.status,
-      message: 'Payment callback received. Settlement workflow has been triggered.',
-    };
-  }
 
   async onModuleDestroy() {
     await this.prisma.$disconnect();

@@ -68,6 +68,20 @@ export class SettlementRecordRepository {
     return this.prisma.settlement.findUnique({ where: { id }, include: { transactions: true } });
   }
 
+  async findSettlementByReference(reference: string): Promise<(Settlement & { transactions: Transaction[] }) | null> {
+    return this.prisma.settlement.findFirst({
+      where: {
+        OR: [
+          { reference },
+          { merchantTransactionReference: reference },
+          { metadata: { path: ['originalMerchantReference'], equals: reference } },
+          { paymentPayload: { path: ['merchantTransactionReference'], equals: reference } },
+        ],
+      },
+      include: { transactions: true },
+    });
+  }
+
   async findSettlementByBusinessAndPayloadReference(businessId: string, payloadMerchantTransactionReference: string): Promise<(Settlement & { transactions: Transaction[] }) | null> {
     try {
       return await this.prisma.settlement.findFirst({ where: { businessId, metadata: { path: ['originalMerchantReference'], equals: payloadMerchantTransactionReference } }, include: { transactions: true } });
@@ -84,19 +98,6 @@ export class SettlementRecordRepository {
       }
       throw err;
     }
-  }
-
-  async findSettlementByReference(reference: string): Promise<(Settlement & { transactions: Transaction[] }) | null> {
-    return this.prisma.settlement.findFirst({
-      where: {
-        OR: [
-          { merchantTransactionReference: reference },
-          { reference },
-          { metadata: { path: ['originalMerchantReference'], equals: reference } },
-        ],
-      },
-      include: { transactions: true },
-    });
   }
 
   async findSettlementsByBusinessId(businessId: string, skip = 0, take = 10) {
