@@ -20,6 +20,21 @@ export async function trackOperation(prisma: any, repository: any, settlementId:
   const paymentType = paymentMethod?.type ?? 'UNKNOWN';
   const transactions = Array.isArray(settlement.transactions) ? settlement.transactions : [];
 
+  const allocationPlan = settlement.metadata?.allocationPlan ?? {
+    customerReceived: Number(settlement.amount),
+    allocations: [
+      { party: 'Supplier', amount: Number(settlement.amount) * 0.9, destination: 'B2B payout', status: 'PENDING' },
+      { party: 'Retailer', amount: Number(settlement.amount) * 0.08, destination: 'B2B payout', status: 'PENDING' },
+      { party: 'Platform', amount: Number(settlement.amount) * 0.02, destination: 'Retained fee', status: 'PENDING' },
+    ],
+    paymentDetails: {
+      supplier: { type: paymentType, provider: paymentMethod?.provider ?? 'Safaricom', payerPhoneNumber: paymentMethod?.payerPhoneNumber ?? null },
+      retailer: { type: paymentType, provider: paymentMethod?.provider ?? 'Safaricom', payerPhoneNumber: paymentMethod?.payerPhoneNumber ?? null },
+    },
+  };
+
+  const persistedTrace = settlement.metadata?.trace?.ledger ?? settlement.metadata?.ledgerProcessing ?? null;
+
   const baseSettlement = {
     settlementId: settlement.id,
     reference: settlement.reference,
@@ -30,6 +45,8 @@ export async function trackOperation(prisma: any, repository: any, settlementId:
     processedAt: settlement.processedAt ?? undefined,
     estimatedCompletionTime: new Date(settlement.createdAt.getTime() + 48 * 60 * 60 * 1000),
     timeline: buildTimeline(settlement.status, settlement.createdAt),
+    allocationPlan,
+    ledgerTrace: persistedTrace,
   };
 
   if (view === 'supplier') {

@@ -101,7 +101,7 @@
             "header": [],
             "body": {
               "mode": "raw",
-              "raw": "{}",
+              "raw": "{\n  \"merchantTransactionReference\": \"TXN-20260703-000001\",\n  \"status\": \"SUCCESS\",\n  \"provider\": \"M-PESA\",\n  \"providerReference\": \"MPESA-12345\",\n  \"amount\": 16500,\n  \"currency\": \"KES\",\n  \"metadata\": {\n    \"source\": \"payment-provider\",\n    \"note\": \"Simulated callback\"\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -116,6 +116,39 @@
               "path": [
                 "settlement",
                 "payment-callback"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "POST /settlement/ledger/simulate-payouts",
+      "item": [
+        {
+          "name": "Simulate fake B2B ledger payouts after callback",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantTransactionReference\": \"TXN-20260703-000001\",\n  \"simulationStatus\": \"PAID\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/settlement/ledger/simulate-payouts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "settlement",
+                "ledger",
+                "simulate-payouts"
               ]
             }
           },

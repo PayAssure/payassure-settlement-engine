@@ -218,9 +218,9 @@
     },
     "/settlement/payment-callback": {
       "post": {
-        "operationId": "SettlementController_handlePaymentCallback",
-        "summary": "Handle customer payment callback",
-        "description": "Accepts a payment confirmation from the payment provider and triggers the settlement workflow without initiating payouts directly.",
+        "operationId": "SettlementController_paymentCallback",
+        "summary": "Receive a payment provider callback",
+        "description": "Accepts payment provider callbacks and updates the linked settlement to pending processing.",
         "parameters": [],
         "requestBody": {
           "required": true,
@@ -234,34 +234,39 @@
         },
         "responses": {
           "200": {
-            "description": "Payment callback accepted and settlement workflow triggered.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid callback payload",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponseDto"
-                }
-              }
-            }
+            "description": "Payment callback processed successfully."
           },
           "404": {
-            "description": "No settlement matched the callback reference",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponseDto"
-                }
+            "description": "Settlement was not found for the supplied merchant transaction reference."
+          }
+        },
+        "tags": [
+          "settlement"
+        ]
+      }
+    },
+    "/settlement/ledger/simulate-payouts": {
+      "post": {
+        "operationId": "SettlementController_simulateLedgerPayouts",
+        "summary": "Simulate fake B2B payout transactions after a successful callback",
+        "description": "Uses the merchant transaction reference to locate a settlement that already passed the callback stage and simulates ledger-driven B2B payouts with detailed logs.",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimulateLedgerPayoutsDto"
               }
             }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ledger payout simulation completed."
+          },
+          "404": {
+            "description": "Settlement was not found or the callback had not been processed successfully."
           }
         },
         "tags": [
@@ -1568,7 +1573,7 @@
   },
   "info": {
     "title": "PayAssure API",
-    "description": "OpenAPI specification for PayAssure settlement and onboarding APIs",
+    "description": "PayAssure settlement and onboarding APIs",
     "version": "1.0.0",
     "contact": {}
   },
@@ -1865,6 +1870,29 @@
           "metadata": {
             "type": "object",
             "description": "Any additional provider metadata."
+          }
+        },
+        "required": [
+          "merchantTransactionReference"
+        ]
+      },
+      "SimulateLedgerPayoutsDto": {
+        "type": "object",
+        "properties": {
+          "merchantTransactionReference": {
+            "type": "string",
+            "example": "TXN-20260703-000001",
+            "description": "Merchant transaction reference tied to a successful payment callback."
+          },
+          "simulationStatus": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "PAID",
+              "FAILED"
+            ],
+            "example": "PAID",
+            "description": "Simulation outcome to apply to the fake B2B payout transactions."
           }
         },
         "required": [

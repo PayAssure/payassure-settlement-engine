@@ -5,6 +5,9 @@ import { AuthenticateDto } from './dto/authenticate.dto';
 import { InitiateSettlementDto } from './dto/initiate-settlement.dto';
 import { ReconcileSettlementDto } from './dto/reconcile-settlement.dto';
 import PaymentCallbackDto from './dto/payment-callback.dto';
+import SimulateLedgerPayoutsDto from './dto/simulate-ledger-payouts.dto';
+import FakeB2bPayoutDto from './dto/fake-b2b-payout.dto';
+import FakeB2bCallbackDto from './dto/fake-b2b-callback.dto';
 import { RunScenarioDto, RunScenarioResponseDto } from './dto/run-scenario.dto';
 import {
   AuthenticateResponseDto,
@@ -184,6 +187,28 @@ export class SettlementController {
   @ApiResponse({ status: 404, description: 'Settlement was not found for the supplied merchant transaction reference.' })
   async paymentCallback(@Body() body: PaymentCallbackDto): Promise<any> {
     return this.settlementService.handlePaymentCallback(body);
+  }
+
+  @Post('ledger/simulate-payouts')
+  @ApiOperation({ summary: 'Simulate fake B2B payout transactions after a successful callback', description: 'Uses the merchant transaction reference to locate a settlement that already passed the callback stage and simulates ledger-driven B2B payouts with detailed logs.' })
+  @ApiResponse({ status: 200, description: 'Ledger payout simulation completed.' })
+  @ApiResponse({ status: 404, description: 'Settlement was not found or the callback had not been processed successfully.' })
+  async simulateLedgerPayouts(@Body() body: SimulateLedgerPayoutsDto): Promise<any> {
+    return this.settlementService.simulateLedgerPayouts(body);
+  }
+
+  @Post('fake-b2b/payout')
+  @ApiOperation({ summary: 'Accept a fake B2B payout request from the payout service', description: 'Simulates a real B2B gateway accepting a payout request and returning a processing acknowledgement.' })
+  @ApiResponse({ status: 200, description: 'Fake B2B payout accepted.' })
+  async fakeB2BPayout(@Body() body: FakeB2bPayoutDto): Promise<any> {
+    return this.settlementService.processFakeB2bPayout(body);
+  }
+
+  @Post('fake-b2b/callback')
+  @ApiOperation({ summary: 'Receive a fake B2B callback for a previously accepted payout', description: 'Simulates the provider callback that marks the payout as successful and updates the settlement state.' })
+  @ApiResponse({ status: 200, description: 'Fake B2B callback processed.' })
+  async fakeB2BCallback(@Body() body: FakeB2bCallbackDto): Promise<any> {
+    return this.settlementService.handleFakeB2bCallback(body);
   }
 
   /**

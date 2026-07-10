@@ -69,17 +69,39 @@ export class SettlementRecordRepository {
   }
 
   async findSettlementByReference(reference: string): Promise<(Settlement & { transactions: Transaction[] }) | null> {
-    return this.prisma.settlement.findFirst({
-      where: {
-        OR: [
-          { reference },
-          { merchantTransactionReference: reference },
-          { metadata: { path: ['originalMerchantReference'], equals: reference } },
-          { paymentPayload: { path: ['merchantTransactionReference'], equals: reference } },
-        ],
-      },
-      include: { transactions: true },
-    });
+    const normalizedReference = String(reference ?? '').trim();
+    if (!normalizedReference) {
+      return null;
+    }
+
+    const candidates = [
+      normalizedReference,
+      normalizedReference.replace(/^TXN-/, ''),
+      normalizedReference.replace(/^PASTL-/, ''),
+      normalizedReference.split('-').slice(0, 3).join('-'),
+    ].filter(Boolean);
+
+    const uniqueCandidates = Array.from(new Set(candidates));
+
+    for (const candidate of uniqueCandidates) {
+      const settlement = await this.prisma.settlement.findFirst({
+        where: {
+          OR: [
+            { reference: candidate },
+            { merchantTransactionReference: candidate },
+            { metadata: { path: ['originalMerchantReference'], equals: candidate } },
+            { paymentPayload: { path: ['merchantTransactionReference'], equals: candidate } },
+          ],
+        },
+        include: { transactions: true },
+      });
+
+      if (settlement) {
+        return settlement;
+      }
+    }
+
+    return null;
   }
 
   async findSettlementByBusinessAndPayloadReference(businessId: string, payloadMerchantTransactionReference: string): Promise<(Settlement & { transactions: Transaction[] }) | null> {
