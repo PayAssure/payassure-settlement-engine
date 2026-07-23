@@ -1,9 +1,83 @@
 import { BadRequestException, ConflictException, ForbiddenException, InternalServerErrorException, UnauthorizedException } from '@nestjs/common';
 import { ParticipantStatus, ParticipantType } from '@prisma/client';
+import { request as httpsRequest } from 'https';
+import { request as httpRequest } from 'http';
 import { InitiateSettlementDto } from '../dto/initiate-settlement.dto';
 import { validateAndGetSession } from '../helpers/session.helpers';
 import { validateSettlementData } from '../helpers/validation.helpers';
 import { generateInternalMerchantTransactionReference, generatePayAssureReference } from '../helpers/reference.helpers';
+
+const GATEWAY_STK_PATH = '/api/payments/mpesa/stk';
+
+function getGatewayBaseUrl() {
+  const gatewayBaseUrl = process.env.GATEWAY_BASE_URL;
+  if (!gatewayBaseUrl) {
+    throw new InternalServerErrorException({
+      statusCode: 500,
+      message: 'Payment gateway base URL is not configured',
+      error: 'GATEWAY_BASE_URL_MISSING',
+    });
+  }
+  return gatewayBaseUrl.replace(/\/+$/, '');
+}
+
+function getGatewayAccountReference() {
+  const accountReference = process.env.GATEWAY_ACCOUNT_REFERENCE;
+  if (!accountReference) {
+    throw new InternalServerErrorException({
+      statusCode: 500,
+      message: 'Payment gateway account reference is not configured',
+      error: 'GATEWAY_ACCOUNT_REFERENCE_MISSING',
+    });
+  }
+  return accountReference;
+}
+
+function buildTransactionDescription(data: InitiateSettlementDto) {
+  const isGoods = Array.isArray(data.suppliers) && data.suppliers.some((supplier) => Array.isArray(supplier.items) && supplier.items.length > 0);
+  return isGoods ? 'Goods payment' : 'Settlement payment';
+}
+
+async function sendStkPushRequest(payload: { mobileNumber: string; amount: number; accountReference: string; transactionDesc: string; }) {
+  const gatewayBaseUrl = getGatewayBaseUrl();
+  const url = new URL(GATEWAY_STK_PATH, gatewayBaseUrl);
+  const body = JSON.stringify(payload);
+  const clientRequest = url.protocol === 'http:' ? httpRequest : httpsRequest;
+
+  return new Promise<any>((resolve, reject) => {
+    const req = clientRequest(
+      url,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        res.on('end', () => {
+          const raw = Buffer.concat(chunks).toString('utf8');
+          const statusCode = res.statusCode ?? 0;
+          if (statusCode < 200 || statusCode >= 300) {
+            return reject(new Error(`Gateway returned ${statusCode}: ${raw}`));
+          }
+          try {
+            const parsed = raw ? JSON.parse(raw) : {};
+            resolve(parsed);
+          } catch (error) {
+            reject(new Error(`Invalid gateway response: ${error instanceof Error ? error.message : String(error)}`));
+          }
+        });
+      },
+    );
+
+    req.on('error', (err) => reject(err));
+    req.write(body);
+    req.end();
+  });
+}
 
 function toPublicPaymentDetails(payment: any) {
   if (!payment || !payment.type) {
@@ -107,6 +181,25 @@ export async function initiateOperation(
     logger.log(`No existing settlement found, validating request payload for merchantTransactionReference=${data.merchantTransactionReference}`);
     await validateSettlementData(data, repository, logger, supportedCurrencies);
     logger.log(`Payload validation passed for merchantTransactionReference=${data.merchantTransactionReference}`);
+
+    if (data.paymentMethod?.type?.toUpperCase() === 'MPESA') {
+      const mobileNumber = data.paymentMethod.payerPhoneNumber;
+      const amount = Number(data.totalAmount);
+      const accountReference = getGatewayAccountReference();
+      const transactionDesc = buildTransactionDescription(data);
+
+      logger.log(`Sending STK push request to payment gateway for merchantTransactionReference=${data.merchantTransactionReference}`);
+      const gatewayResponse = await sendStkPushRequest({ mobileNumber, amount, accountReference, transactionDesc });
+      logger.log(`STK push gateway response received for merchantTransactionReference=${data.merchantTransactionReference}`);
+
+      data.metadata = {
+        ...(data.metadata ?? {}),
+        paymentGateway: {
+          request: { mobileNumber, amount, accountReference, transactionDesc },
+          response: gatewayResponse,
+        },
+      };
+    }
 
     const payAssureReference = generatePayAssureReference();
     const internalMerchantTransactionReference = generateInternalMerchantTransactionReference();
