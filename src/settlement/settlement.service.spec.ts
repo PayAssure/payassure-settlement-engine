@@ -47,6 +47,89 @@ test('handlePaymentCallback transitions a settlement into pending processing', a
   assert.equal(response.allocationPlan.paymentDetails.supplier.provider, 'Safaricom');
 });
 
+test('confirmSettlementPayment records a customer payment confirmation and marks the settlement as pending processing', async () => {
+  let updatedStatus: any = null;
+  let updatedPayload: any = null;
+
+  const repository = {
+    findSettlementById: async () => ({
+      id: 'settlement-4',
+      status: 'INITIATED',
+      amount: 2000,
+      metadata: {},
+      paymentSnapshot: null,
+      processedAt: null,
+      paymentPayload: {
+        paymentMethod: {
+          type: 'MPESA',
+          provider: 'Safaricom',
+          payerPhoneNumber: '+254700000001',
+        },
+      },
+    }),
+    updateSettlementStatus: async (_id: string, status: string, updates: any) => {
+      updatedStatus = status;
+      updatedPayload = updates;
+      return { id: 'settlement-4', status, ...updates };
+    },
+  };
+
+  const service = new SettlementService(repository as any);
+  const response = await service.confirmSettlementPayment({
+    settlementId: 'settlement-4',
+    paymentId: 'pay-001',
+    status: 'PAID',
+    provider: 'MPESA',
+    paidAmount: 2000,
+    paidAt: '2026-07-24T10:00:00.000Z',
+    providerReference: {
+      checkoutRequestId: 'checkout-001',
+      merchantRequestId: 'merchant-001',
+      receiptNumber: 'RCPT-001',
+    },
+  } as any);
+
+  assert.equal(response.success, true);
+  assert.equal(response.status, 'PENDING_PROCESSING');
+  assert.equal(updatedStatus, 'PENDING_PROCESSING');
+  assert.equal(updatedPayload.metadata.paymentConfirmation.status, 'PAID');
+  assert.equal(updatedPayload.metadata.paymentConfirmation.providerReference.receiptNumber, 'RCPT-001');
+  assert.equal(response.allocationPlan.allocations[0].party, 'Supplier');
+});
+
+test('confirmSettlementPayment accepts a paid confirmation payload', async () => {
+  const repository = {
+    findSettlementById: async () => ({
+      id: 'settlement-5',
+      status: 'INITIATED',
+      amount: 2000,
+      metadata: {},
+      paymentPayload: {
+        paymentMethod: {
+          type: 'MPESA',
+          provider: 'Safaricom',
+          payerPhoneNumber: '+254700000002',
+        },
+      },
+    }),
+    updateSettlementStatus: async () => ({ id: 'settlement-5' }),
+  };
+
+  const service = new SettlementService(repository as any);
+
+  const response = await service.confirmSettlementPayment({
+    settlementId: 'settlement-5',
+    paymentId: 'pay-002',
+    status: 'PAID',
+    provider: 'MPESA',
+    paidAmount: 2000,
+    paidAt: '2026-07-24T10:10:00.000Z',
+  } as any);
+
+  assert.equal(response.success, true);
+  assert.equal(response.status, 'PENDING_PROCESSING');
+});
+
 test('handleFakeB2bCallback marks supplier and retailer allocations as paid', async () => {
   let updatedPayload: any = null;
 

@@ -1,10 +1,11 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ParticipantStatus, ParticipantType, PrismaClient } from '@prisma/client';
 import { SettlementRepository } from './settlement.repository';
 import { AuthenticateDto } from './dto/authenticate.dto';
 import { InitiateSettlementDto } from './dto/initiate-settlement.dto';
 import { ReconcileSettlementDto } from './dto/reconcile-settlement.dto';
 import PaymentCallbackDto from './dto/payment-callback.dto';
+import PaymentConfirmationDto from './dto/payment-confirmation.dto';
 import {
   AuthenticateResponseDto,
   SettlementResponseDto,
@@ -242,6 +243,142 @@ export class SettlementService {
       settlementId: settlement.id,
       nextStep: 'Create ledger entries and split the customer funds into supplier, retailer, and platform allocations.',
       allocationPlan,
+    };
+  }
+
+  async confirmSettlementPayment(data: PaymentConfirmationDto): Promise<any> {
+    this.logger.log(`Received settlement confirmation for ${data.settlementId} | paymentId=${data.paymentId ?? 'n/a'} | status=${data.status ?? 'UNKNOWN'} | provider=${data.provider ?? 'n/a'}`);
+
+    const settlement = await this.repository.findSettlementById(data.settlementId);
+
+    if (!settlement) {
+      this.logger.warn(`Settlement confirmation rejected: settlement ${data.settlementId} was not found`);
+      throw new NotFoundException({ statusCode: 404, message: 'Settlement not found for the provided settlement identifier', error: 'SETTLEMENT_NOT_FOUND' });
+    }
+
+    if ((settlement.status as string) === 'PENDING_PROCESSING' || (settlement.status as string) === 'PROCESSING' || (settlement.status as string) === 'COMPLETED') {
+      this.logger.log(`Settlement ${data.settlementId} already processed; skipping duplicate confirmation`);
+      return {
+        success: true,
+        status: settlement.status,
+        message: 'Payment confirmation was already processed for this settlement.',
+        settlementId: settlement.id,
+      };
+    }
+
+    if (data.status && data.status.toUpperCase() !== 'PAID') {
+      this.logger.warn(`Settlement confirmation rejected for ${data.settlementId}: unsupported status ${data.status}`);
+      throw new BadRequestException({ statusCode: 400, message: 'Only PAID confirmations are accepted for settlement completion', error: 'INVALID_PAYMENT_STATUS' });
+    }
+
+    const paymentConfirmation = {
+      paymentId: data.paymentId ?? null,
+      settlementId: data.settlementId,
+      status: data.status ?? 'PAID',
+      provider: data.provider ?? null,
+      paidAmount: data.paidAmount ?? Number(settlement.amount ?? 0),
+      paidAt: data.paidAt ?? new Date().toISOString(),
+      providerReference: data.providerReference ?? null,
+      confirmedAt: new Date().toISOString(),
+    };
+
+    const existingMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
+
+    const supplierAmount = Number(settlement.amount) > 0 ? Number(settlement.amount) * 0.9 : 0;
+    const retailerAmount = Number(settlement.amount) > 0 ? Number(settlement.amount) * 0.08 : 0;
+    const platformFee = Number(settlement.amount) > 0 ? Number(settlement.amount) * 0.02 : 0;
+
+    const paymentMethod = (settlement.paymentPayload && typeof settlement.paymentPayload === 'object' && !Array.isArray(settlement.paymentPayload)
+      ? (settlement.paymentPayload as Record<string, any>).paymentMethod
+      : null) as Record<string, any> | null;
+
+    const allocationPlan = {
+      customerReceived: Number(settlement.amount),
+      ledgerEntries: [
+        {
+          account: 'Cash',
+          direction: 'DEBIT',
+          amount: Number(settlement.amount),
+          description: 'Customer payment received',
+        },
+        {
+          account: 'Customer Clearing',
+          direction: 'CREDIT',
+          amount: Number(settlement.amount),
+          description: 'Customer funds parked pending allocation',
+        },
+      ],
+      allocations: [
+        {
+          party: 'Supplier',
+          amount: supplierAmount,
+          destination: 'B2B payout',
+          status: 'PENDING',
+        },
+        {
+          party: 'Retailer',
+          amount: retailerAmount,
+          destination: 'B2B payout',
+          status: 'PENDING',
+        },
+        {
+          party: 'Platform',
+          amount: platformFee,
+          destination: 'Retained fee',
+          status: 'PENDING',
+        },
+      ],
+      paymentDetails: {
+        supplier: {
+          type: paymentMethod?.type ?? 'MPESA',
+          provider: paymentMethod?.provider ?? 'Safaricom',
+          payerPhoneNumber: paymentMethod?.payerPhoneNumber ?? null,
+        },
+        retailer: {
+          type: paymentMethod?.type ?? 'MPESA',
+          provider: paymentMethod?.provider ?? 'Safaricom',
+          payerPhoneNumber: paymentMethod?.payerPhoneNumber ?? null,
+        },
+      },
+    };
+
+    this.logger.log(`Authenticating payment proof for settlement ${settlement.id}: amount=${paymentConfirmation.paidAmount} provider=${paymentConfirmation.provider ?? 'n/a'} receipt=${paymentConfirmation.providerReference?.receiptNumber ?? 'n/a'}`);
+
+    await this.repository.updateSettlementStatus(settlement.id, 'PENDING_PROCESSING', {
+      metadata: {
+        ...existingMetadata,
+        paymentConfirmation,
+        allocationPlan,
+      },
+    });
+
+    const payoutSimulations = [
+      {
+        party: 'Retailer',
+        amount: retailerAmount,
+        status: 'SIMULATED',
+        message: 'Simulated payout dispatch to retailer',
+      },
+      {
+        party: 'Supplier',
+        amount: supplierAmount,
+        status: 'SIMULATED',
+        message: 'Simulated payout dispatch to supplier',
+      },
+    ];
+
+    payoutSimulations.forEach((payout) => {
+      this.logger.log(`Simulated ${payout.message} for settlement ${settlement.id}: party=${payout.party} amount=${payout.amount}`);
+    });
+
+    return {
+      success: true,
+      status: 'PENDING_PROCESSING',
+      message: 'Payment confirmation accepted. The settlement is now moving into ledger allocation and payout processing.',
+      settlementId: settlement.id,
+      nextStep: 'Create ledger entries and split the customer funds into supplier, retailer, and platform allocations.',
+      allocationPlan,
+      payoutSimulations,
     };
   }
 

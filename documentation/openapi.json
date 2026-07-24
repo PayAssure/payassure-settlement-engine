@@ -245,6 +245,50 @@
         ]
       }
     },
+    "/settlement/payment-confirmation": {
+      "get": {
+        "operationId": "SettlementController_confirmSettlementPaymentHealthCheck",
+        "summary": "Check that the payment confirmation endpoint is reachable",
+        "description": "Accepts GET requests for gateway compatibility and health checks.",
+        "responses": {
+          "200": {
+            "description": "Payment confirmation endpoint is reachable."
+          }
+        },
+        "tags": [
+          "settlement"
+        ]
+      },
+      "post": {
+        "operationId": "SettlementController_confirmSettlementPayment",
+        "summary": "Confirm that a settlement was paid by the customer",
+        "description": "Accepts a payment confirmation payload from the payment gateway and advances the settlement into ledger allocation and payout processing.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentConfirmationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Payment confirmation processed successfully."
+          },
+          "401": {
+            "description": "Unauthorized request with missing or invalid bearer token/signature headers."
+          },
+          "404": {
+            "description": "Settlement was not found for the supplied identifier."
+          }
+        },
+        "tags": [
+          "settlement"
+        ]
+      }
+    },
     "/settlement/ledger/simulate-payouts": {
       "post": {
         "operationId": "SettlementController_simulateLedgerPayouts",

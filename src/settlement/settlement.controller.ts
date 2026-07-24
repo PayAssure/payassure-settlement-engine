@@ -1,10 +1,12 @@
-import { Controller, Post, Get, Param, Body, Headers, UseGuards, BadRequestException, Req } from '@nestjs/common';
+import { Controller, Post, Get, Param, Body, Headers, UseGuards, BadRequestException, Req, UnauthorizedException, Logger } from '@nestjs/common';
+import * as crypto from 'crypto';
 import { ApiOperation, ApiResponse, ApiTags, ApiBearerAuth, ApiHeader, ApiBody } from '@nestjs/swagger';
 import { SettlementService } from './settlement.service';
 import { AuthenticateDto } from './dto/authenticate.dto';
 import { InitiateSettlementDto } from './dto/initiate-settlement.dto';
 import { ReconcileSettlementDto } from './dto/reconcile-settlement.dto';
 import PaymentCallbackDto from './dto/payment-callback.dto';
+import PaymentConfirmationDto from './dto/payment-confirmation.dto';
 import SimulateLedgerPayoutsDto from './dto/simulate-ledger-payouts.dto';
 import FakeB2bPayoutDto from './dto/fake-b2b-payout.dto';
 import FakeB2bCallbackDto from './dto/fake-b2b-callback.dto';
@@ -21,6 +23,8 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 @ApiTags('settlement')
 @Controller('settlement')
 export class SettlementController {
+  private readonly logger = new Logger(SettlementController.name);
+
   constructor(private readonly settlementService: SettlementService) {}
 
   /**
@@ -187,6 +191,71 @@ export class SettlementController {
   @ApiResponse({ status: 404, description: 'Settlement was not found for the supplied merchant transaction reference.' })
   async paymentCallback(@Body() body: PaymentCallbackDto): Promise<any> {
     return this.settlementService.handlePaymentCallback(body);
+  }
+
+  @Get('payment-confirmation')
+  @ApiOperation({ summary: 'Check that the payment confirmation endpoint is reachable', description: 'Accepts GET requests for gateway compatibility and health checks.' })
+  @ApiResponse({ status: 200, description: 'Payment confirmation endpoint is reachable.' })
+  async confirmSettlementPaymentHealthCheck(): Promise<any> {
+    return { success: true, message: 'Payment confirmation endpoint is reachable.' };
+  }
+
+  @Post('payment-confirmation')
+  @ApiOperation({ summary: 'Confirm that a settlement was paid by the customer', description: 'Accepts a payment confirmation payload from the payment gateway and advances the settlement into ledger allocation and payout processing.' })
+  @ApiResponse({ status: 200, description: 'Payment confirmation processed successfully.' })
+  @ApiResponse({ status: 404, description: 'Settlement was not found for the supplied identifier.' })
+  async confirmSettlementPayment(@Body() body: PaymentConfirmationDto, @Headers() headers: Record<string, string | string[] | undefined>): Promise<any> {
+    const authorization = this.getHeaderValue(headers, 'authorization') ?? this.getHeaderValue(headers, 'Authorization');
+    const signature = this.getHeaderValue(headers, 'x-payassure-signature') ?? this.getHeaderValue(headers, 'X-PayAssure-Signature');
+    const timestamp = this.getHeaderValue(headers, 'x-payassure-timestamp') ?? this.getHeaderValue(headers, 'X-PayAssure-Timestamp');
+
+    this.logger.log(`Incoming settlement confirmation for ${body.settlementId} | paymentId=${body.paymentId ?? 'n/a'} | signature=${signature ? 'present' : 'missing'} | timestamp=${timestamp ?? 'missing'}`);
+
+    const expectedToken = process.env.PAYMENT_GATEWAY_API_TOKEN || process.env.SETTLEMENT_API_TOKEN || process.env.INTERNAL_GATEWAY_TOKEN;
+    const expectedSecret = process.env.PAYMENT_GATEWAY_SIGNATURE_SECRET || process.env.SETTLEMENT_SIGNATURE_SECRET || process.env.PAYASSURE_INTERNAL_SECRET;
+
+    if (!authorization || !authorization.startsWith('Bearer ')) {
+      throw new UnauthorizedException({ statusCode: 401, message: 'Missing bearer token', error: 'UNAUTHORIZED' });
+    }
+
+    if (!expectedToken || authorization !== `Bearer ${expectedToken}`) {
+      this.logger.warn(`Settlement confirmation rejected for ${body.settlementId}: invalid bearer token`);
+      throw new UnauthorizedException({ statusCode: 401, message: 'Invalid bearer token', error: 'UNAUTHORIZED' });
+    }
+
+    if (!expectedSecret) {
+      throw new UnauthorizedException({ statusCode: 401, message: 'Signature secret is not configured', error: 'UNAUTHORIZED' });
+    }
+
+    if (!signature || !timestamp) {
+      throw new UnauthorizedException({ statusCode: 401, message: 'Missing signature headers', error: 'UNAUTHORIZED' });
+    }
+
+    const bodyString = JSON.stringify(body);
+    const expectedSignature = crypto.createHmac('sha256', expectedSecret).update(bodyString).digest('hex');
+
+    if (expectedSignature !== signature) {
+      this.logger.warn(`Settlement confirmation rejected for ${body.settlementId}: signature mismatch`);
+      throw new UnauthorizedException({ statusCode: 401, message: 'Invalid signature', error: 'UNAUTHORIZED' });
+    }
+
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const receivedTimestamp = Number(timestamp);
+    if (!Number.isFinite(receivedTimestamp) || Math.abs(nowSeconds - receivedTimestamp) > 300) {
+      this.logger.warn(`Settlement confirmation rejected for ${body.settlementId}: stale timestamp ${timestamp}`);
+      throw new UnauthorizedException({ statusCode: 401, message: 'Expired or invalid timestamp', error: 'UNAUTHORIZED' });
+    }
+
+    this.logger.log(`Settlement confirmation authenticated successfully for ${body.settlementId}`);
+    return this.settlementService.confirmSettlementPayment(body);
+  }
+
+  private getHeaderValue(headers: Record<string, string | string[] | undefined>, key: string): string | undefined {
+    const value = headers[key];
+    if (Array.isArray(value)) {
+      return value[0];
+    }
+    return value;
   }
 
   @Post('ledger/simulate-payouts')

@@ -38,7 +38,7 @@ function buildTransactionDescription(data: InitiateSettlementDto) {
   return isGoods ? 'Goods payment' : 'Settlement payment';
 }
 
-async function sendStkPushRequest(payload: { mobileNumber: string; amount: number; accountReference: string; transactionDesc: string; }) {
+async function sendStkPushRequest(payload: Record<string, any>) {
   const gatewayBaseUrl = getGatewayBaseUrl();
   const url = new URL(GATEWAY_STK_PATH, gatewayBaseUrl);
   const body = JSON.stringify(payload);
@@ -187,15 +187,37 @@ export async function initiateOperation(
       const amount = Number(data.totalAmount);
       const accountReference = getGatewayAccountReference();
       const transactionDesc = buildTransactionDescription(data);
+      const gatewayRequestPayload = {
+        merchantTransactionReference: data.merchantTransactionReference,
+        totalAmount: amount,
+        currency: data.currency,
+        settlementMethod: data.settlementMethod,
+        description: data.description,
+        paymentMethod: data.paymentMethod,
+        transactionDate: data.transactionDate,
+        metadata: data.metadata,
+        suppliers: data.suppliers,
+        mobileNumber,
+        amount,
+        accountReference,
+        transactionDesc,
+      };
 
       logger.log(`Sending STK push request to payment gateway for merchantTransactionReference=${data.merchantTransactionReference}`);
-      const gatewayResponse = await sendStkPushRequest({ mobileNumber, amount, accountReference, transactionDesc });
+      logger.log(`Gateway request payload: ${JSON.stringify(gatewayRequestPayload)}`);
+      const gatewayResponse = await sendStkPushRequest(gatewayRequestPayload);
       logger.log(`STK push gateway response received for merchantTransactionReference=${data.merchantTransactionReference}`);
 
       data.metadata = {
         ...(data.metadata ?? {}),
         paymentGateway: {
-          request: { mobileNumber, amount, accountReference, transactionDesc },
+          request: {
+            ...gatewayRequestPayload,
+            mobileNumber,
+            amount,
+            accountReference,
+            transactionDesc,
+          },
           response: gatewayResponse,
         },
       };
