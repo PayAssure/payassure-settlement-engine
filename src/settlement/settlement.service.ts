@@ -247,17 +247,26 @@ export class SettlementService {
   }
 
   async confirmSettlementPayment(data: PaymentConfirmationDto): Promise<any> {
-    this.logger.log(`Received settlement confirmation for ${data.settlementId} | paymentId=${data.paymentId ?? 'n/a'} | status=${data.status ?? 'UNKNOWN'} | provider=${data.provider ?? 'n/a'}`);
+    this.logger.log(`[CONFIRMATION][LOOKUP] starting lookup for ${data.settlementId}`);
 
-    const settlement = await this.repository.findSettlementById(data.settlementId);
+    let settlement = await this.repository.findSettlementById(data.settlementId);
+    this.logger.log(`[CONFIRMATION][LOOKUP] direct id lookup ${settlement ? 'matched' : 'missed'} for ${data.settlementId}`);
 
     if (!settlement) {
-      this.logger.warn(`Settlement confirmation rejected: settlement ${data.settlementId} was not found`);
+      const fallbackSettlement = await this.repository.findSettlementByReference?.(data.settlementId);
+      settlement = fallbackSettlement ?? null;
+      this.logger.log(`[CONFIRMATION][LOOKUP] reference fallback ${settlement ? 'matched' : 'missed'} for ${data.settlementId}`);
+    }
+
+    if (!settlement) {
+      this.logger.warn(`[CONFIRMATION][LOOKUP] failed: settlement ${data.settlementId} was not found`);
       throw new NotFoundException({ statusCode: 404, message: 'Settlement not found for the provided settlement identifier', error: 'SETTLEMENT_NOT_FOUND' });
     }
 
+    this.logger.log(`[CONFIRMATION][LOOKUP] resolved settlement ${settlement.id} with reference=${settlement.merchantTransactionReference ?? 'n/a'} originalReference=${(settlement.metadata as any)?.originalMerchantReference ?? 'n/a'}`);
+
     if ((settlement.status as string) === 'PENDING_PROCESSING' || (settlement.status as string) === 'PROCESSING' || (settlement.status as string) === 'COMPLETED') {
-      this.logger.log(`Settlement ${data.settlementId} already processed; skipping duplicate confirmation`);
+      this.logger.log(`[CONFIRMATION][RESULT] settlement ${settlement.id} already processed with status ${settlement.status}`);
       return {
         success: true,
         status: settlement.status,
@@ -267,7 +276,7 @@ export class SettlementService {
     }
 
     if (data.status && data.status.toUpperCase() !== 'PAID') {
-      this.logger.warn(`Settlement confirmation rejected for ${data.settlementId}: unsupported status ${data.status}`);
+      this.logger.warn(`[CONFIRMATION][RESULT] unsupported status ${data.status} for settlement ${settlement.id}`);
       throw new BadRequestException({ statusCode: 400, message: 'Only PAID confirmations are accepted for settlement completion', error: 'INVALID_PAYMENT_STATUS' });
     }
 
@@ -342,7 +351,7 @@ export class SettlementService {
       },
     };
 
-    this.logger.log(`Authenticating payment proof for settlement ${settlement.id}: amount=${paymentConfirmation.paidAmount} provider=${paymentConfirmation.provider ?? 'n/a'} receipt=${paymentConfirmation.providerReference?.receiptNumber ?? 'n/a'}`);
+    this.logger.log(`[CONFIRMATION][RESULT] accepting payment confirmation for settlement ${settlement.id}: amount=${paymentConfirmation.paidAmount} provider=${paymentConfirmation.provider ?? 'n/a'} receipt=${paymentConfirmation.providerReference?.receiptNumber ?? 'n/a'}`);
 
     await this.repository.updateSettlementStatus(settlement.id, 'PENDING_PROCESSING', {
       metadata: {
@@ -370,6 +379,8 @@ export class SettlementService {
     payoutSimulations.forEach((payout) => {
       this.logger.log(`Simulated ${payout.message} for settlement ${settlement.id}: party=${payout.party} amount=${payout.amount}`);
     });
+
+    this.logger.log(`[CONFIRMATION][RESULT] completed successfully for settlement ${settlement.id}`);
 
     return {
       success: true,

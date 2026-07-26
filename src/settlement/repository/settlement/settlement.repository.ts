@@ -74,11 +74,19 @@ export class SettlementRecordRepository {
       return null;
     }
 
+    const strippedPaySuffix = normalizedReference.replace(/-pay_[^-]+$/i, '');
+    const strippedTextSuffix = normalizedReference.replace(/-pay-[^-]+$/i, '');
+    const strippedPrefixTxn = normalizedReference.replace(/^TXN-/, '');
+    const strippedPrefixPastl = normalizedReference.replace(/^PASTL-/, '');
+    const firstThreeParts = normalizedReference.split('-').slice(0, 3).join('-');
+
     const candidates = [
       normalizedReference,
-      normalizedReference.replace(/^TXN-/, ''),
-      normalizedReference.replace(/^PASTL-/, ''),
-      normalizedReference.split('-').slice(0, 3).join('-'),
+      strippedPaySuffix,
+      strippedTextSuffix,
+      strippedPrefixTxn,
+      strippedPrefixPastl,
+      firstThreeParts,
     ].filter(Boolean);
 
     const uniqueCandidates = Array.from(new Set(candidates));
