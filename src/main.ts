@@ -12,6 +12,44 @@ import { HealthModule } from './health/health.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  const corsOriginEnv =
+    process.env.CORS_ORIGIN ||
+    process.env.ALLOWED_ORIGIN ||
+    process.env.FRONTEND_URL ||
+    process.env.CLIENT_URL ||
+    process.env.CORS_ALLOWED_ORIGINS ||
+    '';
+
+  const allowedOrigins = corsOriginEnv
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  app.enableCors({
+    origin: (origin, callback) => {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      if (allowedOrigins.length === 0) {
+        callback(null, false);
+        return;
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(null, false);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-settlement-session', 'x-supplier-session', 'x-payassure-signature', 'x-payassure-timestamp'],
+  });
+
   app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
   app.use((req: Request, res: Response, next: NextFunction) => {
     console.log(`[REQUEST] ${req.method} ${req.originalUrl}`);

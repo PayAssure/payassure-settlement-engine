@@ -1,7 +1,7 @@
 import { Controller, Post, Get, Param, Body, Headers, UseGuards, BadRequestException, Req, UnauthorizedException, Logger } from '@nestjs/common';
+import * as crypto from 'crypto';
 import { ApiOperation, ApiResponse, ApiTags, ApiBearerAuth, ApiHeader, ApiBody } from '@nestjs/swagger';
 import { SettlementService } from './settlement.service';
-import { createSettlementConfirmationSignature } from './helpers/settlement-confirmation-credentials';
 import { AuthenticateDto } from './dto/authenticate.dto';
 import { InitiateSettlementDto } from './dto/initiate-settlement.dto';
 import { ReconcileSettlementDto } from './dto/reconcile-settlement.dto';
@@ -193,7 +193,7 @@ export class SettlementController {
     return this.settlementService.handlePaymentCallback(body);
   }
 
-  @Post(['payment-confirmation', 'internal/settlements/payment-confirmation', 'settlement/internal/settlements/payment-confirmation'])
+  @Post('internal/settlements/payment-confirmation')
   @ApiOperation({ summary: 'Confirm that a settlement was paid by the customer', description: 'Accepts a payment confirmation payload from the payment gateway and advances the settlement into ledger allocation and payout processing.' })
   @ApiResponse({ status: 200, description: 'Payment confirmation processed successfully.' })
   @ApiResponse({ status: 404, description: 'Settlement was not found for the supplied identifier.' })
@@ -228,7 +228,8 @@ export class SettlementController {
       throw new UnauthorizedException({ statusCode: 401, message: 'Missing signature headers', error: 'UNAUTHORIZED' });
     }
 
-    const expectedSignature = createSettlementConfirmationSignature(expectedSecret);
+    const bodyString = JSON.stringify(body);
+    const expectedSignature = crypto.createHmac('sha256', expectedSecret).update(bodyString).digest('hex');
 
     this.logger.log(`[CONFIRMATION][AUTH] computed signature=${expectedSignature} expectedToken=${expectedToken ?? 'missing'} expectedSecret=${expectedSecret ? 'configured' : 'missing'} for ${body.settlementId}`);
 

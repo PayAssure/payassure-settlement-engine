@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, InternalServerErrorException, UnauthorizedException } from '@nestjs/common';
-import { ParticipantStatus, ParticipantType } from '@prisma/client';
+import { ParticipantStatus, ParticipantType, SettlementStatus } from '@prisma/client';
 import { request as httpsRequest } from 'https';
 import { request as httpRequest } from 'http';
 import { InitiateSettlementDto } from '../dto/initiate-settlement.dto';
@@ -73,10 +73,66 @@ async function sendStkPushRequest(payload: Record<string, any>) {
       },
     );
 
+    req.setTimeout(50000, () => {
+      req.destroy(new Error('Gateway request timed out after 5000ms'));
+    });
     req.on('error', (err) => reject(err));
     req.write(body);
     req.end();
   });
+}
+
+function shouldRetryGatewayError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  return [
+    'econnreset',
+    'econnrefused',
+    'etimedout',
+    'enetunreach',
+    'socket hang up',
+    'aggregateerror',
+    'fetch failed',
+    'timed out',
+    'getaddrinfo',
+    'network',
+  ].some((token) => normalized.includes(token));
+}
+
+export async function sendStkPushRequestWithRetry(
+  sender: (payload: Record<string, any>) => Promise<any>,
+  logger: Pick<any, 'log' | 'warn' | 'error'>,
+  merchantTransactionReference: string,
+  maxAttempts = 3,
+  baseDelayMs = 1000,
+) {
+  let lastError: Error | undefined;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await sender({});
+      return { success: true, response };
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      const shouldRetry = shouldRetryGatewayError(lastError) && attempt < maxAttempts;
+      logger.warn?.(`Gateway attempt ${attempt}/${maxAttempts} failed for merchantTransactionReference=${merchantTransactionReference}: ${lastError.message}`);
+      if (!shouldRetry) {
+        break;
+      }
+      const delayMs = Math.min(baseDelayMs * 2 ** (attempt - 1), 4000);
+      if (delayMs > 0) {
+        logger.warn?.(`Waiting ${delayMs}ms before retry ${attempt + 1}/${maxAttempts} for merchantTransactionReference=${merchantTransactionReference}`);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
+  logger.error?.(`Gateway delivery failed after ${maxAttempts} attempts for merchantTransactionReference=${merchantTransactionReference}`);
+  return {
+    success: false,
+    message: `Gateway delivery failed after ${maxAttempts} attempts`,
+    error: lastError?.message ?? 'Unknown gateway error',
+  };
 }
 
 function toPublicPaymentDetails(payment: any) {
@@ -182,6 +238,11 @@ export async function initiateOperation(
     await validateSettlementData(data, repository, logger, supportedCurrencies);
     logger.log(`Payload validation passed for merchantTransactionReference=${data.merchantTransactionReference}`);
 
+    const payAssureReference = generatePayAssureReference();
+    const internalMerchantTransactionReference = generateInternalMerchantTransactionReference();
+    logger.log(`Creating primary settlement with payAssureReference=${payAssureReference}, internalReference=${internalMerchantTransactionReference}`);
+    const primarySettlement = await repository.createSettlement(businessId, integrationId, payAssureReference, internalMerchantTransactionReference, data);
+
     if (data.paymentMethod?.type?.toUpperCase() === 'MPESA') {
       const mobileNumber = data.paymentMethod.payerPhoneNumber;
       const amount = Number(data.totalAmount);
@@ -205,7 +266,54 @@ export async function initiateOperation(
 
       logger.log(`Sending STK push request to payment gateway for merchantTransactionReference=${data.merchantTransactionReference}`);
       logger.log(`Gateway request payload: ${JSON.stringify(gatewayRequestPayload)}`);
-      const gatewayResponse = await sendStkPushRequest(gatewayRequestPayload);
+      const gatewayResult = await sendStkPushRequestWithRetry(
+        async (payload) => sendStkPushRequest({ ...gatewayRequestPayload, ...payload }),
+        logger,
+        data.merchantTransactionReference,
+        3,
+        1000,
+      );
+
+      if (!gatewayResult.success) {
+        logger.warn(`Gateway delivery failed after retries for merchantTransactionReference=${data.merchantTransactionReference}`);
+        await repository.updateSettlementStatus(primarySettlement.id, SettlementStatus.INITIATED, {
+          metadata: {
+            ...(data.metadata ?? {}),
+            paymentGateway: {
+              request: {
+                ...gatewayRequestPayload,
+                mobileNumber,
+                amount,
+                accountReference,
+                transactionDesc,
+              },
+              response: gatewayResult,
+            },
+            gatewayPending: true,
+            gatewayPendingReason: gatewayResult.error ?? 'Gateway unavailable',
+          },
+        });
+        await repository.touchSession(session.id);
+        return {
+          success: false,
+          settlement: {
+            settlementId: primarySettlement.id,
+            merchantId: retailerMerchantId,
+            status: SettlementStatus.INITIATED,
+            amount: Number(data.totalAmount),
+            retailerAmount: 0,
+            supplierAmount: Number(data.totalAmount),
+            systemAmount: 0,
+            paymentDetails: toPublicPaymentDetails(data.paymentMethod),
+            currency: data.currency,
+            reference: primarySettlement.reference,
+            createdAt: primarySettlement.createdAt,
+            estimatedProcessingTime: 'N/A',
+          },
+          message: 'Gateway delivery failed after retries. Settlement is pending gateway retry.',
+        };
+      }
+
       logger.log(`STK push gateway response received for merchantTransactionReference=${data.merchantTransactionReference}`);
 
       data.metadata = {
@@ -218,15 +326,10 @@ export async function initiateOperation(
             accountReference,
             transactionDesc,
           },
-          response: gatewayResponse,
+          response: gatewayResult.response,
         },
       };
     }
-
-    const payAssureReference = generatePayAssureReference();
-    const internalMerchantTransactionReference = generateInternalMerchantTransactionReference();
-    logger.log(`Creating primary settlement with payAssureReference=${payAssureReference}, internalReference=${internalMerchantTransactionReference}`);
-    const primarySettlement = await repository.createSettlement(businessId, integrationId, payAssureReference, internalMerchantTransactionReference, data);
 
     await repository.touchSession(session.id);
     logger.log(`Session touched (lastUsedAt updated) for sessionId=${session.id}`);

@@ -7,6 +7,7 @@ import { InitiateSettlementDto } from './initiate-settlement.dto';
 import { AuthService } from '../../auth/auth.service';
 import { OnbordingsService } from '../../onbordings/onbordings.service';
 import { SettlementService } from '../settlement.service';
+import { sendStkPushRequestWithRetry } from '../operations/initiate.operation';
 
 class StubAuthRepository {
   async findByIdentifier() {
@@ -65,6 +66,28 @@ class StubSettlementRepository {
   async findSettlementsByBusinessId() { return []; }
   async updateSettlementStatus() { return { id: 'settlement-1' }; }
 }
+
+test('retries gateway delivery three times before returning a failed result', async () => {
+  console.log('step 1: verify gateway attempts are retried before failing');
+  let attempts = 0;
+
+  const result = await sendStkPushRequestWithRetry(
+    async () => {
+      attempts += 1;
+      throw new Error('ECONNRESET: connection reset by peer');
+    },
+    { log: () => undefined } as any,
+    'TXN-RETRY-001',
+    3,
+    0,
+  );
+
+  assert.equal(result.success, false);
+  assert.equal(attempts, 3);
+  assert.ok(result.message, 'expected a failure message');
+  assert.match(result.message ?? '', /failed after 3 attempts/i);
+  console.log('step 1 passed: gateway failures are retried and surfaced as failed');
+});
 
 test('rejects settlement payload without supplier allocations', async () => {
   console.log('step 1: validate an empty supplier allocation payload');
