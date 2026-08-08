@@ -62,8 +62,16 @@ export class SettlementRepository implements OnModuleDestroy {
     return this.settlements.findSettlementByBusinessAndPayloadReference(businessId, payloadMerchantTransactionReference);
   }
 
+  async findSettlementByReference(reference: string) {
+    return this.settlements.findSettlementByReference(reference);
+  }
+
   async findSettlementsByBusinessId(businessId: string, skip = 0, take = 10) {
     return this.settlements.findSettlementsByBusinessId(businessId, skip, take);
+  }
+
+  async findSettlementsBySupplierMerchantId(merchantId: string) {
+    return this.settlements.findSettlementsBySupplierMerchantId(merchantId);
   }
 
   async updateSettlementStatus(id: string, status: any, updates?: Record<string, any>) {

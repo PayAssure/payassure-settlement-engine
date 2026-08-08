@@ -1,0 +1,1031 @@
+{
+  "info": {
+    "name": "PayAssure API",
+    "description": "OpenAPI specification for PayAssure settlement and onboarding APIs",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "POST /settlement/authenticate",
+      "item": [
+        {
+          "name": "Authenticate business with API credentials",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/settlement/authenticate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "settlement",
+                "authenticate"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "POST /settlement/initiate-settlement",
+      "item": [
+        {
+          "name": "Initiate a settlement request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-settlement-session",
+                "value": "",
+                "description": "Settlement session token obtained from settlement authenticate. This is not a bearer token."
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              },
+              {
+                "key": "x-settlement-session",
+                "value": "{{settlementSessionToken}}",
+                "description": "Settlement session token"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantId\": \"pay_d68f568ddc7d7b2a\",\n  \"merchantTransactionReference\": \"TXN-20260703-000001\",\n  \"totalAmount\": 16500,\n  \"currency\": \"KES\",\n  \"settlementMethod\": \"BANK_TRANSFER\",\n  \"description\": \"Daily settlement batch\",\n  \"paymentMethod\": {\n    \"type\": \"MPESA\",\n    \"payerPhoneNumber\": \"254712345678\",\n    \"provider\": \"Safaricom\"\n  },\n  \"callbackUrl\": \"https://merchant.example.com/api/payassure/callback\",\n  \"transactionDate\": \"2026-07-03T17:30:15+03:00\",\n  \"metadata\": {\n    \"branchId\": \"BR-01\",\n    \"terminalId\": \"POS-03\"\n  },\n  \"suppliers\": [\n    {\n      \"supplierMerchantId\": \"SUP-1001\",\n      \"supplierTotalAmount\": 7200,\n      \"retailerTotalAmount\": 900,\n      \"platformFee\": 64.8\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/settlement/initiate-settlement",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "settlement",
+                "initiate-settlement"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "POST /settlement/payment-callback",
+      "item": [
+        {
+          "name": "Handle customer payment callback",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantTransactionReference\": \"TXN-20260703-000001\",\n  \"status\": \"SUCCESS\",\n  \"provider\": \"M-PESA\",\n  \"providerReference\": \"MPESA-12345\",\n  \"amount\": 16500,\n  \"currency\": \"KES\",\n  \"metadata\": {\n    \"source\": \"payment-provider\",\n    \"note\": \"Simulated callback\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/settlement/payment-callback",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "settlement",
+                "payment-callback"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "POST /settlement/ledger/simulate-payouts",
+      "item": [
+        {
+          "name": "Simulate fake B2B ledger payouts after callback",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchantTransactionReference\": \"TXN-20260703-000001\",\n  \"simulationStatus\": \"PAID\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/settlement/ledger/simulate-payouts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "settlement",
+                "ledger",
+                "simulate-payouts"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "GET /settlement/track/{settlementId}",
+      "item": [
+        {
+          "name": "Track settlement status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/settlement/track/{settlementId}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "settlement",
+                "track",
+                "{settlementId}"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "GET /settlement/transactions/{transactionId}",
+      "item": [
+        {
+          "name": "Get transaction details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/settlement/transactions/{transactionId}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "settlement",
+                "transactions",
+                "{transactionId}"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "POST /settlement/reconcile",
+      "item": [
+        {
+          "name": "Reconcile settlement",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/settlement/reconcile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "settlement",
+                "reconcile"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "POST /settlement/scenarios/run",
+      "item": [
+        {
+          "name": "Run a documented settlement scenario from Swagger",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/settlement/scenarios/run",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "settlement",
+                "scenarios",
+                "run"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "GET /settlement/health",
+      "item": [
+        {
+          "name": "Get settlement module health status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/settlement/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "settlement",
+                "health"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "POST /supplier/authenticate",
+      "item": [
+        {
+          "name": "Authenticate a supplier with API credentials",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/supplier/authenticate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "supplier",
+                "authenticate"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "GET /supplier/settlements",
+      "item": [
+        {
+          "name": "List supplier settlements",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-supplier-session",
+                "value": "",
+                "description": "Supplier session token returned from supplier authentication."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/supplier/settlements",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "supplier",
+                "settlements"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "POST /onbordings",
+      "item": [
+        {
+          "name": "Create a retailer or supplier onboarding record",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/onbordings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "onbordings"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "GET /onbordings",
+      "item": [
+        {
+          "name": "List onboarding participants",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/onbordings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "onbordings"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "POST /onbordings/generate-keys",
+      "item": [
+        {
+          "name": "Generate API keys for the authenticated user",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/onbordings/generate-keys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "onbordings",
+                "generate-keys"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "GET /onbordings/keys",
+      "item": [
+        {
+          "name": "View API keys for the authenticated user",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/onbordings/keys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "onbordings",
+                "keys"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "GET /onbordings/{id}",
+      "item": [
+        {
+          "name": "Get an onboarding participant by id",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/onbordings/{id}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "onbordings",
+                "{id}"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "PATCH /onbordings/{id}",
+      "item": [
+        {
+          "name": "Update an onboarding participant",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/onbordings/{id}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "onbordings",
+                "{id}"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "DELETE /onbordings/{id}",
+      "item": [
+        {
+          "name": "Delete an onboarding participant",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/onbordings/{id}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "onbordings",
+                "{id}"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "PATCH /onbordings/{id}/activate",
+      "item": [
+        {
+          "name": "Activate a business onboarding participant",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/onbordings/{id}/activate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "onbordings",
+                "{id}",
+                "activate"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "PATCH /onbordings/{id}/webhook",
+      "item": [
+        {
+          "name": "Update the webhook URL for a participant integration",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/onbordings/{id}/webhook",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "onbordings",
+                "{id}",
+                "webhook"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "PATCH /onbordings/{id}/payment",
+      "item": [
+        {
+          "name": "Update the payout destination for a participant",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/onbordings/{id}/payment",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "onbordings",
+                "{id}",
+                "payment"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "PATCH /onbordings/{id}/payment/activate",
+      "item": [
+        {
+          "name": "Activate a pending payout destination using the generated secret",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/onbordings/{id}/payment/activate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "onbordings",
+                "{id}",
+                "payment",
+                "activate"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "POST /auth/register",
+      "item": [
+        {
+          "name": "Register a new admin user",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "POST /auth/register-before-onboarding",
+      "item": [
+        {
+          "name": "Register a user account before onboarding",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register-before-onboarding",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register-before-onboarding"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "POST /auth/onboarded-register",
+      "item": [
+        {
+          "name": "Register a user after onboarding",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/onboarded-register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "onboarded-register"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "POST /auth/login",
+      "item": [
+        {
+          "name": "Authenticate a user",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "GET /auth/users",
+      "item": [
+        {
+          "name": "Get all users with filtering",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "users"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "POST /auth/refresh",
+      "item": [
+        {
+          "name": "Refresh an access token",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "POST /auth/logout",
+      "item": [
+        {
+          "name": "Logout the current user",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "DELETE /auth/{id}",
+      "item": [
+        {
+          "name": "Delete a user",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwtToken}}",
+                "description": "Bearer access token"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/{id}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "{id}"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "GET /payassure/health",
+      "item": [
+        {
+          "name": "Get payassure health status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/payassure/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payassure",
+                "health"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    }
+  ]
+}

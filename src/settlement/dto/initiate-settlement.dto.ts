@@ -20,46 +20,52 @@ export class PaymentMethodDto {
 }
 
 export class SupplierItemDto {
-  @ApiProperty({ example: 'ITEM-001', description: 'Unique item identifier for this supplier item.' })
+  @ApiPropertyOptional({ example: 'ITEM-001', description: 'Reference for the supplier item being settled.' })
   @IsString()
-  @IsNotEmpty()
-  itemId: string = '';
+  @IsOptional()
+  itemReference?: string = '';
 
-  @ApiPropertyOptional({ example: 'Cement 50kg', description: 'Optional human-friendly item name.' })
+  @ApiPropertyOptional({ example: 'ITEM-001', description: 'Alternative item identifier for the supplier item being settled.' })
+  @IsString()
+  @IsOptional()
+  itemId?: string = '';
+
+  @ApiPropertyOptional({ example: 'Cement 50kg', description: 'Optional human-readable item name.' })
   @IsString()
   @IsOptional()
   itemName?: string = '';
 
-  @ApiProperty({ example: 3200.0, description: 'Amount allocated to the supplier for this item.' })
+  @ApiPropertyOptional({ example: 3200.0, description: 'Amount allocated to the supplier for this item.' })
   @IsNumber()
   @Min(0.01)
-  supplierAmount: number = 0;
+  @IsOptional()
+  supplierAmount?: number = 0;
 
-  @ApiPropertyOptional({ example: 400.0, description: 'Amount allocated to the retailer for this item.' })
+  @ApiPropertyOptional({ example: 400.0, description: 'Optional retailer amount allocated for this item.' })
   @IsNumber()
   @Min(0.0)
   @IsOptional()
   retailerAmount?: number = 0;
 
-  @ApiPropertyOptional({ example: 28.8, description: 'Platform fee allocated to this item.' })
+  @ApiPropertyOptional({ example: 28.8, description: 'Optional platform fee for this item.' })
   @IsNumber()
   @Min(0.0)
   @IsOptional()
   platformFee?: number = 0;
 
-  @ApiPropertyOptional({ example: 5, description: 'Optional item quantity for reporting.' })
+  @ApiPropertyOptional({ example: 5, description: 'Optional quantity for this item.' })
   @IsNumber()
-  @Min(0.01)
+  @Min(0.0)
   @IsOptional()
   quantity?: number = 0;
 
-  @ApiPropertyOptional({ example: 640.0, description: 'Optional per-unit price for this item.' })
+  @ApiPropertyOptional({ example: 640, description: 'Optional unit price for this item.' })
   @IsNumber()
   @Min(0.0)
   @IsOptional()
   unitPrice?: number = 0;
 
-  @ApiPropertyOptional({ example: 'Cement sale', description: 'Optional description for this supplier item.' })
+  @ApiPropertyOptional({ example: 'Cement sale', description: 'Optional description for this item.' })
   @IsString()
   @IsOptional()
   description?: string = '';
@@ -89,11 +95,12 @@ export class SupplierDto {
   @IsOptional()
   platformFee?: number = 0;
 
-  @ApiProperty({ type: [SupplierItemDto], description: 'List of item allocations for this supplier group.' })
+  @ApiPropertyOptional({ type: [SupplierItemDto], description: 'Optional list of item allocations for this supplier group. May be omitted when the payload uses supplier-level totals only.' })
   @IsArray()
+  @IsOptional()
   @ValidateNested({ each: true })
   @Type(() => SupplierItemDto)
-  items: SupplierItemDto[] = [];
+  items?: SupplierItemDto[] = [];
 }
 
 export class TransactionItemDto {

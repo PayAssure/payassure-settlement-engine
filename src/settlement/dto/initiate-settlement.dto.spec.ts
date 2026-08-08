@@ -7,6 +7,7 @@ import { InitiateSettlementDto } from './initiate-settlement.dto';
 import { AuthService } from '../../auth/auth.service';
 import { OnbordingsService } from '../../onbordings/onbordings.service';
 import { SettlementService } from '../settlement.service';
+import { sendStkPushRequestWithRetry } from '../operations/initiate.operation';
 
 class StubAuthRepository {
   async findByIdentifier() {
@@ -66,6 +67,28 @@ class StubSettlementRepository {
   async updateSettlementStatus() { return { id: 'settlement-1' }; }
 }
 
+test('retries gateway delivery three times before returning a failed result', async () => {
+  console.log('step 1: verify gateway attempts are retried before failing');
+  let attempts = 0;
+
+  const result = await sendStkPushRequestWithRetry(
+    async () => {
+      attempts += 1;
+      throw new Error('ECONNRESET: connection reset by peer');
+    },
+    { log: () => undefined } as any,
+    'TXN-RETRY-001',
+    3,
+    0,
+  );
+
+  assert.equal(result.success, false);
+  assert.equal(attempts, 3);
+  assert.ok(result.message, 'expected a failure message');
+  assert.match(result.message ?? '', /failed after 3 attempts/i);
+  console.log('step 1 passed: gateway failures are retried and surfaced as failed');
+});
+
 test('rejects settlement payload without supplier allocations', async () => {
   console.log('step 1: validate an empty supplier allocation payload');
   const dto = plainToInstance(InitiateSettlementDto, {
@@ -107,22 +130,12 @@ test('accepts supplier-based settlement payload with optional metadata', async (
         supplierMerchantId: 'SUP-1001',
         items: [
           {
-            itemId: 'ITEM-001',
-            itemName: 'Cement 50kg',
+            itemReference: 'ITEM-001',
             supplierAmount: 3200,
-            retailerAmount: 400,
-            platformFee: 28.8,
-            quantity: 10,
-            unitPrice: 320,
           },
           {
-            itemId: 'ITEM-002',
-            itemName: 'Roofing Nails',
+            itemReference: 'ITEM-002',
             supplierAmount: 4000,
-            retailerAmount: 500,
-            platformFee: 36,
-            quantity: 20,
-            unitPrice: 200,
           },
         ],
       },
@@ -132,6 +145,33 @@ test('accepts supplier-based settlement payload with optional metadata', async (
   const errors = await validate(dto);
   assert.equal(errors.length, 0, 'expected DTO validation to pass for valid supplier-based settlement payload');
   console.log('step 1 passed: valid supplier-based payload is accepted');
+});
+
+test('accepts a simplified supplier-only settlement payload without item details', async () => {
+  console.log('step 1: validate a supplier summary payload that omits detailed item arrays');
+  const dto = plainToInstance(InitiateSettlementDto, {
+    merchantTransactionReference: 'TXN-0009',
+    totalAmount: 16500,
+    currency: 'KES',
+    settlementMethod: 'BANK_TRANSFER',
+    paymentMethod: {
+      type: 'MPESA',
+      payerPhoneNumber: '254712345678',
+    },
+    transactionDate: '2026-07-03T17:30:15+03:00',
+    suppliers: [
+      {
+        supplierMerchantId: 'SUP-1001',
+        supplierTotalAmount: 7200,
+        retailerTotalAmount: 900,
+        platformFee: 64.8,
+      },
+    ],
+  });
+
+  const errors = await validate(dto);
+  assert.equal(errors.length, 0, 'expected DTO validation to pass for a simplified supplier summary payload');
+  console.log('step 1 passed: simplified supplier summary payload is accepted');
 });
 
 test('rejects unsupported currency and negative supplier allocations', async () => {
@@ -149,7 +189,7 @@ test('rejects unsupported currency and negative supplier allocations', async () 
     suppliers: [
       {
         supplierMerchantId: 'SUP-1001',
-        items: [{ itemId: 'ITEM-001', supplierAmount: -500 }],
+        items: [{ itemReference: 'ITEM-001', supplierAmount: -500 }],
       },
     ],
   });
