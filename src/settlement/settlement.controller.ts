@@ -228,13 +228,25 @@ export class SettlementController {
       throw new UnauthorizedException({ statusCode: 401, message: 'Missing signature headers', error: 'UNAUTHORIZED' });
     }
 
-    const bodyString = JSON.stringify(body);
+    const signatureBody = {
+      paymentId: body.paymentId,
+      settlementId: body.settlementId,
+      status: body.status,
+      provider: body.provider,
+      paidAmount: body.paidAmount,
+      paidAt: body.paidAt,
+    } as Record<string, unknown>;
+    const bodyString = JSON.stringify(signatureBody);
     const expectedSignature = crypto.createHmac('sha256', expectedSecret).update(bodyString).digest('hex');
 
-    this.logger.log(`[CONFIRMATION][AUTH] computed signature=${expectedSignature} expectedToken=${expectedToken ?? 'missing'} expectedSecret=${expectedSecret ? 'configured' : 'missing'} for ${body.settlementId}`);
+    this.logger.log(
+      `[CONFIRMATION][AUTH] signingMethod=crypto.createHmac('sha256', secret).update(bodyString).digest('hex') secretSource=${expectedSecret ? 'configured' : 'missing'} bodyString=${bodyString} algorithm=HMAC-SHA256 computedSignature=${expectedSignature} expectedToken=${expectedToken ?? 'missing'} timestamp=${timestamp} token=${authorization} for ${body.settlementId}`,
+    );
 
     if (expectedSignature !== signature) {
-      this.logger.warn(`[CONFIRMATION][AUTH] signature mismatch for ${body.settlementId}: expected=${expectedSignature} received=${signature} timestamp=${timestamp} token=${authorization}`);
+      this.logger.warn(
+        `[CONFIRMATION][AUTH] signature mismatch for ${body.settlementId}: expected=${expectedSignature} received=${signature} signingMethod=crypto.createHmac('sha256', secret).update(bodyString).digest('hex') bodyString=${bodyString} algorithm=HMAC-SHA256 timestamp=${timestamp} token=${authorization}`,
+      );
       throw new UnauthorizedException({ statusCode: 401, message: 'Invalid signature', error: 'UNAUTHORIZED' });
     }
 

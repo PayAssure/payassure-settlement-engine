@@ -61,23 +61,48 @@ If the header is missing, malformed, or does not match the configured token, the
 
 ### 2. Signature validation
 
-The signature is calculated as an HMAC-SHA256 over the configured secret alone.
+The signature is calculated as an HMAC-SHA256 digest over the exact JSON request body string, using the configured signature secret as the key.
 
 The exact process is:
 
-1. Take the configured signature secret.
-2. Compute `HMAC-SHA256(secret, '')`.
-3. Convert the digest to hexadecimal.
-4. Compare the resulting hex string to the value sent in `X-PayAssure-Signature`.
+1. Resolve the signature secret using environment variable precedence:
+   - `PAYMENT_GATEWAY_SIGNATURE_SECRET`
+   - `SETTLEMENT_SIGNATURE_SECRET`
+   - `PAYASSURE_INTERNAL_SECRET`
+2. Serialize the request body with `JSON.stringify(body)` exactly as sent.
+3. Compute the HMAC with SHA-256 using the resolved secret as key:
+   - `crypto.createHmac('sha256', secret).update(bodyString).digest('hex')`
+4. Compare the resulting hex string exactly to the value sent in the `X-PayAssure-Signature` header.
 
-This means the sender and receiver only need to share the same secret. The body content is not part of the signature computation.
+This means the sender and receiver must share the same secret and must serialize the body identically before signing. The body content is part of the signature computation, not ignored.
 
-Signature secret precedence:
-1. PAYMENT_GATEWAY_SIGNATURE_SECRET
-2. SETTLEMENT_SIGNATURE_SECRET
-3. PAYASSURE_INTERNAL_SECRET
+If the computed signature and the header value do not match, the request is rejected with 401 Unauthorized.
 
-The provided signature header must exactly match the computed signature. If it does not, the request is rejected with 401 Unauthorized.
+### Example full payload used for signature generation
+
+The following is a complete example of the request body that should be signed:
+
+```json
+{
+  "settlementId": "TXN-20260703-00000001",
+  "paymentId": "pay_001",
+  "status": "PAID",
+  "provider": "MPESA",
+  "paidAmount": 2,
+  "paidAt": "2026-08-08T14:47:46.000Z",
+  "providerReference": {
+    "checkoutRequestId": "ws_CO_123456789",
+    "merchantRequestId": "MERCHANT_123456789",
+    "receiptNumber": "RCP-001"
+  }
+}
+```
+
+The signature is computed over the exact serialized string produced by `JSON.stringify(body)` using the configured secret as the HMAC key. When logging the expected signature, the log should include the full body string and all signing inputs used to produce it. For example:
+
+```text
+[Nest] 14811  - 08/08/2026, 2:47:46 PM     LOG [SettlementController] [CONFIRMATION][AUTH] computed signature=847880998a1b5e701bf6c6eb9f897c4491a717a5dfb925275934bdf47edcd0af expectedToken=payssure_api_token_for_settlement expectedSecret=configured body={"settlementId":"TXN-20260703-00000001","paymentId":"pay_001","status":"PAID","provider":"MPESA","paidAmount":2,"paidAt":"2026-08-08T14:47:46.000Z","providerReference":{"checkoutRequestId":"ws_CO_123456789","merchantRequestId":"MERCHANT_123456789","receiptNumber":"RCP-001"}} algorithm=HMAC-SHA256 timestamp=1786189666 token=Bearer payssure_api_token_for_settlement
+```
 
 ### 3. Timestamp validation
 
@@ -119,7 +144,7 @@ X-PayAssure-Signature: <64-character-hex-hmac>
 X-PayAssure-Timestamp: 1784962913
 ```
 
-The body must be sent as JSON, but the signature is generated from the secret alone and does not depend on the payload content.
+The body must be sent as JSON, and the signature is generated from the exact serialized body string plus the shared secret. The payload content therefore directly participates in the signature computation.
 
 ## Implementation notes
 
@@ -128,3 +153,39 @@ The token and signature secret resolution logic is centralized in:
 - src/settlement/helpers/settlement-confirmation-credentials.ts
 
 This keeps the incoming verification logic and any outgoing confirmation sender aligned with the same environment variable precedence.
+
+## Example settlement initiation payload with totalAmount = 2
+
+A sample payload for initiating a settlement request with a total amount of `2` KES:
+
+```json
+{
+  "merchantId": "pay_d68f568ddc7d7b2a",
+  "merchantTransactionReference": "TXN-20260703-0000001",
+  "totalAmount": 2,
+  "currency": "KES",
+  "settlementMethod": "BANK_TRANSFER",
+  "description": "Daily settlement batch",
+  "paymentMethod": {
+    "type": "MPESA",
+    "payerPhoneNumber": "254791614036",
+    "provider": "Safaricom"
+  },
+  "callbackUrl": "http://localhost:3000/settlement/internal/settlements/payment-confirmation
+",
+  "transactionDate": "2026-07-03T17:30:15+03:00",
+  "metadata": {
+    "branchId": "BR-01",
+    "terminalId": "POS-03"
+  },
+  "suppliers": [
+    {
+      "supplierMerchantId": "pay_d68f568ddc7d7b2a",
+      "supplierTotalAmount": 1,
+      "retailerTotalAmount": 1,
+      "platformFee": 0
+    }
+  ]
+}
+
+```
