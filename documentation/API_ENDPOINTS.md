@@ -292,12 +292,10 @@ Base path: /onbordings
   - 401 Unauthorized
   - 404 Not Found
 
-### 11) PATCH /onbordings/:id/payment/activate
-- Purpose: Activate a pending payment destination with a secret.
+### 11) PATCH /onbordings/payment/activate
+- Purpose: Activate a pending payment destination with a secret for the authenticated user.
 - Required headers:
   - Authorization: Bearer <jwt>
-- Path parameters:
-  - id: string
 - Request body:
   - paymentActivationSecret: string
 - Success response:

@@ -1,5 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ParticipantStatus, ParticipantType, PrismaClient } from '@prisma/client';
+import { request as httpsRequest } from 'https';
+import { request as httpRequest } from 'http';
 import { SettlementRepository } from './settlement.repository';
 import { AuthenticateDto } from './dto/authenticate.dto';
 import { InitiateSettlementDto } from './dto/initiate-settlement.dto';
@@ -19,16 +21,19 @@ import { getTransactionOperation } from './operations/get-transaction.operation'
 import { reconcileOperation } from './operations/reconcile.operation';
 import { generateSessionToken, hashCredential } from './helpers/reference.helpers';
 
-interface FakeB2bPayoutRecord {
-  transactionId: string;
-  reference: string;
-  settlementReference?: string;
-  merchantTransactionReference?: string;
-  status: 'PROCESSING' | 'SUCCESS' | 'FAILED';
-  providerReference?: string;
-  payload: Record<string, any>;
-  createdAt: string;
-  updatedAt: string;
+interface B2bPayoutRecipient {
+  type: string;
+  provider?: string | null;
+  shortcode?: string | null;
+  accountName?: string | null;
+  payerPhoneNumber?: string | null;
+}
+
+interface B2bGatewayResponse {
+  success: boolean;
+  statusCode?: number;
+  response?: any;
+  error?: string;
 }
 
 @Injectable()
@@ -37,7 +42,6 @@ export class SettlementService {
   private readonly logger = new Logger(SettlementService.name);
   private readonly TOKEN_EXPIRY = 3600; // 1 hour in seconds
   private readonly SUPPORTED_CURRENCIES = ['KES', 'USD', 'TZS'];
-  private readonly fakeB2bPayouts = new Map<string, FakeB2bPayoutRecord>();
 
   constructor(private readonly repository: SettlementRepository) {
     this.prisma = new PrismaClient();
@@ -246,6 +250,330 @@ export class SettlementService {
     };
   }
 
+  private async getB2bGatewayBaseUrl(): Promise<string | null> {
+    const baseUrl = process.env.B2B_GATEWAY_BASE_URL || process.env.GATEWAY_BASE_URL;
+    return baseUrl ? baseUrl.replace(/\/+$/, '') : null;
+  }
+
+  private getB2bPayoutCallbackUrl(): string | null {
+    const callbackBase = process.env.B2B_PAYOUT_CALLBACK_URL || process.env.PAYMENT_GATEWAY_CALLBACK_URL || process.env.MPESA_CALLBACK_URL;
+    return callbackBase ? callbackBase.replace(/\/+$/, '') + '/settlement/payouts/callback' : null;
+  }
+
+  private getB2bGatewayApiToken(): string | null {
+    return process.env.B2B_GATEWAY_API_TOKEN || process.env.PAYMENT_GATEWAY_API_TOKEN || process.env.SETTLEMENT_API_TOKEN || null;
+  }
+
+  private async sendB2bGatewayPayoutRequest(payload: Record<string, any>): Promise<B2bGatewayResponse> {
+    const gatewayBaseUrl = await this.getB2bGatewayBaseUrl();
+    if (!gatewayBaseUrl) {
+      this.logger.warn('[B2B][DISPATCH] B2B gateway base URL is not configured. Dispatch request will be recorded but not sent.');
+      return { success: false, error: 'B2B_GATEWAY_BASE_URL_NOT_CONFIGURED' };
+    }
+
+    const payoutPath = process.env.B2B_GATEWAY_PAYOUT_PATH ?? '/api/payments/mpesa/b2b';
+    const url = new URL(payoutPath, gatewayBaseUrl);
+    const body = JSON.stringify(payload);
+    const clientRequest = url.protocol === 'http:' ? httpRequest : httpsRequest;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body).toString(),
+    };
+
+    const apiToken = this.getB2bGatewayApiToken();
+    if (apiToken) {
+      headers.Authorization = `Bearer ${apiToken}`;
+    }
+
+    return new Promise<B2bGatewayResponse>((resolve) => {
+      const req = clientRequest(
+        url,
+        {
+          method: 'POST',
+          headers,
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+          res.on('end', () => {
+            const raw = Buffer.concat(chunks).toString('utf8');
+            const statusCode = res.statusCode ?? 0;
+            if (statusCode >= 200 && statusCode < 300) {
+              try {
+                const parsed = raw ? JSON.parse(raw) : {};
+                return resolve({ success: true, statusCode, response: parsed });
+              } catch (error) {
+                return resolve({ success: true, statusCode, response: raw });
+              }
+            }
+            let response: any = raw;
+            try {
+              response = raw ? JSON.parse(raw) : raw;
+            } catch (_err) {
+              response = raw;
+            }
+            resolve({ success: false, statusCode, response, error: `Gateway returned ${statusCode}` });
+          });
+        },
+      );
+
+      req.setTimeout(30000, () => {
+        req.destroy(new Error('B2B gateway request timed out after 30000ms'));
+      });
+      req.on('error', (err) => {
+        resolve({ success: false, error: err instanceof Error ? err.message : String(err) });
+      });
+      req.write(body);
+      req.end();
+    });
+  }
+
+  private async resolveB2bRecipient(settlement: any, party: 'SUPPLIER' | 'RETAILER', supplierMerchantId?: string): Promise<B2bPayoutRecipient> {
+    if (party === 'RETAILER') {
+      const participant = await this.prisma.onboardingParticipant.findUnique({ where: { id: settlement.businessId } });
+      if (!participant) {
+        throw new NotFoundException({ statusCode: 404, message: 'Retailer participant not found for this settlement', error: 'RETAILER_NOT_FOUND' });
+      }
+      const payment = (participant.payment ?? null) as any;
+      if (!payment) {
+        throw new BadRequestException({ statusCode: 400, message: 'Retailer payout destination is not configured', error: 'RETAILER_PAYMENT_NOT_CONFIGURED' });
+      }
+      return {
+        type: payment.type,
+        provider: payment.provider ?? null,
+        shortcode: payment.shortcode ?? null,
+        accountName: payment.accountName ?? null,
+        payerPhoneNumber: payment.payerPhoneNumber ?? null,
+      };
+    }
+
+    const supplierId = supplierMerchantId ?? settlement.metadata?.supplierMerchantId ?? settlement.paymentPayload?.suppliers?.[0]?.supplierMerchantId;
+    if (!supplierId) {
+      throw new BadRequestException({ statusCode: 400, message: 'Supplier merchant ID is required for supplier payouts', error: 'SUPPLIER_MERCHANT_ID_REQUIRED' });
+    }
+
+    const payment = (settlement.paymentSnapshot ?? null) as any;
+    if (payment && payment.type) {
+      return {
+        type: payment.type,
+        provider: payment.provider ?? null,
+        shortcode: payment.shortcode ?? null,
+        accountName: payment.accountName ?? null,
+        payerPhoneNumber: payment.payerPhoneNumber ?? null,
+      };
+    }
+
+    const supplierIntegration = await this.repository.findIntegrationByMerchantId(supplierId);
+    if (!supplierIntegration?.participant) {
+      throw new NotFoundException({ statusCode: 404, message: 'Supplier integration or payout destination not found', error: 'SUPPLIER_PAYMENT_NOT_FOUND' });
+    }
+
+    const supplierPayment = (supplierIntegration.participant.payment ?? null) as any;
+    if (!supplierPayment) {
+      throw new BadRequestException({ statusCode: 400, message: 'Supplier payout destination is not configured', error: 'SUPPLIER_PAYMENT_NOT_CONFIGURED' });
+    }
+
+    return {
+      type: supplierPayment.type,
+      provider: supplierPayment.provider ?? null,
+      shortcode: supplierPayment.shortcode ?? null,
+      accountName: supplierPayment.accountName ?? null,
+      payerPhoneNumber: supplierPayment.payerPhoneNumber ?? null,
+    };
+  }
+
+  async dispatchB2bPayouts(data: any): Promise<any> {
+    const settlement = await this.repository.findSettlementByReference(data.merchantTransactionReference);
+    if (!settlement) {
+      throw new NotFoundException({ statusCode: 404, message: 'Settlement not found for the provided merchant transaction reference', error: 'SETTLEMENT_NOT_FOUND' });
+    }
+    const existingMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
+
+    const callbackStatus = existingMetadata.paymentCallback?.status ?? existingMetadata.paymentConfirmation?.status;
+    if (!callbackStatus || !['SUCCESS', 'PAID'].includes(String(callbackStatus).toUpperCase())) {
+      throw new NotFoundException({ statusCode: 404, message: 'A successful payment callback or confirmation has not been recorded for this settlement', error: 'PAYMENT_NOT_CONFIRMED' });
+    }
+    const party = (String(data.party || (existingMetadata?.supplierMerchantId ? 'SUPPLIER' : 'RETAILER')).toUpperCase() as 'SUPPLIER' | 'RETAILER');
+    const recipient = await this.resolveB2bRecipient(settlement, party, data.supplierMerchantId);
+
+    if (recipient.type === 'BANK') {
+      if (!recipient.shortcode || !recipient.accountName) {
+        throw new BadRequestException({ statusCode: 400, message: 'Bank payouts require a recipient shortcode and accountName', error: 'BANK_PAYOUT_DETAILS_INCOMPLETE' });
+      }
+    }
+    if (recipient.type === 'MPESA') {
+      if (!recipient.payerPhoneNumber) {
+        throw new BadRequestException({ statusCode: 400, message: 'MPESA payouts require a recipient payerPhoneNumber', error: 'MPESA_PAYOUT_DETAILS_INCOMPLETE' });
+      }
+    }
+
+    let amount = Number(data.amount ?? 0);
+    if (amount <= 0) {
+      const allocation = Array.isArray(existingMetadata.allocationPlan?.allocations)
+        ? existingMetadata.allocationPlan.allocations.find((alloc: any) => alloc.party === party)
+        : null;
+      amount = Number(allocation?.amount ?? 0);
+    }
+
+    if (amount <= 0) {
+      throw new BadRequestException({ statusCode: 400, message: 'Payout amount must be greater than zero', error: 'INVALID_PAYOUT_AMOUNT' });
+    }
+
+    const roundedAmount = amount > 0 && amount < 1 ? 1 : Math.round(amount);
+    if (roundedAmount !== amount) {
+      this.logger.log(`[B2B][DISPATCH] payout amount rounded from ${amount} to ${roundedAmount} for settlement=${settlement.id} party=${party}`);
+    }
+
+    const payoutReference = data.payoutReference ?? `${settlement.merchantTransactionReference}-${party}-${Date.now()}`;
+    const callbackUrl = this.getB2bPayoutCallbackUrl();
+    const recipientShortCode = recipient.shortcode ?? recipient.payerPhoneNumber ?? null;
+
+    const requestPayload = {
+      reference: payoutReference,
+      merchantTransactionReference: settlement.merchantTransactionReference,
+      settlementReference: settlement.reference,
+      party,
+      amount: roundedAmount,
+      currency: settlement.currency ?? 'KES',
+      recipientShortCode,
+      accountReference: recipient.accountName,
+      remarks: `B2B payout to ${party}`,
+      description: `Settlement payout for ${party}`,
+      callbackUrl: callbackUrl ?? undefined,
+      recipientType: recipient.type,
+      recipientProvider: recipient.provider,
+      recipientPhoneNumber: recipient.payerPhoneNumber ?? undefined,
+      metadata: {
+        settlementId: settlement.id,
+        party,
+        supplierMerchantId: data.supplierMerchantId ?? existingMetadata?.supplierMerchantId ?? null,
+        ...((data.metadata ?? {}) as Record<string, any>),
+      },
+    };
+
+    this.logger.log(`[B2B][DISPATCH] settlement=${settlement.id} party=${party} amount=${amount} recipientShortCode=${recipientShortCode} accountReference=${recipient.accountName} callbackUrl=${callbackUrl ?? 'unset'}`);
+    this.logger.log(`[B2B][DISPATCH] payload=${JSON.stringify(requestPayload, null, 2)}`);
+    const gatewayResult = await this.sendB2bGatewayPayoutRequest(requestPayload);
+    this.logger.log(`[B2B][DISPATCH] payoutReference=${payoutReference} settled=${settlement.id} gatewayResult=${JSON.stringify(gatewayResult, null, 2)}`);
+
+    const payoutDispatches = Array.isArray(existingMetadata.payoutDispatches) ? existingMetadata.payoutDispatches : [];
+    const payoutDispatchAuditLog = Array.isArray(existingMetadata.payoutDispatchAuditLog) ? existingMetadata.payoutDispatchAuditLog : [];
+    const dispatchRecord = {
+      reference: payoutReference,
+      party,
+      status: gatewayResult.success ? 'DISPATCHED' : 'FAILED',
+      amount,
+      recipient,
+      requestPayload,
+      gatewayResult,
+      requestedAt: new Date().toISOString(),
+    };
+
+    const auditEntry = {
+      event: gatewayResult.success ? 'B2B_DISPATCH_SUCCESS' : 'B2B_DISPATCH_FAILURE',
+      payoutReference,
+      party,
+      settlementId: settlement.id,
+      merchantTransactionReference: settlement.merchantTransactionReference,
+      amount,
+      recipientShortCode,
+      accountReference: recipient.accountName,
+      callbackUrl: callbackUrl ?? null,
+      gatewayResultSummary: {
+        success: gatewayResult.success,
+        statusCode: gatewayResult.statusCode ?? null,
+        error: gatewayResult.error ?? null,
+      },
+      payloadHash: Buffer.from(JSON.stringify(requestPayload)).toString('base64'),
+      createdAt: new Date().toISOString(),
+    };
+
+    await this.repository.updateSettlementStatus(settlement.id, 'PROCESSING', {
+      metadata: {
+        ...existingMetadata,
+        payoutDispatches: [...payoutDispatches, dispatchRecord],
+        payoutDispatchAuditLog: [...payoutDispatchAuditLog, auditEntry],
+      },
+    });
+
+    return {
+      success: true,
+      status: dispatchRecord.status,
+      payoutReference,
+      gatewayResult,
+      dispatchRecord,
+    };
+  }
+
+  async handleB2bPayoutCallback(data: any): Promise<any> {
+    const settlement = await this.repository.findSettlementByReference(data.merchantTransactionReference);
+    if (!settlement) {
+      throw new NotFoundException({ statusCode: 404, message: 'Settlement not found for the provided merchant transaction reference', error: 'SETTLEMENT_NOT_FOUND' });
+    }
+
+    const party = (String(data.party || 'SUPPLIER').toUpperCase() as 'SUPPLIER' | 'RETAILER');
+    const payoutStatus = String(data.status || 'FAILED').toUpperCase();
+    const isSuccess = payoutStatus === 'SUCCESS' || payoutStatus === 'PAID';
+    const status = isSuccess ? 'PAID' : 'FAILED';
+
+    const existingMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
+    const currentAllocation = Array.isArray(existingMetadata.allocationPlan?.allocations)
+      ? existingMetadata.allocationPlan.allocations.map((allocation: any) => {
+          if (allocation.party === party) {
+            return {
+              ...allocation,
+              status,
+              paidAt: new Date().toISOString(),
+              payoutReference: data.reference,
+              payoutStatus: status,
+            };
+          }
+          return allocation;
+        })
+      : [];
+
+    const payoutCallback = {
+      transactionId: data.transactionId,
+      reference: data.reference,
+      merchantTransactionReference: data.merchantTransactionReference,
+      settlementReference: settlement.reference,
+      party,
+      supplierMerchantId: data.supplierMerchantId ?? existingMetadata?.supplierMerchantId ?? null,
+      status,
+      providerReference: data.providerReference ?? null,
+      amount: data.amount ?? null,
+      metadata: data.metadata ?? {},
+      processedAt: new Date().toISOString(),
+    };
+
+    const payoutCallbacks = Array.isArray(existingMetadata.payoutCallbacks) ? existingMetadata.payoutCallbacks : [];
+    const updatedMetadata = {
+      ...existingMetadata,
+      payoutCallbacks: [...payoutCallbacks, payoutCallback],
+      allocationPlan: existingMetadata.allocationPlan
+        ? {
+            ...existingMetadata.allocationPlan,
+            allocations: currentAllocation,
+          }
+        : existingMetadata.allocationPlan,
+      lastPayoutCallback: payoutCallback,
+    };
+
+    const nextStatus = isSuccess ? 'PROCESSING' : 'FAILED';
+    await this.repository.updateSettlementStatus(settlement.id, nextStatus, {
+      metadata: updatedMetadata,
+    });
+
+    this.logger.log(`[B2B][CALLBACK] settlementId=${settlement.id} party=${party} reference=${data.reference} status=${status}`);
+
+    return {
+      success: true,
+      status: nextStatus,
+      settlementId: settlement.id,
+      payoutCallback,
+    };
+  }
+
   async confirmSettlementPayment(data: PaymentConfirmationDto): Promise<any> {
     this.logger.log(`[CONFIRMATION][LOOKUP] starting lookup for ${data.settlementId}`);
 
@@ -361,306 +689,44 @@ export class SettlementService {
       },
     });
 
-    const payoutSimulations = [
-      {
-        party: 'Retailer',
-        amount: retailerAmount,
-        status: 'SIMULATED',
-        message: 'Simulated payout dispatch to retailer',
-      },
-      {
-        party: 'Supplier',
+    this.logger.log(`[CONFIRMATION][RESULT] settlement=${settlement.id} payment confirmed; allocation plan created supplier=${supplierAmount} retailer=${retailerAmount} platformFee=${platformFee}`);
+
+    const dispatchResults: Array<any> = [];
+    try {
+      this.logger.log(`[CONFIRMATION][DISPATCH] starting payout dispatch for settlement ${settlement.id}`);
+      const settlementMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
+      const supplierDispatch = await this.dispatchB2bPayouts({
+        merchantTransactionReference: settlement.merchantTransactionReference,
+        party: 'SUPPLIER',
         amount: supplierAmount,
-        status: 'SIMULATED',
-        message: 'Simulated payout dispatch to supplier',
-      },
-    ];
+        supplierMerchantId: settlementMetadata.supplierMerchantId ?? undefined,
+      });
+      dispatchResults.push({ party: 'SUPPLIER', result: supplierDispatch });
+    } catch (error) {
+      this.logger.warn(`[CONFIRMATION][DISPATCH] supplier payout dispatch failed for settlement ${settlement.id}: ${error instanceof Error ? error.message : String(error)}`);
+      dispatchResults.push({ party: 'SUPPLIER', error: error instanceof Error ? error.message : String(error) });
+    }
 
-    payoutSimulations.forEach((payout) => {
-      this.logger.log(`Simulated ${payout.message} for settlement ${settlement.id}: party=${payout.party} amount=${payout.amount}`);
-    });
-
-    this.logger.log(`[CONFIRMATION][RESULT] completed successfully for settlement ${settlement.id}`);
+    try {
+      const retailerDispatch = await this.dispatchB2bPayouts({
+        merchantTransactionReference: settlement.merchantTransactionReference,
+        party: 'RETAILER',
+        amount: retailerAmount,
+      });
+      dispatchResults.push({ party: 'RETAILER', result: retailerDispatch });
+    } catch (error) {
+      this.logger.warn(`[CONFIRMATION][DISPATCH] retailer payout dispatch failed for settlement ${settlement.id}: ${error instanceof Error ? error.message : String(error)}`);
+      dispatchResults.push({ party: 'RETAILER', error: error instanceof Error ? error.message : String(error) });
+    }
 
     return {
       success: true,
-      status: 'PENDING_PROCESSING',
-      message: 'Payment confirmation accepted. The settlement is now moving into ledger allocation and payout processing.',
+      status: 'PROCESSING',
+      message: 'Payment confirmation accepted. The settlement is now processing B2B payout dispatch.',
       settlementId: settlement.id,
-      nextStep: 'Create ledger entries and split the customer funds into supplier, retailer, and platform allocations.',
+      nextStep: 'Dispatch B2B payouts to supplier and retailer and wait for payout callbacks.',
       allocationPlan,
-      payoutSimulations,
-    };
-  }
-
-  async simulateLedgerPayouts(data: { merchantTransactionReference: string; simulationStatus?: string }): Promise<any> {
-    const settlement = await this.repository.findSettlementByReference(data.merchantTransactionReference);
-
-    if (!settlement) {
-      throw new NotFoundException({ statusCode: 404, message: 'Settlement not found for the provided merchant transaction reference', error: 'SETTLEMENT_NOT_FOUND' });
-    }
-
-    const callbackMetadata = (settlement.metadata && typeof settlement.metadata === 'object' ? settlement.metadata as Record<string, any> : {});
-    const callbackStatus = callbackMetadata.paymentCallback?.status ?? 'UNKNOWN';
-    const allocationPlan = callbackMetadata.allocationPlan ?? {
-      allocations: [],
-    };
-
-    if (callbackStatus !== 'SUCCESS') {
-      throw new NotFoundException({ statusCode: 404, message: 'A successful payment callback was not found for this transaction', error: 'CALLBACK_NOT_FOUND' });
-    }
-
-    const simulationStatus = data.simulationStatus ?? 'PENDING';
-    const startedAt = new Date().toISOString();
-    const payoutTransactions = (allocationPlan.allocations ?? []).map((allocation: any, index: number) => {
-      const payoutReference = `${settlement.reference ?? settlement.merchantTransactionReference ?? 'settlement'}-${index + 1}`;
-      const payoutRequest = {
-        reference: payoutReference,
-        fromMerchantId: 'PAYASSURE',
-        toMerchantId: allocation.party === 'Platform' ? 'PAYASSURE' : `SUPPLIER-${index + 1}`,
-        amount: Number(allocation.amount ?? 0),
-        currency: settlement.currency ?? 'KES',
-        paymentMethod: {
-          type: 'MPESA',
-          provider: 'Safaricom',
-          phoneNumber: '+254700000000',
-        },
-        settlementReference: settlement.reference,
-        merchantTransactionReference: settlement.merchantTransactionReference,
-      };
-
-      const gatewayResponse = {
-        transactionId: `B2B-${Date.now()}-${index + 1}`,
-        status: 'PROCESSING',
-        message: 'Payout accepted by fake B2B gateway.',
-        reference: payoutReference,
-      };
-
-      this.fakeB2bPayouts.set(payoutReference, {
-        transactionId: gatewayResponse.transactionId,
-        reference: payoutReference,
-        settlementReference: settlement.reference,
-        merchantTransactionReference: settlement.merchantTransactionReference,
-        status: 'PROCESSING',
-        payload: payoutRequest,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-
-      return {
-        id: `payout-${settlement.id}-${index + 1}`,
-        party: allocation.party,
-        amount: Number(allocation.amount ?? 0),
-        destination: allocation.destination ?? 'B2B payout',
-        status: simulationStatus,
-        provider: 'FAKE_B2B_SIMULATOR',
-        simulatedAt: new Date().toISOString(),
-        ledgerReference: payoutReference,
-        details: `Ledger created payout instruction for ${allocation.party}; fake B2B gateway accepted the request and returned a processing acknowledgment.`,
-        gatewayResponse,
-        trace: {
-          stage: 'PAYOUT_REQUESTED',
-          description: `Fake B2B payout request created for ${allocation.party}`,
-          timestamp: new Date().toISOString(),
-          amount: Number(allocation.amount ?? 0),
-          currency: settlement.currency ?? 'UNKNOWN',
-        },
-      };
-    });
-
-    this.logger.log(`Ledger simulation triggered for ${settlement.reference} (${settlement.merchantTransactionReference})`);
-    this.logger.log(`Callback state: ${callbackStatus}`);
-    this.logger.log(`Allocation plan entries: ${JSON.stringify(allocationPlan.allocations ?? [])}`);
-    payoutTransactions.forEach((txn: any) => {
-      this.logger.log(`Payout simulation -> ${txn.party}: ${txn.amount} ${settlement.currency ?? 'UNKNOWN'} | status=${txn.status} | provider=${txn.provider} | ref=${txn.ledgerReference} | detail=${txn.details}`);
-    });
-
-    const timeline = [
-      {
-        stage: 'CALLBACK_RECEIVED',
-        title: 'Payment callback accepted',
-        status: 'COMPLETED',
-        timestamp: callbackMetadata.paymentCallback?.receivedAt ?? startedAt,
-        detail: `Callback for ${settlement.merchantTransactionReference} was accepted and validated.`,
-      },
-      {
-        stage: 'ALLOCATION_CREATED',
-        title: 'Ledger allocation plan prepared',
-        status: 'COMPLETED',
-        timestamp: startedAt,
-        detail: `Allocation plan created for ${allocationPlan.allocations?.length ?? 0} payout instructions.`,
-      },
-      {
-        stage: 'PAYOUT_REQUESTED',
-        title: 'Payout requests sent to fake B2B gateway',
-        status: 'COMPLETED',
-        timestamp: new Date().toISOString(),
-        detail: `Requested ${payoutTransactions.length} payout transactions through the fake B2B gateway.`,
-      },
-      {
-        stage: 'PAYOUT_CALLBACK_PENDING',
-        title: 'Waiting for fake B2B callback',
-        status: 'PENDING',
-        timestamp: new Date().toISOString(),
-        detail: 'The payout service is awaiting the provider callback before marking the payables as paid.',
-      },
-      {
-        stage: 'PAYOUT_VISIBLE',
-        title: 'Payout visibility prepared',
-        status: 'COMPLETED',
-        timestamp: new Date().toISOString(),
-        detail: 'Settlement now exposes the simulated payout state for downstream visibility and audit.',
-      },
-    ];
-
-    const ledgerProcessingMetadata = {
-      simulationStatus,
-      startedAt,
-      completedAt: new Date().toISOString(),
-      payoutTransactions,
-      callbackStatus,
-      merchantTransactionReference: settlement.merchantTransactionReference,
-      settlementReference: settlement.reference,
-      summary: `Ledger processed ${payoutTransactions.length} payout instructions after callback confirmation.`,
-      timeline,
-      trace: {
-        callback: {
-          status: callbackStatus,
-          reference: settlement.merchantTransactionReference,
-          receivedAt: callbackMetadata.paymentCallback?.receivedAt ?? startedAt,
-        },
-        allocations: allocationPlan.allocations ?? [],
-        payouts: payoutTransactions.map((txn: any) => ({
-          party: txn.party,
-          amount: txn.amount,
-          status: txn.status,
-          ledgerReference: txn.ledgerReference,
-        })),
-      },
-      logs: [
-        `Callback confirmed for ${settlement.merchantTransactionReference}`,
-        `Allocation plan loaded with ${allocationPlan.allocations?.length ?? 0} entries`,
-        `Simulated ${payoutTransactions.length} B2B payout transactions`,
-        `Payout visibility prepared for ${settlement.merchantTransactionReference}`,
-      ],
-    };
-
-    const persistedMetadata = {
-      ...callbackMetadata,
-      ledgerProcessing: ledgerProcessingMetadata,
-      trace: {
-        ...(callbackMetadata.trace ?? {}),
-        ledger: ledgerProcessingMetadata,
-      },
-    };
-
-    await this.repository.updateSettlementStatus(settlement.id, 'PROCESSING', {
-      metadata: persistedMetadata,
-    });
-
-    return {
-      success: true,
-      status: 'PROCESSING',
-      message: 'Ledger payout simulation completed after callback confirmation.',
-      settlementId: settlement.id,
-      settlementReference: settlement.reference,
-      merchantTransactionReference: settlement.merchantTransactionReference,
-      simulationResult: {
-        simulationStatus,
-        payoutTransactions,
-        summary: ledgerProcessingMetadata.summary,
-        timeline,
-        trace: ledgerProcessingMetadata.trace,
-        logs: ledgerProcessingMetadata.logs,
-      },
-    };
-  }
-
-  async processFakeB2bPayout(data: any): Promise<any> {
-    const payoutReference = data.reference;
-    const transactionId = `B2B-${Date.now()}`;
-    const record: FakeB2bPayoutRecord = {
-      transactionId,
-      reference: payoutReference,
-      settlementReference: data.settlementReference,
-      merchantTransactionReference: data.merchantTransactionReference,
-      status: 'PROCESSING',
-      payload: data,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    this.fakeB2bPayouts.set(payoutReference, record);
-
-    return {
-      success: true,
-      transactionId,
-      reference: payoutReference,
-      status: 'PROCESSING',
-      message: 'Payout accepted by fake B2B gateway.',
-      nextStep: 'Wait for the fake callback to mark the payout as successful or failed.',
-    };
-  }
-
-  async handleFakeB2bCallback(data: any): Promise<any> {
-    const payout = this.fakeB2bPayouts.get(data.reference);
-    if (!payout) {
-      throw new NotFoundException({ statusCode: 404, message: 'Payout reference not found in fake B2B gateway', error: 'PAYOUT_NOT_FOUND' });
-    }
-
-    payout.status = data.status === 'SUCCESS' ? 'SUCCESS' : 'FAILED';
-    payout.providerReference = data.providerReference;
-    payout.updatedAt = new Date().toISOString();
-
-    this.fakeB2bPayouts.set(data.reference, payout);
-
-    const settlement = await this.repository.findSettlementByReference(payout.merchantTransactionReference ?? payout.settlementReference ?? data.reference);
-    if (settlement) {
-      const existingMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
-      const allocationPlan = {
-        ...(existingMetadata.allocationPlan ?? { allocations: [] }),
-        allocations: Array.isArray(existingMetadata.allocationPlan?.allocations)
-          ? existingMetadata.allocationPlan.allocations.map((allocation: any) => {
-              if (allocation.destination === 'B2B payout' && allocation.status !== 'PAID') {
-                return {
-                  ...allocation,
-                  status: payout.status === 'SUCCESS' ? 'PAID' : 'FAILED',
-                  paidAt: payout.updatedAt,
-                  payoutReference: data.reference,
-                  payoutStatus: payout.status,
-                };
-              }
-              return allocation;
-            })
-          : [],
-      };
-      const payoutTrace = {
-        status: payout.status,
-        transactionId: payout.transactionId,
-        providerReference: payout.providerReference,
-        completedAt: payout.updatedAt,
-      };
-
-      await this.repository.updateSettlementStatus(settlement.id, 'PROCESSING', {
-        metadata: {
-          ...existingMetadata,
-          allocationPlan,
-          payoutTrace,
-          ledgerProcessing: {
-            ...(existingMetadata.ledgerProcessing ?? {}),
-            payoutTrace,
-            finalStatus: payout.status,
-          },
-        },
-      });
-    }
-
-    return {
-      success: true,
-      reference: data.reference,
-      transactionId: payout.transactionId,
-      status: payout.status,
-      message: 'Fake B2B callback processed and payout status updated.',
+      dispatchResults,
     };
   }
 

@@ -67,8 +67,57 @@ test('updatePayment rejects payerPhoneNumber when the payment type is BANK', asy
   );
 });
 
+test('updatePayment accepts shortcode only for BANK payment destinations', async () => {
+  const repository = {
+    updatePayment: async (_id: string, payment: any) => ({
+      id: 'participant-1',
+      participantType: 'RETAILER',
+      businessName: 'Test Merchant',
+      businessType: null,
+      contactName: 'Jane Doe',
+      email: 'jane@example.com',
+      status: 'DRAFT',
+      payment,
+      integrations: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }),
+  };
+
+  const service = new OnbordingsService(repository as any);
+  const response = await service.updatePayment('participant-1', {
+    type: 'BANK',
+    accountName: 'Jane Doe',
+    bankCode: '07',
+    accountNumber: '1234567890',
+    shortcode: '123456',
+  } as any);
+
+  assert.equal(response.payment?.shortcode, '123456');
+});
+
 test('activatePayment marks a pending payment as verified when the secret is valid', async () => {
   const repository = {
+    findParticipantByEmail: async (email: string) => ({
+      id: 'participant-1',
+      email,
+      participantType: 'RETAILER',
+      businessName: 'Test Merchant',
+      businessType: null,
+      contactName: 'Jane Doe',
+      status: 'DRAFT',
+      payment: {
+        type: 'MPESA',
+        accountName: 'Jane Doe',
+        status: 'PENDING_VERIFICATION',
+        isVerified: false,
+        paymentActivationSecretHash: 'hash',
+        paymentActivationSecretExpiresAt: new Date(Date.now() + 10000).toISOString(),
+      },
+      integrations: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }),
     activatePayment: async (_id: string, _secret: string) => ({
       id: 'participant-1',
       participantType: 'RETAILER',
@@ -92,7 +141,7 @@ test('activatePayment marks a pending payment as verified when the secret is val
   };
 
   const service = new OnbordingsService(repository as any);
-  const response = await service.activatePayment('participant-1', { paymentActivationSecret: 'paysec_valid' } as any);
+  const response = await service.activatePayment({ email: 'jane@example.com' } as any, { paymentActivationSecret: 'paysec_valid' } as any);
 
   assert.equal(response.payment?.status, 'VERIFIED');
   assert.equal(response.payment?.isVerified, true);

@@ -77,13 +77,13 @@ export class CreateOnboardingDto {
     type: PaymentMethodDto,
     description: 'Optional payout destination details for this participant.',
     example: {
-      type: 'MPESA',
+      type: 'BANK',
       accountName: 'John Doe',
       isVerified: false,
-      payerPhoneNumber: '254712345678',
-      provider: 'Safaricom',
       bankCode: '07',
+      shortcode: '123456',
       accountNumber: '1234567890',
+      provider: 'Safaricom',
     },
   })
   @ValidateNested()

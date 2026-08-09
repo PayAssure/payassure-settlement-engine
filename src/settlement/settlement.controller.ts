@@ -7,9 +7,8 @@ import { InitiateSettlementDto } from './dto/initiate-settlement.dto';
 import { ReconcileSettlementDto } from './dto/reconcile-settlement.dto';
 import PaymentCallbackDto from './dto/payment-callback.dto';
 import PaymentConfirmationDto from './dto/payment-confirmation.dto';
-import SimulateLedgerPayoutsDto from './dto/simulate-ledger-payouts.dto';
-import FakeB2bPayoutDto from './dto/fake-b2b-payout.dto';
-import FakeB2bCallbackDto from './dto/fake-b2b-callback.dto';
+import B2bPayoutDispatchDto from './dto/b2b-payout.dto';
+import B2bPayoutCallbackDto from './dto/b2b-payout-callback.dto';
 import { RunScenarioDto, RunScenarioResponseDto } from './dto/run-scenario.dto';
 import {
   AuthenticateResponseDto,
@@ -244,8 +243,9 @@ export class SettlementController {
     );
 
     if (expectedSignature !== signature) {
+      const authMethod = authorization ? String(authorization).split(' ')[0] : 'missing';
       this.logger.warn(
-        `[CONFIRMATION][AUTH] signature mismatch for ${body.settlementId}: expected=${expectedSignature} received=${signature} signingMethod=crypto.createHmac('sha256', secret).update(bodyString).digest('hex') bodyString=${bodyString} algorithm=HMAC-SHA256 timestamp=${timestamp} token=${authorization}`,
+        `[CONFIRMATION][AUTH] signature mismatch for ${body.settlementId}: expected=${expectedSignature} presentedSignature=${signature} authentication=${authMethod} token=${authorization} signingMethod=crypto.createHmac('sha256', secret).update(bodyString).digest('hex') bodyString=${bodyString} algorithm=HMAC-SHA256 timestamp=${timestamp}`,
       );
       throw new UnauthorizedException({ statusCode: 401, message: 'Invalid signature', error: 'UNAUTHORIZED' });
     }
@@ -269,26 +269,20 @@ export class SettlementController {
     return value;
   }
 
-  @Post('ledger/simulate-payouts')
-  @ApiOperation({ summary: 'Simulate fake B2B payout transactions after a successful callback', description: 'Uses the merchant transaction reference to locate a settlement that already passed the callback stage and simulates ledger-driven B2B payouts with detailed logs.' })
-  @ApiResponse({ status: 200, description: 'Ledger payout simulation completed.' })
-  @ApiResponse({ status: 404, description: 'Settlement was not found or the callback had not been processed successfully.' })
-  async simulateLedgerPayouts(@Body() body: SimulateLedgerPayoutsDto): Promise<any> {
-    return this.settlementService.simulateLedgerPayouts(body);
+  @Post('payouts/dispatch')
+  @ApiOperation({ summary: 'Dispatch B2B payouts for a settlement', description: 'Sends payout instructions to the configured B2B gateway using the amounts owed to each party and their saved payout details.' })
+  @ApiResponse({ status: 200, description: 'B2B payouts dispatched successfully.' })
+  @ApiResponse({ status: 404, description: 'Settlement not found or payment callback has not completed successfully.' })
+  async dispatchB2bPayouts(@Body() body: B2bPayoutDispatchDto): Promise<any> {
+    return this.settlementService.dispatchB2bPayouts(body);
   }
 
-  @Post('fake-b2b/payout')
-  @ApiOperation({ summary: 'Accept a fake B2B payout request from the payout service', description: 'Simulates a real B2B gateway accepting a payout request and returning a processing acknowledgement.' })
-  @ApiResponse({ status: 200, description: 'Fake B2B payout accepted.' })
-  async fakeB2BPayout(@Body() body: FakeB2bPayoutDto): Promise<any> {
-    return this.settlementService.processFakeB2bPayout(body);
-  }
-
-  @Post('fake-b2b/callback')
-  @ApiOperation({ summary: 'Receive a fake B2B callback for a previously accepted payout', description: 'Simulates the provider callback that marks the payout as successful and updates the settlement state.' })
-  @ApiResponse({ status: 200, description: 'Fake B2B callback processed.' })
-  async fakeB2BCallback(@Body() body: FakeB2bCallbackDto): Promise<any> {
-    return this.settlementService.handleFakeB2bCallback(body);
+  @Post('payouts/callback')
+  @ApiOperation({ summary: 'Receive a B2B payout callback', description: 'Accepts the provider callback for a previously dispatched payout and updates supplier/retailer payout status.' })
+  @ApiResponse({ status: 200, description: 'B2B payout callback processed successfully.' })
+  @ApiResponse({ status: 404, description: 'Payout reference or settlement not found.' })
+  async b2bPayoutCallback(@Body() body: B2bPayoutCallbackDto): Promise<any> {
+    return this.settlementService.handleB2bPayoutCallback(body);
   }
 
   /**

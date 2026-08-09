@@ -158,6 +158,7 @@ function toPublicPaymentDetails(payment: any) {
       ...base,
       bankCode: payment.bankCode ?? undefined,
       accountNumber: payment.accountNumber ?? undefined,
+      shortcode: payment.shortcode ?? undefined,
     };
   }
 
@@ -276,24 +277,30 @@ export async function initiateOperation(
 
       if (!gatewayResult.success) {
         logger.warn(`Gateway delivery failed after retries for merchantTransactionReference=${data.merchantTransactionReference}`);
-        await repository.updateSettlementStatus(primarySettlement.id, SettlementStatus.INITIATED, {
-          metadata: {
-            ...(data.metadata ?? {}),
-            paymentGateway: {
-              request: {
-                ...gatewayRequestPayload,
-                mobileNumber,
-                amount,
-                accountReference,
-                transactionDesc,
+        if (typeof repository.updateSettlementStatus === 'function') {
+          await repository.updateSettlementStatus(primarySettlement.id, SettlementStatus.INITIATED, {
+            metadata: {
+              ...(data.metadata ?? {}),
+              paymentGateway: {
+                request: {
+                  ...gatewayRequestPayload,
+                  mobileNumber,
+                  amount,
+                  accountReference,
+                  transactionDesc,
+                },
+                response: gatewayResult,
               },
-              response: gatewayResult,
+              gatewayPending: true,
+              gatewayPendingReason: gatewayResult.error ?? 'Gateway unavailable',
             },
-            gatewayPending: true,
-            gatewayPendingReason: gatewayResult.error ?? 'Gateway unavailable',
-          },
-        });
-        await repository.touchSession(session.id);
+          });
+        } else {
+          logger.warn('Repository does not implement updateSettlementStatus; skipping persistence of gateway failure metadata');
+        }
+        if (typeof repository.touchSession === 'function') {
+          await repository.touchSession(session.id);
+        }
         return {
           success: false,
           settlement: {

@@ -1158,20 +1158,10 @@
         ]
       }
     },
-    "/onbordings/{id}/payment/activate": {
+    "/onbordings/payment/activate": {
       "patch": {
         "operationId": "OnbordingsController_activatePayment",
         "summary": "Activate a pending payout destination using the generated secret",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {

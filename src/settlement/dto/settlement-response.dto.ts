@@ -65,6 +65,9 @@ export class PaymentResponseDto {
   @ApiPropertyOptional({ example: '254712345678', description: 'M-Pesa phone number for MPESA payouts.' })
   payerPhoneNumber?: string = '';
 
+  @ApiPropertyOptional({ example: '123456', description: 'Optional shortcode for BANK payout destinations.' })
+  shortcode?: string = '';
+
   @ApiPropertyOptional({ example: '07', description: 'Bank code for BANK payouts.' })
   bankCode?: string = '';
 

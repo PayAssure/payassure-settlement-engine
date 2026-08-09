@@ -14,8 +14,21 @@ export class OnbordingsRepository implements OnModuleDestroy {
   }
 
   async findParticipantByEmail(email: string) {
-    return this.prisma.onboardingParticipant.findFirst({
+    if (!email) {
+      return null;
+    }
+
+    const exactMatch = await this.prisma.onboardingParticipant.findFirst({
       where: { email },
+      include: { integrations: { orderBy: { createdAt: 'desc' }, take: 1 } },
+    });
+
+    if (exactMatch) {
+      return exactMatch;
+    }
+
+    return this.prisma.onboardingParticipant.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
       include: { integrations: { orderBy: { createdAt: 'desc' }, take: 1 } },
     });
   }

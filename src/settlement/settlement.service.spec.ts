@@ -130,91 +130,81 @@ test('confirmSettlementPayment accepts a paid confirmation payload', async () =>
   assert.equal(response.status, 'PENDING_PROCESSING');
 });
 
-test('handleFakeB2bCallback marks supplier and retailer allocations as paid', async () => {
-  let updatedPayload: any = null;
-
-  const repository = {
-    findSettlementByReference: async () => ({
-      id: 'settlement-3',
-      status: 'PROCESSING',
-      metadata: {
-        allocationPlan: {
-          allocations: [
-            { party: 'Supplier', amount: 18000, destination: 'B2B payout', status: 'PENDING' },
-            { party: 'Retailer', amount: 1600, destination: 'B2B payout', status: 'PENDING' },
-          ],
-        },
-      },
-    }),
-    updateSettlementStatus: async (_id: string, _status: string, updates: any) => {
-      updatedPayload = updates;
-      return { id: 'settlement-3', ...updates };
-    },
-  };
-
-  const service = new SettlementService(repository as any);
-  await service.processFakeB2bPayout({
-    reference: 'payout-1',
-    settlementReference: 'settlement-3',
-    merchantTransactionReference: 'TXN-3003',
-    party: 'Supplier',
-  } as any);
-
-  await service.handleFakeB2bCallback({
-    reference: 'payout-1',
-    status: 'SUCCESS',
-    providerReference: 'MPESA-777',
-  } as any);
-
-  assert.equal(updatedPayload.metadata.allocationPlan.allocations[0].status, 'PAID');
-  assert.equal(updatedPayload.metadata.allocationPlan.allocations[0].paidAt, updatedPayload.metadata.payoutTrace.completedAt);
-});
-
-test('simulateLedgerPayouts creates fake B2B payout records after a successful callback', async () => {
+test('dispatchB2bPayouts records a dispatch and updates settlement metadata', async () => {
   let updatedStatus: any = null;
   let updatedPayload: any = null;
 
   const repository = {
     findSettlementByReference: async () => ({
-      id: 'settlement-2',
-      status: 'PENDING_PROCESSING',
-      amount: 20000,
+      id: 'settlement-10',
+      merchantTransactionReference: 'TXN-DISPATCH-1',
+      reference: 'REF-10',
+      currency: 'KES',
       metadata: {
-        paymentCallback: {
-          status: 'SUCCESS',
-          merchantTransactionReference: 'TXN-2002',
-        },
+        paymentCallback: { status: 'SUCCESS', merchantTransactionReference: 'TXN-DISPATCH-1' },
+      },
+      paymentSnapshot: { type: 'BANK', shortcode: '12345', accountName: 'ACCT NAME' },
+    }),
+    updateSettlementStatus: async (_id: string, status: string, updates: any) => {
+      updatedStatus = status;
+      updatedPayload = updates;
+      return { id: 'settlement-10', status, ...updates };
+    },
+  };
+
+  const service = new SettlementService(repository as any);
+  // stub external gateway call to avoid network in unit test
+  (service as any).sendB2bGatewayPayoutRequest = async () => ({ success: true, statusCode: 200, response: { gatewayId: 'gw-1' } });
+
+  const response = await service.dispatchB2bPayouts({
+    merchantTransactionReference: 'TXN-DISPATCH-1',
+    party: 'SUPPLIER',
+    supplierMerchantId: 'SUP-1001',
+    amount: 1000,
+  } as any);
+
+  assert.equal(response.success, true);
+  assert.equal(response.status, 'DISPATCHED');
+  assert.equal(updatedStatus, 'PROCESSING');
+  assert.equal(updatedPayload.metadata.payoutDispatches.length, 1);
+});
+
+test('handleB2bPayoutCallback updates allocation status and records callback', async () => {
+  let updatedStatus: any = null;
+  let updatedPayload: any = null;
+
+  const repository = {
+    findSettlementByReference: async () => ({
+      id: 'settlement-11',
+      merchantTransactionReference: 'TXN-CALLBACK-1',
+      reference: 'REF-11',
+      metadata: {
         allocationPlan: {
           allocations: [
-            { party: 'Supplier', amount: 18000, destination: 'B2B payout' },
-            { party: 'Retailer', amount: 1600, destination: 'B2B payout' },
-            { party: 'Platform', amount: 400, destination: 'Retained fee' },
+            { party: 'SUPPLIER', amount: 18000, destination: 'B2B payout', status: 'PENDING' },
+            { party: 'RETAILER', amount: 1600, destination: 'B2B payout', status: 'PENDING' },
           ],
-        },
-      },
-      paymentPayload: {
-        paymentMethod: {
-          type: 'MPESA',
-          provider: 'Safaricom',
         },
       },
     }),
     updateSettlementStatus: async (_id: string, status: string, updates: any) => {
       updatedStatus = status;
       updatedPayload = updates;
-      return { id: 'settlement-2', status, ...updates };
+      return { id: 'settlement-11', status, ...updates };
     },
   };
 
   const service = new SettlementService(repository as any);
-  const response = await service.simulateLedgerPayouts({
-    merchantTransactionReference: 'TXN-2002',
-    simulationStatus: 'PAID',
+  const response = await service.handleB2bPayoutCallback({
+    merchantTransactionReference: 'TXN-CALLBACK-1',
+    reference: 'payout-abc',
+    party: 'SUPPLIER',
+    status: 'SUCCESS',
+    providerReference: 'GW-123',
   } as any);
 
   assert.equal(response.success, true);
   assert.equal(updatedStatus, 'PROCESSING');
-  assert.equal(response.simulationResult.payoutTransactions[0].status, 'PAID');
-  assert.equal(response.simulationResult.payoutTransactions[1].status, 'PAID');
-  assert.equal(updatedPayload.metadata.ledgerProcessing.simulationStatus, 'PAID');
+  assert.equal(updatedPayload.metadata.allocationPlan.allocations[0].status, 'PAID');
+  assert.equal(updatedPayload.metadata.payoutCallbacks.length, 1);
 });

@@ -705,7 +705,7 @@
       ]
     },
     {
-      "name": "PATCH /onbordings/{id}/payment/activate",
+      "name": "PATCH /onbordings/payment/activate",
       "item": [
         {
           "name": "Activate a pending payout destination using the generated secret",
@@ -728,13 +728,12 @@
               }
             },
             "url": {
-              "raw": "{{baseUrl}}/onbordings/{id}/payment/activate",
+              "raw": "{{baseUrl}}/onbordings/payment/activate",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "onbordings",
-                "{id}",
                 "payment",
                 "activate"
               ]

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Request, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Logger, Param, Patch, Post, Request, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CreateIntegrationDto } from './dto/create-integration.dto';
@@ -14,6 +14,8 @@ import { OnbordingsService } from './onbordings.service';
 @ApiTags('onbordings')
 @Controller('onbordings')
 export class OnbordingsController {
+  private readonly logger = new Logger(OnbordingsController.name);
+
   constructor(private readonly service: OnbordingsService) {}
 
   @Post()
@@ -100,6 +102,30 @@ export class OnbordingsController {
     return this.service.findParticipantById(id);
   }
 
+  @Patch('payment')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Update the authenticated user payout destination' })
+  @ApiResponse({ status: 200, type: OnboardingResponseDto })
+  @ApiResponse({
+    status: 400,
+    type: ErrorResponseDto,
+    description: 'Invalid payment destination data.',
+  })
+  @ApiResponse({
+    status: 401,
+    type: ErrorResponseDto,
+    description: 'Authentication token is missing or invalid.',
+  })
+  @ApiResponse({
+    status: 404,
+    type: ErrorResponseDto,
+    description: 'Onboarding participant not found for the authenticated user.',
+  })
+  async updatePayment(@Request() req: any, @Body() body: UpdatePaymentDto): Promise<OnboardingResponseDto> {
+    return this.service.updatePaymentForUser(req.user, body.payment);
+  }
+
   @Patch(':id')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
@@ -177,38 +203,15 @@ export class OnbordingsController {
     return this.service.updateWebhook(id, body.webhookUrl);
   }
 
-  @Patch(':id/payment')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth('access-token')
-  @ApiOperation({ summary: 'Update the payout destination for a participant' })
-  @ApiResponse({ status: 200, type: OnboardingResponseDto })
-  @ApiResponse({
-    status: 400,
-    type: ErrorResponseDto,
-    description: 'Invalid payment destination data.',
-  })
-  @ApiResponse({
-    status: 401,
-    type: ErrorResponseDto,
-    description: 'Authentication token is missing or invalid.',
-  })
-  @ApiResponse({
-    status: 404,
-    type: ErrorResponseDto,
-    description: 'Participant not found.',
-  })
-  async updatePayment(@Param('id') id: string, @Body() body: UpdatePaymentDto): Promise<OnboardingResponseDto> {
-    return this.service.updatePayment(id, body.payment);
-  }
-
-  @Patch(':id/payment/activate')
+  @Patch('payment/activate')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
   @ApiOperation({ summary: 'Activate a pending payout destination using the generated secret' })
   @ApiResponse({ status: 200, type: OnboardingResponseDto })
   @ApiResponse({ status: 401, type: ErrorResponseDto, description: 'Authentication token is missing or invalid.' })
   @ApiResponse({ status: 403, type: ErrorResponseDto, description: 'The payment activation secret is invalid or expired.' })
-  async activatePayment(@Param('id') id: string, @Body() body: ActivatePaymentDto): Promise<OnboardingResponseDto> {
-    return this.service.activatePayment(id, { paymentActivationSecret: body.paymentActivationSecret });
+  async activatePayment(@Request() req: any, @Body() body: ActivatePaymentDto): Promise<OnboardingResponseDto> {
+    this.logger.log(`activatePayment endpoint invoked for authenticated user email=${req.user?.email ?? 'unknown'} sub=${req.user?.sub ?? 'unknown'}`);
+    return this.service.activatePayment(req.user, { paymentActivationSecret: body.paymentActivationSecret });
   }
 }

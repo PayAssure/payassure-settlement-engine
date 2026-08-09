@@ -7,9 +7,11 @@ export class UpdatePaymentDto {
   @ApiProperty({
     type: PaymentMethodDto,
     example: {
-      type: 'MPESA',
+      type: 'BANK',
       accountName: 'John Doe',
-      payerPhoneNumber: '254712345678',
+      bankCode: '07',
+      shortcode: '123456',
+      accountNumber: '1234567890',
       provider: 'Safaricom',
     },
   })

@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { createHash, randomBytes } from 'crypto';
 import { ParticipantStatus } from '@prisma/client';
 import { CreateIntegrationDto } from './dto/create-integration.dto';
@@ -10,6 +10,8 @@ import { OnbordingsRepository } from './onbordings.repository';
 
 @Injectable()
 export class OnbordingsService {
+  private readonly logger = new Logger(OnbordingsService.name);
+
   constructor(private readonly repository: OnbordingsRepository) {}
 
   async createParticipant(data: CreateOnboardingDto): Promise<OnboardingResponseDto> {
@@ -185,9 +187,37 @@ export class OnbordingsService {
     return this.toResponse(this.attachActivationSecret(participant, preparedPayment.paymentActivationSecret));
   }
 
-  async activatePayment(id: string, data: { paymentActivationSecret: string }): Promise<OnboardingResponseDto> {
-    const participant = await this.repository.activatePayment(id, data.paymentActivationSecret);
-    return this.toResponse(participant);
+  async updatePaymentForUser(user: any, payment: PaymentMethodDto): Promise<OnboardingResponseDto> {
+    this.logger.log(`updatePaymentForUser invoked for user=${user?.email ?? 'unknown'}`);
+    this.validatePaymentMethod(payment);
+    const preparedPayment = this.preparePaymentForStorage(payment);
+    const participant = await this.repository.findParticipantByEmail(user?.email ?? '');
+
+    if (!participant) {
+      this.logger.warn(`Authenticated user not found as onboarding participant: email=${user?.email ?? 'undefined'}`);
+      throw new NotFoundException('Onboarding participant not found for the authenticated user');
+    }
+
+    this.logger.log(`Authenticated participant found: id=${participant.id}, email=${participant.email}`);
+    const updatedParticipant = await this.repository.updatePayment(participant.id, preparedPayment.payment);
+    this.logger.log(`Updated payment destination for participant id=${participant.id}`);
+    return this.toResponse(this.attachActivationSecret(updatedParticipant, preparedPayment.paymentActivationSecret));
+  }
+
+  async activatePayment(user: any, data: { paymentActivationSecret: string }): Promise<OnboardingResponseDto> {
+    const email = user?.email ?? '';
+    this.logger.log(`activatePayment requested for authenticated user email=${email} sub=${user?.sub ?? 'unknown'}`);
+
+    const participant = await this.repository.findParticipantByEmail(email);
+    this.logger.log(`findParticipantByEmail returned ${participant ? `participant=${participant.id}` : 'no participant'} for email=${email}`);
+
+    if (!participant) {
+      this.logger.warn(`Authenticated user not found for payment activation using email=${email}`);
+      throw new NotFoundException('Onboarding participant not found for the authenticated user');
+    }
+
+    const activatedParticipant = await this.repository.activatePayment(participant.id, data.paymentActivationSecret);
+    return this.toResponse(activatedParticipant);
   }
 
   private validatePaymentMethod(payment: PaymentMethodDto) {
@@ -204,12 +234,26 @@ export class OnbordingsService {
     }
 
     if (payment.type === 'MPESA') {
-      if (payment.bankCode || payment.accountNumber) {
-        throw new ForbiddenException('MPESA payouts do not accept bankCode or accountNumber in the request payload');
+      if (payment.bankCode || payment.accountNumber || payment.shortcode) {
+        throw new ForbiddenException('MPESA payouts do not accept bankCode, accountNumber or shortcode in the request payload');
       }
 
       if (!payment.payerPhoneNumber) {
         throw new ForbiddenException('payerPhoneNumber is required for MPESA payout destinations');
+      }
+    }
+
+    if (payment.type === 'BANK') {
+      if (payment.payerPhoneNumber) {
+        throw new ForbiddenException('BANK payouts do not accept payerPhoneNumber in the request payload');
+      }
+
+      if (!payment.bankCode || !payment.accountNumber) {
+        throw new ForbiddenException('bankCode and accountNumber are required for BANK payout destinations');
+      }
+
+      if (payment.shortcode !== undefined && !/^[0-9]+$/.test(payment.shortcode)) {
+        throw new ForbiddenException('shortcode must contain only digits');
       }
     }
 

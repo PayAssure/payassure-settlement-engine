@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsIn, IsNotEmpty, IsOptional, IsString, ValidateIf } from 'class-validator';
+import { IsBoolean, IsIn, IsNotEmpty, IsOptional, IsString, Matches, ValidateIf } from 'class-validator';
 
 export type PaymentVerificationStatus = 'PENDING_VERIFICATION' | 'VERIFIED' | 'FAILED' | 'SUSPENDED' | 'DISABLED';
 
@@ -33,6 +33,13 @@ export class PaymentMethodDto {
   @IsOptional()
   @IsString()
   provider?: string;
+
+  @ApiPropertyOptional({ example: '123456', description: 'Optional shortcode for BANK payout destinations. Must contain digits only.' })
+  @ValidateIf((o) => o.type === 'BANK')
+  @IsOptional()
+  @IsString()
+  @Matches(/^[0-9]+$/, { message: 'shortcode must contain only digits' })
+  shortcode?: string;
 
   @ApiPropertyOptional({ example: '07', description: 'Bank code for BANK payouts.' })
   @ValidateIf((o) => o.type === 'BANK')
