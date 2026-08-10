@@ -8,6 +8,7 @@ import { validateSettlementData } from '../helpers/validation.helpers';
 import { generateInternalMerchantTransactionReference, generatePayAssureReference } from '../helpers/reference.helpers';
 
 const GATEWAY_STK_PATH = '/api/payments/mpesa/stk';
+const GATEWAY_REQUEST_TIMEOUT_MS = 15000;
 
 function getGatewayBaseUrl() {
   const gatewayBaseUrl = process.env.GATEWAY_BASE_URL;
@@ -73,8 +74,8 @@ async function sendStkPushRequest(payload: Record<string, any>) {
       },
     );
 
-    req.setTimeout(50000, () => {
-      req.destroy(new Error('Gateway request timed out after 5000ms'));
+    req.setTimeout(GATEWAY_REQUEST_TIMEOUT_MS, () => {
+      req.destroy(new Error(`Gateway request timed out after ${GATEWAY_REQUEST_TIMEOUT_MS}ms`));
     });
     req.on('error', (err) => reject(err));
     req.write(body);
@@ -85,6 +86,17 @@ async function sendStkPushRequest(payload: Record<string, any>) {
 function shouldRetryGatewayError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
+  const statusMatch = normalized.match(/gateway returned (\d{3})/);
+  const statusCode = statusMatch ? Number(statusMatch[1]) : undefined;
+
+  if (normalized.includes(`gateway request timed out after ${GATEWAY_REQUEST_TIMEOUT_MS}ms`)) {
+    return false;
+  }
+
+  if (statusCode !== undefined) {
+    return [408, 429, 500, 502, 503, 504].includes(statusCode);
+  }
+
   return [
     'econnreset',
     'econnrefused',
@@ -107,8 +119,10 @@ export async function sendStkPushRequestWithRetry(
   baseDelayMs = 1000,
 ) {
   let lastError: Error | undefined;
+  let attemptsMade = 0;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    attemptsMade = attempt;
     try {
       const response = await sender({});
       return { success: true, response };
@@ -127,11 +141,14 @@ export async function sendStkPushRequestWithRetry(
     }
   }
 
-  logger.error?.(`Gateway delivery failed after ${maxAttempts} attempts for merchantTransactionReference=${merchantTransactionReference}`);
+  const retryable = lastError ? shouldRetryGatewayError(lastError) : false;
+  logger.error?.(`Gateway delivery failed after ${attemptsMade} attempt${attemptsMade === 1 ? '' : 's'} for merchantTransactionReference=${merchantTransactionReference}`);
   return {
     success: false,
-    message: `Gateway delivery failed after ${maxAttempts} attempts`,
+    message: `Gateway delivery failed after ${attemptsMade} attempt${attemptsMade === 1 ? '' : 's'}`,
     error: lastError?.message ?? 'Unknown gateway error',
+    retryable,
+    attempts: attemptsMade,
   };
 }
 
@@ -249,6 +266,7 @@ export async function initiateOperation(
       const amount = Number(data.totalAmount);
       const accountReference = getGatewayAccountReference();
       const transactionDesc = buildTransactionDescription(data);
+      const gatewayUrl = new URL(GATEWAY_STK_PATH, getGatewayBaseUrl()).toString();
       const gatewayRequestPayload = {
         merchantTransactionReference: data.merchantTransactionReference,
         totalAmount: amount,
@@ -265,7 +283,7 @@ export async function initiateOperation(
         transactionDesc,
       };
 
-      logger.log(`Sending STK push request to payment gateway for merchantTransactionReference=${data.merchantTransactionReference}`);
+      logger.log(`Sending STK push request to payment gateway url=${gatewayUrl} for merchantTransactionReference=${data.merchantTransactionReference}`);
       logger.log(`Gateway request payload: ${JSON.stringify(gatewayRequestPayload)}`);
       const gatewayResult = await sendStkPushRequestWithRetry(
         async (payload) => sendStkPushRequest({ ...gatewayRequestPayload, ...payload }),
@@ -276,9 +294,10 @@ export async function initiateOperation(
       );
 
       if (!gatewayResult.success) {
-        logger.warn(`Gateway delivery failed after retries for merchantTransactionReference=${data.merchantTransactionReference}`);
+        const retryable = Boolean(gatewayResult.retryable);
+        logger.warn(`Gateway delivery failed after retries for merchantTransactionReference=${data.merchantTransactionReference}. retryable=${retryable}`);
         if (typeof repository.updateSettlementStatus === 'function') {
-          await repository.updateSettlementStatus(primarySettlement.id, SettlementStatus.INITIATED, {
+          await repository.updateSettlementStatus(primarySettlement.id, retryable ? SettlementStatus.INITIATED : SettlementStatus.FAILED, {
             metadata: {
               ...(data.metadata ?? {}),
               paymentGateway: {
@@ -291,9 +310,10 @@ export async function initiateOperation(
                 },
                 response: gatewayResult,
               },
-              gatewayPending: true,
+              gatewayPending: retryable,
               gatewayPendingReason: gatewayResult.error ?? 'Gateway unavailable',
             },
+            failedAt: retryable ? undefined : new Date(),
           });
         } else {
           logger.warn('Repository does not implement updateSettlementStatus; skipping persistence of gateway failure metadata');
@@ -306,7 +326,7 @@ export async function initiateOperation(
           settlement: {
             settlementId: primarySettlement.id,
             merchantId: retailerMerchantId,
-            status: SettlementStatus.INITIATED,
+            status: retryable ? SettlementStatus.INITIATED : SettlementStatus.FAILED,
             amount: Number(data.totalAmount),
             retailerAmount: 0,
             supplierAmount: Number(data.totalAmount),
@@ -317,7 +337,9 @@ export async function initiateOperation(
             createdAt: primarySettlement.createdAt,
             estimatedProcessingTime: 'N/A',
           },
-          message: 'Gateway delivery failed after retries. Settlement is pending gateway retry.',
+          message: retryable
+            ? 'Gateway delivery failed after retries. Settlement is marked for retryable gateway failure.'
+            : 'Gateway delivery failed after retries with non-retryable error. Settlement is marked failed.',
         };
       }
 

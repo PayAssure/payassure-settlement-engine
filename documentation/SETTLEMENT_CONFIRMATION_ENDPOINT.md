@@ -171,8 +171,7 @@ A sample payload for initiating a settlement request with a total amount of `2` 
     "payerPhoneNumber": "254791614036",
     "provider": "Safaricom"
   },
-  "callbackUrl": "http://localhost:3000/settlement/internal/settlements/payment-confirmation
-",
+  "callbackUrl": "http://localhost:3000/settlement/internal/settlements/payment-confirmation",
   "transactionDate": "2026-07-03T17:30:15+03:00",
   "metadata": {
     "branchId": "BR-01",
