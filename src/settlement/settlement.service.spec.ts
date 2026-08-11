@@ -169,6 +169,41 @@ test('dispatchB2bPayouts records a dispatch and updates settlement metadata', as
   assert.equal(updatedPayload.metadata.payoutDispatches.length, 1);
 });
 
+test('dispatchB2bPayouts falls back to supplier merchant ID from payment payload metadata', async () => {
+  let updatedPayload: any = null;
+
+  const repository = {
+    findSettlementByReference: async () => ({
+      id: 'settlement-12',
+      merchantTransactionReference: 'TXN-DISPATCH-2',
+      reference: 'REF-12',
+      currency: 'KES',
+      metadata: {
+        paymentCallback: { status: 'SUCCESS', merchantTransactionReference: 'TXN-DISPATCH-2' },
+      },
+      paymentSnapshot: { type: 'BANK', shortcode: '12345', accountName: 'ACCT NAME' },
+      paymentPayload: {
+        suppliers: [{ supplierMerchantId: 'SUP-2001' }],
+      },
+    }),
+    updateSettlementStatus: async (_id: string, status: string, updates: any) => {
+      updatedPayload = updates;
+      return { id: 'settlement-12', status, ...updates };
+    },
+  };
+
+  const service = new SettlementService(repository as any);
+  (service as any).sendB2bGatewayPayoutRequest = async () => ({ success: true, statusCode: 200, response: { gatewayId: 'gw-2' } });
+
+  await service.dispatchB2bPayouts({
+    merchantTransactionReference: 'TXN-DISPATCH-2',
+    party: 'SUPPLIER',
+    amount: 1000,
+  } as any);
+
+  assert.equal(updatedPayload.metadata.payoutDispatches[0].requestPayload.metadata.supplierMerchantId, 'SUP-2001');
+});
+
 test('handleB2bPayoutCallback updates allocation status and records callback', async () => {
   let updatedStatus: any = null;
   let updatedPayload: any = null;

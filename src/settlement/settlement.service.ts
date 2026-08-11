@@ -328,6 +328,29 @@ export class SettlementService {
     });
   }
 
+  private resolveSupplierMerchantId(settlement: any, party: 'SUPPLIER' | 'RETAILER', supplierMerchantId?: string): string | null {
+    if (supplierMerchantId) {
+      return String(supplierMerchantId);
+    }
+
+    const metadataSupplierMerchantId = settlement?.metadata?.supplierMerchantId ?? null;
+    if (metadataSupplierMerchantId) {
+      return String(metadataSupplierMerchantId);
+    }
+
+    const paymentPayloadSuppliers = Array.isArray(settlement?.paymentPayload?.suppliers)
+      ? settlement.paymentPayload.suppliers.filter((supplier: any) => supplier && typeof supplier === 'object')
+      : [];
+
+    if (paymentPayloadSuppliers.length === 0) {
+      return null;
+    }
+
+    const firstSupplier = paymentPayloadSuppliers[0] as Record<string, any> | undefined;
+    const fallbackSupplierMerchantId = firstSupplier?.supplierMerchantId ?? null;
+    return fallbackSupplierMerchantId ? String(fallbackSupplierMerchantId) : null;
+  }
+
   private async resolveB2bRecipient(settlement: any, party: 'SUPPLIER' | 'RETAILER', supplierMerchantId?: string): Promise<B2bPayoutRecipient> {
     if (party === 'RETAILER') {
       const participant = await this.prisma.onboardingParticipant.findUnique({ where: { id: settlement.businessId } });
@@ -347,7 +370,7 @@ export class SettlementService {
       };
     }
 
-    const supplierId = supplierMerchantId ?? settlement.metadata?.supplierMerchantId ?? settlement.paymentPayload?.suppliers?.[0]?.supplierMerchantId;
+    const supplierId = this.resolveSupplierMerchantId(settlement, party, supplierMerchantId);
     if (!supplierId) {
       throw new BadRequestException({ statusCode: 400, message: 'Supplier merchant ID is required for supplier payouts', error: 'SUPPLIER_MERCHANT_ID_REQUIRED' });
     }
@@ -394,7 +417,8 @@ export class SettlementService {
       throw new NotFoundException({ statusCode: 404, message: 'A successful payment callback or confirmation has not been recorded for this settlement', error: 'PAYMENT_NOT_CONFIRMED' });
     }
     const party = (String(data.party || (existingMetadata?.supplierMerchantId ? 'SUPPLIER' : 'RETAILER')).toUpperCase() as 'SUPPLIER' | 'RETAILER');
-    const recipient = await this.resolveB2bRecipient(settlement, party, data.supplierMerchantId);
+    const resolvedSupplierMerchantId = this.resolveSupplierMerchantId(settlement, party, data.supplierMerchantId);
+    const recipient = await this.resolveB2bRecipient(settlement, party, resolvedSupplierMerchantId ?? undefined);
 
     if (recipient.type === 'BANK') {
       if (!recipient.shortcode || !recipient.accountName) {
@@ -446,7 +470,7 @@ export class SettlementService {
       metadata: {
         settlementId: settlement.id,
         party,
-        supplierMerchantId: data.supplierMerchantId ?? existingMetadata?.supplierMerchantId ?? null,
+        supplierMerchantId: resolvedSupplierMerchantId ?? null,
         ...((data.metadata ?? {}) as Record<string, any>),
       },
     };
@@ -538,7 +562,7 @@ export class SettlementService {
       merchantTransactionReference: data.merchantTransactionReference,
       settlementReference: settlement.reference,
       party,
-      supplierMerchantId: data.supplierMerchantId ?? existingMetadata?.supplierMerchantId ?? null,
+      supplierMerchantId: this.resolveSupplierMerchantId(settlement, party, data.supplierMerchantId) ?? null,
       status,
       providerReference: data.providerReference ?? null,
       amount: data.amount ?? null,
