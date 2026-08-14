@@ -745,7 +745,7 @@ export class SettlementService {
 
     return {
       success: true,
-      status: 'PROCESSING',
+      status: 'PENDING_PROCESSING',
       message: 'Payment confirmation accepted. The settlement is now processing B2B payout dispatch.',
       settlementId: settlement.id,
       nextStep: 'Dispatch B2B payouts to supplier and retailer and wait for payout callbacks.',
@@ -778,6 +778,228 @@ export class SettlementService {
     return reconcileOperation(this.repository, data);
   }
 
+
+  /**
+   * Split and allocate funds to suppliers and retailers based on settlement payload
+   * Called when payment callback is received from M-Pesa
+   */
+  async splitAndAllocateFunds(data: any): Promise<any> {
+    const timestamp = new Date().toISOString();
+
+    this.logger.log('[SETTLEMENT][SPLIT] splitting funds for settlement', {
+      timestamp,
+      merchantTransactionReference: data.merchantTransactionReference,
+      mpesaReceipt: data.mpesaReceipt,
+    });
+
+    // Find the settlement by merchant transaction reference
+    const settlement = await this.repository.findSettlementByReference(data.merchantTransactionReference);
+    if (!settlement) {
+      this.logger.error('[SETTLEMENT][SPLIT] settlement not found', {
+        timestamp,
+        merchantTransactionReference: data.merchantTransactionReference,
+      });
+      throw new NotFoundException({
+        statusCode: 404,
+        message: 'Settlement not found for the provided merchant transaction reference',
+        error: 'SETTLEMENT_NOT_FOUND',
+      });
+    }
+
+    this.logger.log('[SETTLEMENT][SPLIT] settlement found', {
+      timestamp,
+      settlementId: settlement.id,
+      amount: settlement.amount,
+      currency: settlement.currency,
+    });
+
+    // Parse the payment payload to get supplier and retailer amounts
+    const paymentPayload = (settlement.paymentPayload && typeof settlement.paymentPayload === 'object' && !Array.isArray(settlement.paymentPayload))
+      ? (settlement.paymentPayload as Record<string, any>)
+      : null;
+
+    if (!paymentPayload) {
+      this.logger.error('[SETTLEMENT][SPLIT] payment payload not found', {
+        timestamp,
+        settlementId: settlement.id,
+      });
+      throw new BadRequestException({
+        statusCode: 400,
+        message: 'Settlement payment payload not found',
+        error: 'INVALID_SETTLEMENT_PAYLOAD',
+      });
+    }
+
+    // Get supplier information from the payment payload
+    const suppliers = Array.isArray(paymentPayload.suppliers) ? paymentPayload.suppliers : [];
+    if (suppliers.length === 0) {
+      this.logger.warn('[SETTLEMENT][SPLIT] no suppliers found in payment payload', {
+        timestamp,
+        settlementId: settlement.id,
+      });
+    }
+
+    const firstSupplier = suppliers[0] as Record<string, any> | undefined;
+    const supplierMerchantId = firstSupplier?.supplierMerchantId ?? null;
+    const supplierAmount = firstSupplier?.supplierTotalAmount ?? 0;
+    const retailerAmount = firstSupplier?.retailerTotalAmount ?? 0;
+
+    this.logger.log('[SETTLEMENT][SPLIT] parsed settlement amounts', {
+      timestamp,
+      settlementId: settlement.id,
+      supplierMerchantId,
+      supplierAmount,
+      retailerAmount,
+    });
+
+    // Create allocation record with M-Pesa details
+    const existingMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
+
+    const splitRecord = {
+      timestamp,
+      merchantTransactionReference: data.merchantTransactionReference,
+      mpesaReceipt: data.mpesaReceipt ?? null,
+      mpesaCheckoutRequestId: data.mpesaCheckoutRequestId ?? null,
+      mpesaMerchantRequestId: data.mpesaMerchantRequestId ?? null,
+      resultCode: data.resultCode ?? null,
+      resultDesc: data.resultDesc ?? null,
+      totalAmount: Number(settlement.amount),
+      currency: settlement.currency ?? 'KES',
+      allocations: {
+        supplier: {
+          merchantId: supplierMerchantId,
+          amount: supplierAmount,
+          status: 'PENDING_PAYOUT',
+        },
+        retailer: {
+          merchantId: settlement.businessId ?? null,
+          amount: retailerAmount,
+          status: 'PENDING_PAYOUT',
+        },
+      },
+    };
+
+    const splitRecords = Array.isArray(existingMetadata.splitRecords) ? existingMetadata.splitRecords : [];
+    const updatedMetadata = {
+      ...existingMetadata,
+      splitRecords: [...splitRecords, splitRecord],
+      lastSplitAt: timestamp,
+    };
+
+    // Update settlement status to indicate funds have been split
+    await this.repository.updateSettlementStatus(settlement.id, 'FUNDS_SPLIT', {
+      metadata: updatedMetadata,
+    });
+
+    this.logger.log('[SETTLEMENT][SPLIT] settlement marked as FUNDS_SPLIT', {
+      timestamp,
+      settlementId: settlement.id,
+      supplierAmount,
+      retailerAmount,
+    });
+
+    // Dispatch payouts to supplier and retailer
+    const dispatchResults = {
+      supplier: null as any,
+      retailer: null as any,
+      errors: [] as any[],
+    };
+
+    // Dispatch to supplier
+    if (supplierMerchantId && supplierAmount > 0) {
+      try {
+        this.logger.log('[SETTLEMENT][SPLIT] dispatching payout to supplier', {
+          timestamp,
+          settlementId: settlement.id,
+          supplierMerchantId,
+          amount: supplierAmount,
+        });
+
+        dispatchResults.supplier = await this.dispatchB2bPayouts({
+          merchantTransactionReference: data.merchantTransactionReference,
+          party: 'SUPPLIER',
+          supplierMerchantId,
+          amount: supplierAmount,
+        });
+
+        this.logger.log('[SETTLEMENT][SPLIT] supplier payout dispatched', {
+          timestamp,
+          settlementId: settlement.id,
+          supplierMerchantId,
+          payoutReference: dispatchResults.supplier.payoutReference,
+          status: dispatchResults.supplier.status,
+        });
+      } catch (supplierError) {
+        const errorMsg = supplierError instanceof Error ? supplierError.message : String(supplierError);
+        this.logger.error('[SETTLEMENT][SPLIT] supplier payout dispatch failed', {
+          timestamp,
+          settlementId: settlement.id,
+          supplierMerchantId,
+          error: errorMsg,
+        });
+        dispatchResults.errors.push({
+          party: 'SUPPLIER',
+          supplierMerchantId,
+          amount: supplierAmount,
+          error: errorMsg,
+        });
+      }
+    }
+
+    // Dispatch to retailer
+    if (retailerAmount > 0) {
+      try {
+        this.logger.log('[SETTLEMENT][SPLIT] dispatching payout to retailer', {
+          timestamp,
+          settlementId: settlement.id,
+          amount: retailerAmount,
+        });
+
+        dispatchResults.retailer = await this.dispatchB2bPayouts({
+          merchantTransactionReference: data.merchantTransactionReference,
+          party: 'RETAILER',
+          amount: retailerAmount,
+        });
+
+        this.logger.log('[SETTLEMENT][SPLIT] retailer payout dispatched', {
+          timestamp,
+          settlementId: settlement.id,
+          payoutReference: dispatchResults.retailer.payoutReference,
+          status: dispatchResults.retailer.status,
+        });
+      } catch (retailerError) {
+        const errorMsg = retailerError instanceof Error ? retailerError.message : String(retailerError);
+        this.logger.error('[SETTLEMENT][SPLIT] retailer payout dispatch failed', {
+          timestamp,
+          settlementId: settlement.id,
+          error: errorMsg,
+        });
+        dispatchResults.errors.push({
+          party: 'RETAILER',
+          amount: retailerAmount,
+          error: errorMsg,
+        });
+      }
+    }
+
+    // Final log
+    this.logger.log('[SETTLEMENT][SPLIT] split and allocation completed', {
+      timestamp,
+      settlementId: settlement.id,
+      supplierPayoutStatus: dispatchResults.supplier?.status ?? 'SKIPPED',
+      retailerPayoutStatus: dispatchResults.retailer?.status ?? 'SKIPPED',
+      errorCount: dispatchResults.errors.length,
+    });
+
+    return {
+      success: true,
+      settlementId: settlement.id,
+      merchantTransactionReference: data.merchantTransactionReference,
+      splitRecord,
+      dispatchResults,
+      errors: dispatchResults.errors.length > 0 ? dispatchResults.errors : null,
+    };
+  }
 
   async onModuleDestroy() {
     await this.prisma.$disconnect();

@@ -19,7 +19,7 @@ import {
 } from './dto/settlement-response.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
-@ApiTags('settlement')
+@ApiTags('Settlement')
 @Controller('settlement')
 export class SettlementController {
   private readonly logger = new Logger(SettlementController.name);
@@ -192,8 +192,8 @@ export class SettlementController {
     return this.settlementService.handlePaymentCallback(body);
   }
 
-  @Post('internal/settlements/payment-confirmation')
-  @ApiOperation({ summary: 'Confirm that a settlement was paid by the customer', description: 'Accepts a payment confirmation payload from the payment gateway and advances the settlement into ledger allocation and payout processing.' })
+  @Post('payment-confirmation')
+  @ApiOperation({ summary: 'Confirm that a settlement was paid by the customer', description: 'Accepts an internal payment confirmation payload from the merged payment + settlement engine and advances the settlement into ledger allocation and payout processing.' })
   @ApiResponse({ status: 200, description: 'Payment confirmation processed successfully.' })
   @ApiResponse({ status: 404, description: 'Settlement was not found for the supplied identifier.' })
   async confirmSettlementPayment(@Body() body: PaymentConfirmationDto, @Headers() headers: Record<string, string | string[] | undefined>): Promise<any> {
@@ -259,6 +259,12 @@ export class SettlementController {
 
     this.logger.log(`[CONFIRMATION][AUTH] authenticated successfully for ${body.settlementId}`);
     return this.settlementService.confirmSettlementPayment(body);
+  }
+
+  @Post('internal/settlements/payment-confirmation')
+  @ApiOperation({ summary: 'Legacy internal payment confirmation route', description: 'Alias kept for compatibility with internal settlement confirmation callers.' })
+  async confirmSettlementPaymentInternal(@Body() body: PaymentConfirmationDto, @Headers() headers: Record<string, string | string[] | undefined>): Promise<any> {
+    return this.confirmSettlementPayment(body, headers);
   }
 
   private getHeaderValue(headers: Record<string, string | string[] | undefined>, key: string): string | undefined {
@@ -507,6 +513,62 @@ export class SettlementController {
   @ApiResponse({ status: 200, schema: { example: { status: 'ok' } } })
   getHealth() {
     return { status: 'ok' };
+  }
+
+  /**
+   * TEST/DEBUG: Manually trigger split and payout for a settlement
+   * Useful for testing when the M-Pesa callback doesn't contain all required data
+   */
+  @Post('split-and-payout/:merchantTransactionReference')
+  @ApiOperation({
+    summary: 'Manually trigger split and payout dispatch (TEST/DEBUG)',
+    description: 'Manually invoke the settlement split and payout dispatch process for a given settlement reference. Useful for testing scenarios.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Split and payout dispatch completed',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Settlement not found',
+  })
+  async triggerSplitAndPayout(@Param('merchantTransactionReference') merchantTransactionReference: string, @Body() body: any): Promise<any> {
+    this.logger.log('[SETTLEMENT][TEST] Manual split and payout trigger requested', {
+      merchantTransactionReference,
+      timestamp: new Date().toISOString(),
+    });
+
+    try {
+      const result = await this.settlementService.splitAndAllocateFunds({
+        merchantTransactionReference,
+        mpesaReceipt: body?.mpesaReceipt ?? undefined,
+        mpesaCheckoutRequestId: body?.mpesaCheckoutRequestId ?? undefined,
+        mpesaMerchantRequestId: body?.mpesaMerchantRequestId ?? undefined,
+        resultCode: body?.resultCode ?? 0,
+        resultDesc: body?.resultDesc ?? 'Manual trigger',
+      });
+
+      this.logger.log('[SETTLEMENT][TEST] Manual split and payout completed', {
+        merchantTransactionReference,
+        settlementId: result.settlementId,
+        timestamp: new Date().toISOString(),
+      });
+
+      return {
+        success: true,
+        message: 'Split and payout dispatch initiated',
+        data: result,
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error('[SETTLEMENT][TEST] Manual split and payout failed', {
+        merchantTransactionReference,
+        error: errorMsg,
+        timestamp: new Date().toISOString(),
+      });
+
+      throw error;
+    }
   }
 
   /**

@@ -47,6 +47,58 @@ enum TransactionStatus {
   FAILED
 }
 
+model MpesaRequestLog {
+  id        String   @id @default(cuid())
+  endpoint  String
+  method    String
+  path      String
+  requestBody Json
+  queryParams Json?
+  pathParams  Json?
+  createdAt DateTime @default(now())
+
+  @@map("mpesa_request_logs")
+}
+
+model MpesaTransaction {
+  id                            String           @id @default(cuid())
+  merchantRequestId             String?
+  checkoutRequestId             String?          @unique
+  callbackToken                 String?          @unique
+  callbackConsumed              Boolean          @default(false)
+  amount                        Float?
+  currency                      String?          @default("KES")
+  status                        TransactionStatus @default(PENDING)
+  receiptNumber                 String?
+  resultCode                    Int?
+  resultDescription            String?
+  customerMessage               String?
+  businessShortCode             String?
+  accountReference              String?
+  phoneNumber                   String?
+  requestFingerprint            String?
+  requestBody                   Json?
+  callbackBody                  Json?
+  validationFailureReason       String?
+  processingLogs                Json?
+  pushFailureReason             String?
+  replayAttempts                Int              @default(0)
+  lastReplayAttemptAt           DateTime?
+  callbackReceivedAt            DateTime?
+  settlementId                  String?
+  merchantTransactionReference  String?
+  gatewayPayloadJson            Json?
+  settlementNotificationStatus  String?          @default("PENDING")
+  settlementNotificationAttempts Int             @default(0)
+  settlementNotificationSentAt  DateTime?
+  settlementNotificationLastAttemptAt DateTime?
+  settlementNotificationError   String?
+  createdAt                     DateTime         @default(now())
+  updatedAt                     DateTime         @updatedAt
+
+  @@map("mpesa_transactions")
+}
+
 enum TransactionType {
   SALE
   ADJUSTMENT

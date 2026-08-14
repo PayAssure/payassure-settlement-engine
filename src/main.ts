@@ -9,6 +9,7 @@ import { AuthModule } from './auth/auth.module';
 import { SettlementModule } from './settlement/settlement.module';
 import { bootstrapSuperAdmin } from './auth/bootstrap';
 import { HealthModule } from './health/health.module';
+import { PaymentModule } from './payment/payment.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -56,22 +57,18 @@ async function bootstrap() {
     next();
   });
   const config = new DocumentBuilder()
-    .setTitle('PayAssure API')
+    .setTitle('PayAssure Platform API')
     .setDescription(`
-PayAssure is a secure financial integration and settlement platform that enables retailers, suppliers, financial institutions, and enterprise systems to automate payment processing, transaction orchestration, and settlement workflows.
+PayAssure is a unified platform for payment orchestration, merchant onboarding, settlement execution, reconciliation, and payout workflows.
 
-This API provides endpoints for:
-- Authentication and authorization
-- Participant onboarding and management
-- API integrations and webhooks
-- Transaction ingestion
-- Settlement processing
-- Payout execution
-- Reconciliation
-- Reporting and analytics
-- Notifications and event management
+Included modules:
+- Auth and onboarding
+- Payment initiation and M-Pesa operations
+- Payment callback processing
+- Settlement creation and confirmation
+- Reconciliation and payout tracking
 
-All protected endpoints require a valid JWT access token. API integrations authenticate using merchant credentials and API keys where applicable.
+All protected endpoints require a valid JWT access token. Internal payment confirmation requests use the configured application token and signature secret.
   `)
     .setVersion('1.0.0')
     .addBearerAuth(
@@ -87,7 +84,7 @@ All protected endpoints require a valid JWT access token. API integrations authe
     .build();
 
   const document = SwaggerModule.createDocument(app, config, {
-    include: [SettlementModule, OnbordingsModule, AuthModule,HealthModule],
+    include: [SettlementModule, OnbordingsModule, AuthModule, HealthModule, PaymentModule],
   });
   SwaggerModule.setup('api', app, document);
 

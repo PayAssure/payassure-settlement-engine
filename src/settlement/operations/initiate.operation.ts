@@ -1,36 +1,15 @@
 import { BadRequestException, ConflictException, ForbiddenException, InternalServerErrorException, UnauthorizedException } from '@nestjs/common';
 import { ParticipantStatus, ParticipantType, SettlementStatus } from '@prisma/client';
-import { request as httpsRequest } from 'https';
-import { request as httpRequest } from 'http';
 import { InitiateSettlementDto } from '../dto/initiate-settlement.dto';
 import { validateAndGetSession } from '../helpers/session.helpers';
 import { validateSettlementData } from '../helpers/validation.helpers';
 import { generateInternalMerchantTransactionReference, generatePayAssureReference } from '../helpers/reference.helpers';
+import { mpesaService } from '../../payment/services/mpesa.service';
 
-const GATEWAY_STK_PATH = '/api/payments/mpesa/stk';
 const GATEWAY_REQUEST_TIMEOUT_MS = 15000;
 
-function getGatewayBaseUrl() {
-  const gatewayBaseUrl = process.env.GATEWAY_BASE_URL;
-  if (!gatewayBaseUrl) {
-    throw new InternalServerErrorException({
-      statusCode: 500,
-      message: 'Payment gateway base URL is not configured',
-      error: 'GATEWAY_BASE_URL_MISSING',
-    });
-  }
-  return gatewayBaseUrl.replace(/\/+$/, '');
-}
-
 function getGatewayAccountReference() {
-  const accountReference = process.env.GATEWAY_ACCOUNT_REFERENCE;
-  if (!accountReference) {
-    throw new InternalServerErrorException({
-      statusCode: 500,
-      message: 'Payment gateway account reference is not configured',
-      error: 'GATEWAY_ACCOUNT_REFERENCE_MISSING',
-    });
-  }
+  const accountReference = process.env.GATEWAY_ACCOUNT_REFERENCE || process.env.MPESA_ACCOUNT_REFERENCE || 'payassure';
   return accountReference;
 }
 
@@ -40,47 +19,7 @@ function buildTransactionDescription(data: InitiateSettlementDto) {
 }
 
 async function sendStkPushRequest(payload: Record<string, any>) {
-  const gatewayBaseUrl = getGatewayBaseUrl();
-  const url = new URL(GATEWAY_STK_PATH, gatewayBaseUrl);
-  const body = JSON.stringify(payload);
-  const clientRequest = url.protocol === 'http:' ? httpRequest : httpsRequest;
-
-  return new Promise<any>((resolve, reject) => {
-    const req = clientRequest(
-      url,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(body),
-        },
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-        res.on('end', () => {
-          const raw = Buffer.concat(chunks).toString('utf8');
-          const statusCode = res.statusCode ?? 0;
-          if (statusCode < 200 || statusCode >= 300) {
-            return reject(new Error(`Gateway returned ${statusCode}: ${raw}`));
-          }
-          try {
-            const parsed = raw ? JSON.parse(raw) : {};
-            resolve(parsed);
-          } catch (error) {
-            reject(new Error(`Invalid gateway response: ${error instanceof Error ? error.message : String(error)}`));
-          }
-        });
-      },
-    );
-
-    req.setTimeout(GATEWAY_REQUEST_TIMEOUT_MS, () => {
-      req.destroy(new Error(`Gateway request timed out after ${GATEWAY_REQUEST_TIMEOUT_MS}ms`));
-    });
-    req.on('error', (err) => reject(err));
-    req.write(body);
-    req.end();
-  });
+  return mpesaService.initiateStkPush(payload);
 }
 
 function shouldRetryGatewayError(error: unknown) {
@@ -266,7 +205,6 @@ export async function initiateOperation(
       const amount = Number(data.totalAmount);
       const accountReference = getGatewayAccountReference();
       const transactionDesc = buildTransactionDescription(data);
-      const gatewayUrl = new URL(GATEWAY_STK_PATH, getGatewayBaseUrl()).toString();
       const gatewayRequestPayload = {
         merchantTransactionReference: data.merchantTransactionReference,
         totalAmount: amount,
@@ -283,8 +221,8 @@ export async function initiateOperation(
         transactionDesc,
       };
 
-      logger.log(`Sending STK push request to payment gateway url=${gatewayUrl} for merchantTransactionReference=${data.merchantTransactionReference}`);
-      logger.log(`Gateway request payload: ${JSON.stringify(gatewayRequestPayload)}`);
+      logger.log(`Initiating STK push through internal payment service for merchantTransactionReference=${data.merchantTransactionReference}`);
+      logger.log(`STK push payload: ${JSON.stringify(gatewayRequestPayload)}`);
       const gatewayResult = await sendStkPushRequestWithRetry(
         async (payload) => sendStkPushRequest({ ...gatewayRequestPayload, ...payload }),
         logger,
@@ -295,7 +233,7 @@ export async function initiateOperation(
 
       if (!gatewayResult.success) {
         const retryable = Boolean(gatewayResult.retryable);
-        logger.warn(`Gateway delivery failed after retries for merchantTransactionReference=${data.merchantTransactionReference}. retryable=${retryable}`);
+        logger.warn(`STK push delivery failed after retries for merchantTransactionReference=${data.merchantTransactionReference}. retryable=${retryable}`);
         if (typeof repository.updateSettlementStatus === 'function') {
           await repository.updateSettlementStatus(primarySettlement.id, retryable ? SettlementStatus.INITIATED : SettlementStatus.FAILED, {
             metadata: {
@@ -311,12 +249,12 @@ export async function initiateOperation(
                 response: gatewayResult,
               },
               gatewayPending: retryable,
-              gatewayPendingReason: gatewayResult.error ?? 'Gateway unavailable',
+              gatewayPendingReason: gatewayResult.error ?? 'Payment service unavailable',
             },
             failedAt: retryable ? undefined : new Date(),
           });
         } else {
-          logger.warn('Repository does not implement updateSettlementStatus; skipping persistence of gateway failure metadata');
+          logger.warn('Repository does not implement updateSettlementStatus; skipping persistence of payment failure metadata');
         }
         if (typeof repository.touchSession === 'function') {
           await repository.touchSession(session.id);
@@ -338,12 +276,12 @@ export async function initiateOperation(
             estimatedProcessingTime: 'N/A',
           },
           message: retryable
-            ? 'Gateway delivery failed after retries. Settlement is marked for retryable gateway failure.'
-            : 'Gateway delivery failed after retries with non-retryable error. Settlement is marked failed.',
+            ? 'STK push initiation failed after retries. Settlement is marked for retryable failure.'
+            : 'STK push initiation failed after retries with non-retryable error. Settlement is marked failed.',
         };
       }
 
-      logger.log(`STK push gateway response received for merchantTransactionReference=${data.merchantTransactionReference}`);
+      logger.log(`STK push response received for merchantTransactionReference=${data.merchantTransactionReference}`);
 
       data.metadata = {
         ...(data.metadata ?? {}),

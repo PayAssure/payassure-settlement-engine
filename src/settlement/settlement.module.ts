@@ -7,5 +7,6 @@ import { SupplierController } from './supplier.controller';
 @Module({
   controllers: [SettlementController, SupplierController],
   providers: [SettlementService, SettlementRepository],
+  exports: [SettlementService],
 })
 export class SettlementModule {}
