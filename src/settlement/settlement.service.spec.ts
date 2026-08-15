@@ -1,6 +1,65 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { SettlementService } from './settlement.service';
+import { paymentRecordService } from '../payment/services/payment-record.service';
+import { prisma } from '../payment/config/mpesa.env';
+
+test('splitAndAllocateFunds persists payment callback metadata before B2B payout dispatch', async () => {
+  let updatedStatus: any = null;
+  let updatedMetadata: any = null;
+
+  const repository = {
+    findSettlementByReference: async () => ({
+      id: 'settlement-split-1',
+      status: 'INITIATED',
+      metadata: {},
+      paymentSnapshot: { type: 'BANK', shortcode: '12345', accountName: 'ACCT NAME' },
+      processedAt: null,
+      amount: '2',
+      businessId: 'retailer-1',
+      currency: 'KES',
+      reference: 'REF-SPLIT-1',
+      paymentPayload: {
+        merchantTransactionReference: 'TXN-SPLIT-1',
+        paymentMethod: {
+          type: 'MPESA',
+          provider: 'Safaricom',
+          payerPhoneNumber: '+254700000003',
+        },
+        suppliers: [{ supplierMerchantId: 'SUP-3001', supplierTotalAmount: 1, retailerTotalAmount: 1, platformFee: 0 }],
+      },
+    }),
+    updateSettlementStatus: async (_id: string, status: string, updates: any) => {
+      updatedStatus = status;
+      updatedMetadata = updates.metadata;
+      return { id: 'settlement-split-1', status, ...updates };
+    },
+  };
+
+  const service = new SettlementService(repository as any);
+  let dispatchCalled = false;
+  (service as any).dispatchB2bPayouts = async () => {
+    dispatchCalled = true;
+    if (!updatedMetadata?.paymentCallback?.status || updatedMetadata.paymentCallback.status !== 'SUCCESS') {
+      throw new Error('payment callback metadata missing before B2B dispatch');
+    }
+    return { success: true, status: 'DISPATCHED', payoutReference: 'payout-3001' };
+  };
+
+  const response = await service.splitAndAllocateFunds({
+    merchantTransactionReference: 'TXN-SPLIT-1',
+    mpesaReceipt: 'RCP-3001',
+    mpesaCheckoutRequestId: 'checkout-3001',
+    mpesaMerchantRequestId: 'merchant-3001',
+    resultCode: 0,
+    resultDesc: 'The service request is processed successfully.',
+  } as any);
+
+  assert.equal(response.success, true);
+  assert.equal(dispatchCalled, true);
+  assert.equal(updatedMetadata.paymentCallback.status, 'SUCCESS');
+  assert.equal(updatedMetadata.paymentCallback.providerReference, 'RCP-3001');
+});
 
 test('handlePaymentCallback transitions a settlement into pending processing', async () => {
   let updatedStatus: any = null;
@@ -128,6 +187,56 @@ test('confirmSettlementPayment accepts a paid confirmation payload', async () =>
 
   assert.equal(response.success, true);
   assert.equal(response.status, 'PENDING_PROCESSING');
+});
+
+test('PaymentRecordService resolves the merchant reference from the saved callback lookup when the gateway payload is missing it', async () => {
+  const originalFindFirst = prisma.mpesaTransaction.findFirst as any;
+  const originalUpdate = prisma.mpesaTransaction.update as any;
+
+  const callbackLookup = 'cb-lookup-123';
+  let updatedRecord: any = null;
+
+  (prisma.mpesaTransaction as any).findFirst = async () => ({
+    id: 'txn-123',
+    checkoutRequestId: 'ws_CO_123',
+    merchantRequestId: 'merchant-123',
+    callbackToken: callbackLookup,
+    merchantTransactionReference: 'TXN-LOOKUP-REF',
+    processingLogs: [],
+  });
+
+  (prisma.mpesaTransaction as any).update = async ({ where, data }: any) => {
+    updatedRecord = { id: where.id, ...data };
+    return updatedRecord;
+  };
+
+  try {
+    const result = await paymentRecordService.upsertFromMpesaCallback({
+      Body: {
+        stkCallback: {
+          MerchantRequestID: 'merchant-123',
+          CheckoutRequestID: 'ws_CO_123',
+          ResultCode: 0,
+          ResultDesc: 'The service request is processed successfully.',
+          CallbackMetadata: {
+            Item: [
+              { Name: 'Amount', Value: 200 },
+              { Name: 'MpesaReceiptNumber', Value: 'RCPT-123' },
+              { Name: 'TransactionDate', Value: 20260815154456 },
+              { Name: 'PhoneNumber', Value: 254700000000 },
+            ],
+          },
+        },
+      },
+    } as any, callbackLookup);
+
+    assert.equal(result?.status, 'COMPLETED');
+    assert.equal(updatedRecord.merchantTransactionReference, 'TXN-LOOKUP-REF');
+    assert.equal(updatedRecord.processingLogs.at(-1), 'callback validated and transaction completed');
+  } finally {
+    (prisma.mpesaTransaction as any).findFirst = originalFindFirst;
+    (prisma.mpesaTransaction as any).update = originalUpdate;
+  }
 });
 
 test('dispatchB2bPayouts records a dispatch and updates settlement metadata', async () => {

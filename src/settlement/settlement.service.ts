@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
-import { ParticipantStatus, ParticipantType, PrismaClient } from '@prisma/client';
+import { ParticipantStatus, ParticipantType, PrismaClient, SettlementStatus } from '@prisma/client';
 import { request as httpsRequest } from 'https';
 import { request as httpRequest } from 'http';
 import { SettlementRepository } from './settlement.repository';
@@ -354,6 +354,7 @@ export class SettlementService {
   private async resolveB2bRecipient(settlement: any, party: 'SUPPLIER' | 'RETAILER', supplierMerchantId?: string): Promise<B2bPayoutRecipient> {
     if (party === 'RETAILER') {
       const participant = await this.prisma.onboardingParticipant.findUnique({ where: { id: settlement.businessId } });
+      this.logger.log(`[B2B][RECIPIENT] resolving retailer payout using authenticated participant merchantId=${settlement.businessId}`);
       if (!participant) {
         throw new NotFoundException({ statusCode: 404, message: 'Retailer participant not found for this settlement', error: 'RETAILER_NOT_FOUND' });
       }
@@ -375,8 +376,11 @@ export class SettlementService {
       throw new BadRequestException({ statusCode: 400, message: 'Supplier merchant ID is required for supplier payouts', error: 'SUPPLIER_MERCHANT_ID_REQUIRED' });
     }
 
+    this.logger.log(`[B2B][RECIPIENT] resolving supplier payout for supplierMerchantId=${supplierId}`);
+
     const payment = (settlement.paymentSnapshot ?? null) as any;
     if (payment && payment.type) {
+      this.logger.log(`[B2B][RECIPIENT] using settlement payment snapshot for supplier=${supplierId}`);
       return {
         type: payment.type,
         provider: payment.provider ?? null,
@@ -396,6 +400,8 @@ export class SettlementService {
       throw new BadRequestException({ statusCode: 400, message: 'Supplier payout destination is not configured', error: 'SUPPLIER_PAYMENT_NOT_CONFIGURED' });
     }
 
+    this.logger.log(`[B2B][RECIPIENT] supplier payout details loaded from integration merchantId=${supplierId}, type=${supplierPayment.type}`);
+
     return {
       type: supplierPayment.type,
       provider: supplierPayment.provider ?? null,
@@ -406,6 +412,8 @@ export class SettlementService {
   }
 
   async dispatchB2bPayouts(data: any): Promise<any> {
+    this.logger.log(`[B2B][DISPATCH] starting payout dispatch for merchantTransactionReference=${data.merchantTransactionReference} party=${data.party ?? 'UNKNOWN'}`);
+
     const settlement = await this.repository.findSettlementByReference(data.merchantTransactionReference);
     if (!settlement) {
       throw new NotFoundException({ statusCode: 404, message: 'Settlement not found for the provided merchant transaction reference', error: 'SETTLEMENT_NOT_FOUND' });
@@ -414,10 +422,11 @@ export class SettlementService {
 
     const callbackStatus = existingMetadata.paymentCallback?.status ?? existingMetadata.paymentConfirmation?.status;
     if (!callbackStatus || !['SUCCESS', 'PAID'].includes(String(callbackStatus).toUpperCase())) {
-      throw new NotFoundException({ statusCode: 404, message: 'A successful payment callback or confirmation has not been recorded for this settlement', error: 'PAYMENT_NOT_CONFIRMED' });
+      throw new NotFoundException({ statusCode: 404, message: 'A successful payment callback or confirmation has not been recorded for this settlement', data: { existingMetadata }, error: 'PAYMENT_NOT_CONFIRMED' });
     }
     const party = (String(data.party || (existingMetadata?.supplierMerchantId ? 'SUPPLIER' : 'RETAILER')).toUpperCase() as 'SUPPLIER' | 'RETAILER');
     const resolvedSupplierMerchantId = this.resolveSupplierMerchantId(settlement, party, data.supplierMerchantId);
+    this.logger.log(`[B2B][DISPATCH] resolved party=${party} supplierMerchantId=${resolvedSupplierMerchantId ?? 'n/a'} retailerParticipantId=${settlement.businessId ?? 'n/a'} for settlement=${settlement.id}`);
     const recipient = await this.resolveB2bRecipient(settlement, party, resolvedSupplierMerchantId ?? undefined);
 
     if (recipient.type === 'BANK') {
@@ -476,6 +485,18 @@ export class SettlementService {
     };
 
     this.logger.log(`[B2B][DISPATCH] settlement=${settlement.id} party=${party} amount=${amount} recipientShortCode=${recipientShortCode} accountReference=${recipient.accountName} callbackUrl=${callbackUrl ?? 'unset'}`);
+    this.logger.log('[B2B][DISPATCH][RECIPIENT] payout recipient resolved for dispatch', {
+      timestamp: new Date().toISOString(),
+      settlementId: settlement.id,
+      party,
+      supplierMerchantId: resolvedSupplierMerchantId ?? null,
+      retailerParticipantId: settlement.businessId ?? null,
+      recipientType: recipient.type,
+      recipientProvider: recipient.provider ?? null,
+      recipientShortCode,
+      accountName: recipient.accountName ?? null,
+      payerPhoneNumber: recipient.payerPhoneNumber ?? null,
+    });
     this.logger.log(`[B2B][DISPATCH] payload=${JSON.stringify(requestPayload, null, 2)}`);
     const gatewayResult = await this.sendB2bGatewayPayoutRequest(requestPayload);
     this.logger.log(`[B2B][DISPATCH] payoutReference=${payoutReference} settled=${settlement.id} gatewayResult=${JSON.stringify(gatewayResult, null, 2)}`);
@@ -855,6 +876,23 @@ export class SettlementService {
     // Create allocation record with M-Pesa details
     const existingMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
 
+    const paymentCallbackRecord = {
+      merchantTransactionReference: data.merchantTransactionReference,
+      status: 'SUCCESS',
+      provider: 'M-PESA',
+      providerReference: data.mpesaReceipt ?? data.mpesaCheckoutRequestId ?? data.mpesaMerchantRequestId ?? null,
+      amount: Number(settlement.amount ?? 0),
+      currency: settlement.currency ?? 'KES',
+      metadata: {
+        mpesaReceipt: data.mpesaReceipt ?? null,
+        mpesaCheckoutRequestId: data.mpesaCheckoutRequestId ?? null,
+        mpesaMerchantRequestId: data.mpesaMerchantRequestId ?? null,
+        resultCode: data.resultCode ?? null,
+        resultDesc: data.resultDesc ?? null,
+      },
+      receivedAt: timestamp,
+    };
+
     const splitRecord = {
       timestamp,
       merchantTransactionReference: data.merchantTransactionReference,
@@ -882,16 +920,25 @@ export class SettlementService {
     const splitRecords = Array.isArray(existingMetadata.splitRecords) ? existingMetadata.splitRecords : [];
     const updatedMetadata = {
       ...existingMetadata,
+      paymentCallback: paymentCallbackRecord,
       splitRecords: [...splitRecords, splitRecord],
       lastSplitAt: timestamp,
     };
 
-    // Update settlement status to indicate funds have been split
-    await this.repository.updateSettlementStatus(settlement.id, 'FUNDS_SPLIT', {
+    this.logger.log('[SETTLEMENT][SPLIT][CALLBACK] persisted callback metadata before payout dispatch', {
+      timestamp,
+      settlementId: settlement.id,
+      merchantTransactionReference: data.merchantTransactionReference,
+      paymentCallbackRecord,
+      allocationPlan: (updatedMetadata as Record<string, any>).allocationPlan ?? null,
+    });
+
+    // Update settlement status to indicate the settlement is in payout processing.
+    await this.repository.updateSettlementStatus(settlement.id, SettlementStatus.PROCESSING, {
       metadata: updatedMetadata,
     });
 
-    this.logger.log('[SETTLEMENT][SPLIT] settlement marked as FUNDS_SPLIT', {
+    this.logger.log('[SETTLEMENT][SPLIT] settlement marked as PROCESSING', {
       timestamp,
       settlementId: settlement.id,
       supplierAmount,

@@ -221,10 +221,12 @@ export async function initiateOperation(
         transactionDesc,
       };
 
+      logger.log(`Persisting settlement payment request payload for callback lookup and reconciliation: merchantTransactionReference=${data.merchantTransactionReference}`);
+
       logger.log(`Initiating STK push through internal payment service for merchantTransactionReference=${data.merchantTransactionReference}`);
       logger.log(`STK push payload: ${JSON.stringify(gatewayRequestPayload)}`);
       const gatewayResult = await sendStkPushRequestWithRetry(
-        async (payload) => sendStkPushRequest({ ...gatewayRequestPayload, ...payload }),
+        async (payload) => sendStkPushRequest({ gatewayPayload: gatewayRequestPayload, ...gatewayRequestPayload, ...payload }),
         logger,
         data.merchantTransactionReference,
         3,

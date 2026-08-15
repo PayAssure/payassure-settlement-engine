@@ -48,6 +48,12 @@ export class PaymentCallbackController {
         callbackIdentifier,
       );
 
+      const resolvedMerchantTransactionReference =
+        (req.body as any)?.Body?.gatewayPayload?.merchantTransactionReference ??
+        (req.body as any)?.merchantTransactionReference ??
+        transactionResult?.merchantTransactionReference ??
+        null;
+
       if (!transactionResult) {
         this.logger.warn('[PAYMENT][CALLBACK] M-Pesa transaction not found in database', {
           timestamp,
@@ -77,13 +83,23 @@ export class PaymentCallbackController {
           checkoutRequestId: parsed.checkoutRequestId,
         });
 
-        // Extract merchant transaction reference from gateway payload
         const gatewayPayload = (req.body as any)?.Body?.gatewayPayload;
-        const merchantTransactionReference = gatewayPayload?.merchantTransactionReference ?? null;
+        const merchantTransactionReference =
+          gatewayPayload?.merchantTransactionReference ??
+          resolvedMerchantTransactionReference ??
+          null;
 
         if (merchantTransactionReference) {
           try {
             // Call settlement split endpoint - this will handle all the splitting logic
+            this.logger.log('[PAYMENT][CALLBACK] callback lookup resolved merchant reference', {
+              timestamp,
+              callbackIdentifier,
+              checkoutRequestId: parsed.checkoutRequestId,
+              merchantTransactionReference,
+              storedInDb: transactionResult?.merchantTransactionReference ?? null,
+            });
+
             this.logger.log('[PAYMENT][CALLBACK] invoking settlement split and allocation', {
               timestamp,
               merchantTransactionReference,
@@ -209,6 +225,12 @@ export class PaymentCallbackController {
     });
 
     try {
+      this.logger.log('[PAYMENT][CALLBACK][RAW] exact callback payload received from MPesa', {
+        timestamp,
+        callbackIdentifier,
+        rawCallbackBody: req.body,
+      });
+
       // Step 1: Parse the M-Pesa callback
       const parsed = parseStkCallback(req.body as Record<string, unknown>);
       this.logger.log('[PAYMENT][CALLBACK] M-Pesa callback parsed', {
@@ -225,6 +247,12 @@ export class PaymentCallbackController {
         req.body as Record<string, unknown>,
         callbackIdentifier,
       );
+
+      const resolvedMerchantTransactionReference =
+        (req.body as any)?.Body?.gatewayPayload?.merchantTransactionReference ??
+        (req.body as any)?.merchantTransactionReference ??
+        result?.merchantTransactionReference ??
+        null;
 
       if (!result) {
         this.logger.warn('[PAYMENT][CALLBACK] M-Pesa transaction not found with identifier', {
@@ -248,6 +276,16 @@ export class PaymentCallbackController {
         status: result.status,
       });
 
+      this.logger.log('[PAYMENT][CALLBACK][MAPPING] callback to settlement mapping', {
+        timestamp,
+        callbackIdentifier,
+        checkoutRequestId: parsed.checkoutRequestId,
+        merchantRequestId: parsed.merchantRequestId,
+        receipt: parsed.receipt,
+        resolvedMerchantTransactionReference: resolvedMerchantTransactionReference,
+        storedInDb: result?.merchantTransactionReference ?? null,
+      });
+
       // Step 3: If payment was successful, trigger settlement split
       if (parsed.status === 'completed') {
         this.logger.log('[PAYMENT][CALLBACK] payment successful - triggering settlement split and payout', {
@@ -257,12 +295,22 @@ export class PaymentCallbackController {
           checkoutRequestId: parsed.checkoutRequestId,
         });
 
-        // Extract merchant transaction reference from gateway payload
         const gatewayPayload = (req.body as any)?.Body?.gatewayPayload;
-        const merchantTransactionReference = gatewayPayload?.merchantTransactionReference ?? null;
+        const merchantTransactionReference =
+          gatewayPayload?.merchantTransactionReference ??
+          resolvedMerchantTransactionReference ??
+          null;
 
         if (merchantTransactionReference) {
           try {
+            this.logger.log('[PAYMENT][CALLBACK] callback lookup resolved merchant reference', {
+              timestamp,
+              callbackIdentifier,
+              checkoutRequestId: parsed.checkoutRequestId,
+              merchantTransactionReference,
+              storedInDb: result?.merchantTransactionReference ?? null,
+            });
+
             this.logger.log('[PAYMENT][CALLBACK] invoking settlement split and payout dispatch', {
               timestamp,
               callbackIdentifier,
