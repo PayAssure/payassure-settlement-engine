@@ -20,6 +20,7 @@ import { trackOperation } from './operations/track.operation';
 import { getTransactionOperation } from './operations/get-transaction.operation';
 import { reconcileOperation } from './operations/reconcile.operation';
 import { generateSessionToken, hashCredential } from './helpers/reference.helpers';
+import { b2bService } from '../payment/services/b2b.service';
 
 interface B2bPayoutRecipient {
   type: string;
@@ -32,6 +33,8 @@ interface B2bPayoutRecipient {
 interface B2bGatewayResponse {
   success: boolean;
   statusCode?: number;
+  responseCode?: string;
+  responseDescription?: string;
   response?: any;
   error?: string;
 }
@@ -236,6 +239,11 @@ export class SettlementService {
       metadata: {
         ...existingMetadata,
         paymentCallback,
+        paymentConfirmation: {
+          ...paymentCallback,
+          status: 'PAID',
+          confirmedAt: new Date().toISOString(),
+        },
         allocationPlan,
       },
     });
@@ -255,77 +263,141 @@ export class SettlementService {
     return baseUrl ? baseUrl.replace(/\/+$/, '') : null;
   }
 
-  private getB2bPayoutCallbackUrl(): string | null {
+  private getB2bPayoutCallbackUrl(callbackIdentifier?: string): string | null {
     const callbackBase = process.env.B2B_PAYOUT_CALLBACK_URL || process.env.PAYMENT_GATEWAY_CALLBACK_URL || process.env.MPESA_CALLBACK_URL;
-    return callbackBase ? callbackBase.replace(/\/+$/, '') + '/settlement/payouts/callback' : null;
+    if (!callbackBase) {
+      return null;
+    }
+
+    const normalizedBase = callbackBase.replace(/\/+$/, '');
+    const baseWithoutPayments = normalizedBase.replace(/\/payments?$/, '');
+    const callbackPath = '/settlement/payouts/callback';
+    const callbackSuffix = callbackIdentifier ? `${callbackPath}/${callbackIdentifier}` : callbackPath;
+    const callbackUrl = `${baseWithoutPayments}${callbackSuffix}`;
+
+    return normalizedBase.endsWith(callbackSuffix) ? normalizedBase : callbackUrl;
   }
 
   private getB2bGatewayApiToken(): string | null {
     return process.env.B2B_GATEWAY_API_TOKEN || process.env.PAYMENT_GATEWAY_API_TOKEN || process.env.SETTLEMENT_API_TOKEN || null;
   }
 
+  private async resolvePayoutValidationSettlement(settlement: any): Promise<any> {
+    if (!settlement) {
+      return settlement;
+    }
+
+    const metadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
+    if (this.hasConfirmedCustomerPayment(settlement, metadata)) {
+      return settlement;
+    }
+
+    const parentSettlementId = metadata.parentSettlementId ?? null;
+    if (parentSettlementId && typeof this.repository.findSettlementById === 'function') {
+      const parentSettlement = await this.repository.findSettlementById(String(parentSettlementId));
+      if (parentSettlement && parentSettlement.id !== settlement.id) {
+        const parentMetadata = (parentSettlement.metadata && typeof parentSettlement.metadata === 'object') ? parentSettlement.metadata as Record<string, any> : {};
+        if (this.hasConfirmedCustomerPayment(parentSettlement, parentMetadata)) {
+          return parentSettlement;
+        }
+      }
+    }
+
+    const originalReference = metadata.originalMerchantReference ?? metadata.parentMerchantTransactionReference ?? null;
+    if (originalReference && typeof this.repository.findSettlementByReference === 'function') {
+      const originalSettlement = await this.repository.findSettlementByReference(String(originalReference));
+      if (originalSettlement && originalSettlement.id !== settlement.id) {
+        const originalMetadata = (originalSettlement.metadata && typeof originalSettlement.metadata === 'object') ? originalSettlement.metadata as Record<string, any> : {};
+        if (this.hasConfirmedCustomerPayment(originalSettlement, originalMetadata)) {
+          return originalSettlement;
+        }
+      }
+    }
+
+    return settlement;
+  }
+
   private async sendB2bGatewayPayoutRequest(payload: Record<string, any>): Promise<B2bGatewayResponse> {
-    const gatewayBaseUrl = await this.getB2bGatewayBaseUrl();
-    if (!gatewayBaseUrl) {
-      this.logger.warn('[B2B][DISPATCH] B2B gateway base URL is not configured. Dispatch request will be recorded but not sent.');
-      return { success: false, error: 'B2B_GATEWAY_BASE_URL_NOT_CONFIGURED' };
-    }
-
-    const payoutPath = process.env.B2B_GATEWAY_PAYOUT_PATH ?? '/api/payments/mpesa/b2b';
-    const url = new URL(payoutPath, gatewayBaseUrl);
-    const body = JSON.stringify(payload);
-    const clientRequest = url.protocol === 'http:' ? httpRequest : httpsRequest;
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(body).toString(),
-    };
-
-    const apiToken = this.getB2bGatewayApiToken();
-    if (apiToken) {
-      headers.Authorization = `Bearer ${apiToken}`;
-    }
-
-    return new Promise<B2bGatewayResponse>((resolve) => {
-      const req = clientRequest(
-        url,
-        {
-          method: 'POST',
-          headers,
-        },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-          res.on('end', () => {
-            const raw = Buffer.concat(chunks).toString('utf8');
-            const statusCode = res.statusCode ?? 0;
-            if (statusCode >= 200 && statusCode < 300) {
-              try {
-                const parsed = raw ? JSON.parse(raw) : {};
-                return resolve({ success: true, statusCode, response: parsed });
-              } catch (error) {
-                return resolve({ success: true, statusCode, response: raw });
-              }
-            }
-            let response: any = raw;
-            try {
-              response = raw ? JSON.parse(raw) : raw;
-            } catch (_err) {
-              response = raw;
-            }
-            resolve({ success: false, statusCode, response, error: `Gateway returned ${statusCode}` });
-          });
-        },
-      );
-
-      req.setTimeout(30000, () => {
-        req.destroy(new Error('B2B gateway request timed out after 30000ms'));
+    try {
+      this.logger.log('[B2B][DISPATCH][GATEWAY] attempting to call b2bService.initiateB2B', {
+        recipientShortCode: payload.recipientShortCode ?? payload.recipientPhoneNumber ?? payload.accountReference ?? '174379',
+        amount: Number(payload.amount ?? 0),
+        description: payload.description ?? payload.remarks ?? 'Settlement payout',
+        accountReference: payload.accountReference ?? payload.metadata?.supplierMerchantId ?? 'B2B Payment',
+        callbackUrl: payload.callbackUrl ?? process.env.MPESA_CALLBACK_URL ?? process.env.B2B_PAYOUT_CALLBACK_URL ?? process.env.PAYMENT_GATEWAY_CALLBACK_URL,
+        timestamp: new Date().toISOString(),
       });
-      req.on('error', (err) => {
-        resolve({ success: false, error: err instanceof Error ? err.message : String(err) });
+
+      const response = await b2bService.initiateB2B({
+        recipientShortCode: payload.recipientShortCode ?? payload.recipientPhoneNumber ?? payload.accountReference ?? '174379',
+        amount: Number(payload.amount ?? 0),
+        description: payload.description ?? payload.remarks ?? 'Settlement payout',
+        accountReference: payload.accountReference ?? payload.metadata?.supplierMerchantId ?? 'B2B Payment',
+        callbackUrl: payload.callbackUrl ?? process.env.MPESA_CALLBACK_URL ?? process.env.B2B_PAYOUT_CALLBACK_URL ?? process.env.PAYMENT_GATEWAY_CALLBACK_URL,
       });
-      req.write(body);
-      req.end();
-    });
+
+      const responseCode = response?.responseCode ?? response?.ResponseCode ?? 'UNKNOWN';
+      const responseDescription = response?.responseDescription ?? response?.ResponseDescription ?? 'Unknown B2B gateway response';
+      const isAcceptedBySafaricom = String(responseCode) === '0';
+
+      this.logger.log('[B2B][DISPATCH][GATEWAY][RESPONSE]', {
+        isAcceptedBySafaricom,
+        responseCode,
+        responseDescription,
+        fullResponse: response,
+      });
+
+      return {
+        success: isAcceptedBySafaricom,
+        statusCode: 200,
+        responseCode: String(responseCode),
+        responseDescription: String(responseDescription),
+        response,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      
+      this.logger.error('[B2B][DISPATCH] external payment gateway B2B request failed', {
+        error: message,
+        errorStack,
+        payloadSummary: {
+          amount: payload.amount,
+          recipientShortCode: payload.recipientShortCode ?? payload.recipientPhoneNumber,
+          accountReference: payload.accountReference,
+          callbackUrl: payload.callbackUrl,
+        },
+        timestamp: new Date().toISOString(),
+        troubleshooting: {
+          checkMpesaEnvironment: process.env.MPESA_ENVIRONMENT || 'not set (defaults to sandbox)',
+          checkSecurityCredential: process.env.MPESA_SECURITY_CREDENTIAL ? 'SET' : 'MISSING',
+          checkInitiatorName: process.env.MPESA_INITIATOR_NAME || 'not set (defaults to testapi)',
+          checkConsumerKeySet: !!process.env.MPESA_CONSUMER_KEY,
+          checkConsumerSecretSet: !!process.env.MPESA_CONSUMER_SECRET,
+        },
+      });
+
+      return { success: false, error: message };
+    }
+  }
+
+  private hasConfirmedCustomerPayment(settlement: any, metadata: Record<string, any>): boolean {
+    const settlementStatus = String(settlement?.status ?? '').toUpperCase();
+    const callbackStatus = String(metadata?.paymentCallback?.status ?? metadata?.paymentConfirmation?.status ?? '').toUpperCase();
+    const confirmationStatus = String(metadata?.paymentConfirmation?.status ?? '').toUpperCase();
+    const splitStatus = Array.isArray(metadata?.splitRecords)
+      ? metadata.splitRecords.some((record: any) => {
+          const sameReference = record?.merchantTransactionReference === settlement?.merchantTransactionReference;
+          const successStatus = ['SUCCESS', 'PAID', 'COMPLETED'].includes(String(record?.status ?? '').toUpperCase());
+          return sameReference && successStatus;
+        })
+      : false;
+
+    const processingState = ['PENDING_PROCESSING', 'PROCESSING', 'PROCESSING_COMPLETE', 'AWAITING_RECONCILIATION', 'COMPLETED'].includes(settlementStatus);
+    const callbackConfirmed = ['SUCCESS', 'PAID', 'COMPLETED'].includes(callbackStatus);
+    const confirmationConfirmed = ['SUCCESS', 'PAID', 'COMPLETED'].includes(confirmationStatus);
+
+    return callbackConfirmed || confirmationConfirmed || splitStatus || processingState;
   }
 
   private resolveSupplierMerchantId(settlement: any, party: 'SUPPLIER' | 'RETAILER', supplierMerchantId?: string): string | null {
@@ -353,8 +425,28 @@ export class SettlementService {
 
   private async resolveB2bRecipient(settlement: any, party: 'SUPPLIER' | 'RETAILER', supplierMerchantId?: string): Promise<B2bPayoutRecipient> {
     if (party === 'RETAILER') {
+      const retailerMerchantId = settlement?.metadata?.retailerMerchantId
+        ?? settlement?.paymentPayload?.merchantId
+        ?? null;
+
+      this.logger.log(`[B2B][RECIPIENT] resolving retailer payout using merchantId=${retailerMerchantId ?? 'n/a'} settlementId=${settlement?.id ?? 'n/a'}`);
+
+      if (retailerMerchantId) {
+        const retailerIntegration = await this.repository.findIntegrationByMerchantId(String(retailerMerchantId));
+        if (retailerIntegration?.participant?.payment) {
+          const payment = retailerIntegration.participant.payment as any;
+          this.logger.log(`[B2B][RECIPIENT] retailer payout loaded from merchant integration merchantId=${retailerMerchantId}, type=${payment.type ?? 'n/a'}`);
+          return {
+            type: payment.type,
+            provider: payment.provider ?? null,
+            shortcode: payment.shortcode ?? null,
+            accountName: payment.accountName ?? null,
+            payerPhoneNumber: payment.payerPhoneNumber ?? null,
+          };
+        }
+      }
+
       const participant = await this.prisma.onboardingParticipant.findUnique({ where: { id: settlement.businessId } });
-      this.logger.log(`[B2B][RECIPIENT] resolving retailer payout using authenticated participant merchantId=${settlement.businessId}`);
       if (!participant) {
         throw new NotFoundException({ statusCode: 404, message: 'Retailer participant not found for this settlement', error: 'RETAILER_NOT_FOUND' });
       }
@@ -420,14 +512,39 @@ export class SettlementService {
     }
     const existingMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
 
-    const callbackStatus = existingMetadata.paymentCallback?.status ?? existingMetadata.paymentConfirmation?.status;
-    if (!callbackStatus || !['SUCCESS', 'PAID'].includes(String(callbackStatus).toUpperCase())) {
-      throw new NotFoundException({ statusCode: 404, message: 'A successful payment callback or confirmation has not been recorded for this settlement', data: { existingMetadata }, error: 'PAYMENT_NOT_CONFIRMED' });
+    const validationSettlement = await this.resolvePayoutValidationSettlement(settlement);
+    const validationMetadata = (validationSettlement?.metadata && typeof validationSettlement.metadata === 'object')
+      ? validationSettlement.metadata as Record<string, any>
+      : {};
+    const settlementStatus = String((validationSettlement?.status ?? settlement?.status ?? '')).toUpperCase();
+    const hasConfirmedCustomerPayment = this.hasConfirmedCustomerPayment(validationSettlement, validationMetadata);
+
+    if (!hasConfirmedCustomerPayment) {
+      this.logger.warn('[B2B][DISPATCH] payment confirmation gate failed', {
+        settlementId: settlement.id,
+        settlementLookupId: validationSettlement?.id ?? settlement.id,
+        merchantTransactionReference: settlement.merchantTransactionReference,
+        validationReference: validationSettlement?.merchantTransactionReference ?? null,
+        settlementStatus,
+        metadata: validationMetadata,
+      });
+      throw new NotFoundException({
+        statusCode: 404,
+        message: 'A successful payment callback or confirmation has not been recorded for this settlement',
+        data: { existingMetadata, settlementStatus },
+        error: 'PAYMENT_NOT_CONFIRMED',
+      });
     }
+
+    const workingSettlement = validationSettlement ?? settlement;
     const party = (String(data.party || (existingMetadata?.supplierMerchantId ? 'SUPPLIER' : 'RETAILER')).toUpperCase() as 'SUPPLIER' | 'RETAILER');
-    const resolvedSupplierMerchantId = this.resolveSupplierMerchantId(settlement, party, data.supplierMerchantId);
-    this.logger.log(`[B2B][DISPATCH] resolved party=${party} supplierMerchantId=${resolvedSupplierMerchantId ?? 'n/a'} retailerParticipantId=${settlement.businessId ?? 'n/a'} for settlement=${settlement.id}`);
-    const recipient = await this.resolveB2bRecipient(settlement, party, resolvedSupplierMerchantId ?? undefined);
+    const resolvedSupplierMerchantId = this.resolveSupplierMerchantId(workingSettlement, party, data.supplierMerchantId);
+    const resolvedRetailerMerchantId = workingSettlement?.metadata?.retailerMerchantId
+      ?? workingSettlement?.paymentPayload?.merchantId
+      ?? null;
+    const resolvedPartyMerchantId = party === 'RETAILER' ? resolvedRetailerMerchantId : resolvedSupplierMerchantId;
+    this.logger.log(`[B2B][DISPATCH] resolved party=${party} supplierMerchantId=${resolvedSupplierMerchantId ?? 'n/a'} retailerMerchantId=${resolvedRetailerMerchantId ?? 'n/a'} retailerParticipantId=${workingSettlement.businessId ?? settlement.businessId ?? 'n/a'} for settlement=${workingSettlement.id ?? settlement.id}`);
+    const recipient = await this.resolveB2bRecipient(workingSettlement, party, resolvedSupplierMerchantId ?? undefined);
 
     if (recipient.type === 'BANK') {
       if (!recipient.shortcode || !recipient.accountName) {
@@ -457,17 +574,25 @@ export class SettlementService {
       this.logger.log(`[B2B][DISPATCH] payout amount rounded from ${amount} to ${roundedAmount} for settlement=${settlement.id} party=${party}`);
     }
 
-    const payoutReference = data.payoutReference ?? `${settlement.merchantTransactionReference}-${party}-${Date.now()}`;
-    const callbackUrl = this.getB2bPayoutCallbackUrl();
+    const payoutReference = data.payoutReference ?? `${workingSettlement.merchantTransactionReference}-${party}-${Date.now()}`;
+    const callbackIdentifier = (globalThis as any)?.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const callbackUrl = this.getB2bPayoutCallbackUrl(callbackIdentifier);
     const recipientShortCode = recipient.shortcode ?? recipient.payerPhoneNumber ?? null;
+    const payoutPayment = {
+      type: recipient.type,
+      provider: recipient.provider ?? null,
+      shortcode: recipient.shortcode ?? null,
+      accountName: recipient.accountName ?? null,
+      payerPhoneNumber: recipient.payerPhoneNumber ?? null,
+    };
 
     const requestPayload = {
       reference: payoutReference,
-      merchantTransactionReference: settlement.merchantTransactionReference,
-      settlementReference: settlement.reference,
+      merchantTransactionReference: workingSettlement.merchantTransactionReference,
+      settlementReference: workingSettlement.reference,
       party,
       amount: roundedAmount,
-      currency: settlement.currency ?? 'KES',
+      currency: workingSettlement.currency ?? 'KES',
       recipientShortCode,
       accountReference: recipient.accountName,
       remarks: `B2B payout to ${party}`,
@@ -479,7 +604,13 @@ export class SettlementService {
       metadata: {
         settlementId: settlement.id,
         party,
-        supplierMerchantId: resolvedSupplierMerchantId ?? null,
+        callbackIdentifier,
+        callbackToken: callbackIdentifier,
+        callbackUrl: callbackUrl ?? null,
+        supplierMerchantId: party === 'SUPPLIER' ? (resolvedSupplierMerchantId ?? null) : null,
+        retailerMerchantId: party === 'RETAILER' ? (resolvedRetailerMerchantId ?? null) : null,
+        merchantId: resolvedPartyMerchantId ?? null,
+        payment: payoutPayment,
         ...((data.metadata ?? {}) as Record<string, any>),
       },
     };
@@ -489,24 +620,57 @@ export class SettlementService {
       timestamp: new Date().toISOString(),
       settlementId: settlement.id,
       party,
-      supplierMerchantId: resolvedSupplierMerchantId ?? null,
+      supplierMerchantId: party === 'SUPPLIER' ? (resolvedSupplierMerchantId ?? null) : null,
+      retailerMerchantId: party === 'RETAILER' ? (resolvedRetailerMerchantId ?? null) : null,
       retailerParticipantId: settlement.businessId ?? null,
       recipientType: recipient.type,
       recipientProvider: recipient.provider ?? null,
       recipientShortCode,
       accountName: recipient.accountName ?? null,
       payerPhoneNumber: recipient.payerPhoneNumber ?? null,
+      payment: payoutPayment,
     });
-    this.logger.log(`[B2B][DISPATCH] payload=${JSON.stringify(requestPayload, null, 2)}`);
+    this.logger.log('[B2B][DISPATCH][REQUEST] outbound payout request payload', {
+      timestamp: new Date().toISOString(),
+      settlementId: workingSettlement.id ?? settlement.id,
+      merchantTransactionReference: workingSettlement.merchantTransactionReference ?? settlement.merchantTransactionReference,
+      party,
+      requestPayload,
+      gatewayBaseUrl: await this.getB2bGatewayBaseUrl(),
+      gatewayPath: process.env.B2B_GATEWAY_PAYOUT_PATH ?? '/api/payments/mpesa/b2b',
+      hasAuthorizationToken: !!this.getB2bGatewayApiToken(),
+    });
+    this.logger.log(`[B2B][DISPATCH][EXACT][${party}] payload=${JSON.stringify(requestPayload, null, 2)}`);
+    this.logger.log(`[B2B][DISPATCH][EXACT][${party}] gatewayRequest=${JSON.stringify({
+      settlementId: workingSettlement.id ?? settlement.id,
+      merchantTransactionReference: workingSettlement.merchantTransactionReference ?? settlement.merchantTransactionReference,
+      party,
+      amount: roundedAmount,
+      recipientType: recipient.type,
+      recipientShortCode,
+      accountReference: recipient.accountName,
+      callbackUrl: callbackUrl ?? null,
+      remarks: `B2B payout to ${party}`,
+      description: `Settlement payout for ${party}`,
+      metadata: requestPayload.metadata,
+    }, null, 2)}`);
     const gatewayResult = await this.sendB2bGatewayPayoutRequest(requestPayload);
     this.logger.log(`[B2B][DISPATCH] payoutReference=${payoutReference} settled=${settlement.id} gatewayResult=${JSON.stringify(gatewayResult, null, 2)}`);
 
     const payoutDispatches = Array.isArray(existingMetadata.payoutDispatches) ? existingMetadata.payoutDispatches : [];
     const payoutDispatchAuditLog = Array.isArray(existingMetadata.payoutDispatchAuditLog) ? existingMetadata.payoutDispatchAuditLog : [];
+    const payoutStatus = gatewayResult.success ? 'SUBMITTED' : 'FAILED';
+    const latestPayoutMetadata = {
+      payoutReference,
+      latestPayoutReference: payoutReference,
+      lastPayoutParty: party,
+      lastPayoutStatus: payoutStatus,
+      lastPayoutRequestedAt: new Date().toISOString(),
+    };
     const dispatchRecord = {
       reference: payoutReference,
       party,
-      status: gatewayResult.success ? 'DISPATCHED' : 'FAILED',
+      status: payoutStatus,
       amount,
       recipient,
       requestPayload,
@@ -515,7 +679,7 @@ export class SettlementService {
     };
 
     const auditEntry = {
-      event: gatewayResult.success ? 'B2B_DISPATCH_SUCCESS' : 'B2B_DISPATCH_FAILURE',
+      event: gatewayResult.success ? 'B2B_SUBMITTED' : 'B2B_SUBMIT_FAILED',
       payoutReference,
       party,
       settlementId: settlement.id,
@@ -527,6 +691,8 @@ export class SettlementService {
       gatewayResultSummary: {
         success: gatewayResult.success,
         statusCode: gatewayResult.statusCode ?? null,
+        responseCode: gatewayResult.responseCode ?? null,
+        responseDescription: gatewayResult.responseDescription ?? null,
         error: gatewayResult.error ?? null,
       },
       payloadHash: Buffer.from(JSON.stringify(requestPayload)).toString('base64'),
@@ -536,13 +702,16 @@ export class SettlementService {
     await this.repository.updateSettlementStatus(settlement.id, 'PROCESSING', {
       metadata: {
         ...existingMetadata,
+        ...latestPayoutMetadata,
+        payoutReference,
+        latestPayoutReference: payoutReference,
         payoutDispatches: [...payoutDispatches, dispatchRecord],
         payoutDispatchAuditLog: [...payoutDispatchAuditLog, auditEntry],
       },
     });
 
     return {
-      success: true,
+      success: gatewayResult.success,
       status: dispatchRecord.status,
       payoutReference,
       gatewayResult,
@@ -550,10 +719,61 @@ export class SettlementService {
     };
   }
 
-  async handleB2bPayoutCallback(data: any): Promise<any> {
-    const settlement = await this.repository.findSettlementByReference(data.merchantTransactionReference);
+  async handleB2bPayoutCallback(data: any, callbackIdentifier?: string): Promise<any> {
+    this.logger.log('[B2B][CALLBACK][REQUEST]', {
+      timestamp: new Date().toISOString(),
+      callbackIdentifier: callbackIdentifier ?? data?.callbackIdentifier ?? data?.callbackToken ?? null,
+      merchantTransactionReference: data?.merchantTransactionReference ?? null,
+      reference: data?.reference ?? null,
+      party: data?.party ?? null,
+      status: data?.status ?? null,
+      supplierMerchantId: data?.supplierMerchantId ?? null,
+      rawPayload: data,
+    });
+
+    // PRIMARY LOOKUP: Use callbackIdentifier from URL path (most reliable)
+    let settlement = null;
+    if (callbackIdentifier) {
+      settlement = await this.repository.findSettlementByPayoutCallbackIdentifier(callbackIdentifier);
+      if (settlement) {
+        this.logger.log('[B2B][CALLBACK][LOOKUP] found settlement by callbackIdentifier', {
+          settlementId: settlement.id,
+          callbackIdentifier,
+        });
+      }
+    }
+
+    // FALLBACK: Try other reference fields from callback data
     if (!settlement) {
-      throw new NotFoundException({ statusCode: 404, message: 'Settlement not found for the provided merchant transaction reference', error: 'SETTLEMENT_NOT_FOUND' });
+      const fallbackReferences = [
+        data?.callbackIdentifier,
+        data?.callbackToken,
+        data?.merchantTransactionReference,
+        data?.metadata?.merchantTransactionReference,
+        data?.providerReference,
+        data?.transactionId,
+      ].filter(Boolean);
+
+      for (const ref of fallbackReferences) {
+        settlement = await this.repository.findSettlementByReference(ref);
+        if (settlement) {
+          this.logger.log('[B2B][CALLBACK][LOOKUP] found settlement by fallback reference', {
+            settlementId: settlement.id,
+            reference: ref,
+          });
+          break;
+        }
+      }
+    }
+
+    if (!settlement) {
+      this.logger.error('[B2B][CALLBACK][LOOKUP] settlement not found', {
+        callbackIdentifier,
+        merchantTransactionReference: data?.merchantTransactionReference ?? null,
+        reference: data?.reference ?? null,
+        transactionId: data?.transactionId ?? null,
+      });
+      throw new NotFoundException({ statusCode: 404, message: 'Settlement not found for the provided B2B callback reference', error: 'SETTLEMENT_NOT_FOUND' });
     }
 
     const party = (String(data.party || 'SUPPLIER').toUpperCase() as 'SUPPLIER' | 'RETAILER');
@@ -609,7 +829,17 @@ export class SettlementService {
       metadata: updatedMetadata,
     });
 
-    this.logger.log(`[B2B][CALLBACK] settlementId=${settlement.id} party=${party} reference=${data.reference} status=${status}`);
+    this.logger.log(`[B2B][CALLBACK] settlementId=${settlement.id} party=${party} reference=${data.reference} status=${status} nextStatus=${nextStatus}`);
+    this.logger.log('[B2B][CALLBACK][RESULT]', {
+      timestamp: new Date().toISOString(),
+      settlementId: settlement.id,
+      merchantTransactionReference: settlement.merchantTransactionReference,
+      party,
+      payoutReference: data.reference ?? null,
+      callbackStatus: status,
+      nextStatus,
+      lastPayoutCallback: payoutCallback,
+    });
 
     return {
       success: true,
@@ -893,6 +1123,13 @@ export class SettlementService {
       receivedAt: timestamp,
     };
 
+    const settlementMetadata = (settlement.metadata && typeof settlement.metadata === 'object' && !Array.isArray(settlement.metadata))
+      ? (settlement.metadata as Record<string, any>)
+      : {};
+    const settlementPaymentPayload = (settlement.paymentPayload && typeof settlement.paymentPayload === 'object' && !Array.isArray(settlement.paymentPayload))
+      ? (settlement.paymentPayload as Record<string, any>)
+      : {};
+
     const splitRecord = {
       timestamp,
       merchantTransactionReference: data.merchantTransactionReference,
@@ -910,7 +1147,7 @@ export class SettlementService {
           status: 'PENDING_PAYOUT',
         },
         retailer: {
-          merchantId: settlement.businessId ?? null,
+          merchantId: settlementMetadata.retailerMerchantId ?? settlementPaymentPayload.merchantId ?? null,
           amount: retailerAmount,
           status: 'PENDING_PAYOUT',
         },
@@ -921,6 +1158,11 @@ export class SettlementService {
     const updatedMetadata = {
       ...existingMetadata,
       paymentCallback: paymentCallbackRecord,
+      paymentConfirmation: {
+        ...paymentCallbackRecord,
+        status: 'PAID',
+        confirmedAt: timestamp,
+      },
       splitRecords: [...splitRecords, splitRecord],
       lastSplitAt: timestamp,
     };
@@ -1008,7 +1250,7 @@ export class SettlementService {
           amount: retailerAmount,
         });
 
-        this.logger.log('[SETTLEMENT][SPLIT] retailer payout dispatched', {
+        this.logger.log('[SETTLEMENT][SPLIT] retailer payout submitted to B2B gateway', {
           timestamp,
           settlementId: settlement.id,
           payoutReference: dispatchResults.retailer.payoutReference,
@@ -1030,16 +1272,21 @@ export class SettlementService {
     }
 
     // Final log
+    const hasPayoutFailures = dispatchResults.errors.length > 0;
+    const payoutStatus = hasPayoutFailures ? 'FAILED' : 'COMPLETED';
+
     this.logger.log('[SETTLEMENT][SPLIT] split and allocation completed', {
       timestamp,
       settlementId: settlement.id,
       supplierPayoutStatus: dispatchResults.supplier?.status ?? 'SKIPPED',
       retailerPayoutStatus: dispatchResults.retailer?.status ?? 'SKIPPED',
       errorCount: dispatchResults.errors.length,
+      payoutStatus,
     });
 
     return {
-      success: true,
+      success: !hasPayoutFailures,
+      status: payoutStatus,
       settlementId: settlement.id,
       merchantTransactionReference: data.merchantTransactionReference,
       splitRecord,

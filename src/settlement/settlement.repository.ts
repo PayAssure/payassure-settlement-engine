@@ -66,6 +66,10 @@ export class SettlementRepository implements OnModuleDestroy {
     return this.settlements.findSettlementByReference(reference);
   }
 
+  async findSettlementByPayoutCallbackIdentifier(callbackIdentifier: string) {
+    return this.settlements.findSettlementByPayoutCallbackIdentifier(callbackIdentifier);
+  }
+
   async findSettlementsByBusinessId(businessId: string, skip = 0, take = 10) {
     return this.settlements.findSettlementsByBusinessId(businessId, skip, take);
   }

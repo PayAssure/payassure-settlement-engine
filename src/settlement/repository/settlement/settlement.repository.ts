@@ -13,6 +13,7 @@ export class SettlementRecordRepository {
   ) {
     const paymentPayload = {
       merchantTransactionReference: data.merchantTransactionReference,
+      merchantId: data.merchantId ?? undefined,
       totalAmount: data.totalAmount,
       currency: data.currency,
       settlementMethod: data.settlementMethod,
@@ -53,7 +54,11 @@ export class SettlementRecordRepository {
         reference: payAssureReference,
         merchantTransactionReference: internalMerchantTransactionReference,
         description: data.description ?? undefined,
-        metadata: { originalMerchantReference: data.merchantTransactionReference, ...data.metadata },
+        metadata: {
+          originalMerchantReference: data.merchantTransactionReference,
+          retailerMerchantId: data.merchantId ?? undefined,
+          ...data.metadata,
+        },
         paymentPayload,
         status: SettlementStatus.INITIATED,
       } as Prisma.SettlementCreateInput,
@@ -89,6 +94,18 @@ export class SettlementRecordRepository {
       firstThreeParts,
     ].filter(Boolean);
 
+    const metadataLookupFields = [
+      'payoutReference',
+      'latestPayoutReference',
+      'lastPayoutCallback.reference',
+      'originalMerchantReference',
+      'parentMerchantTransactionReference',
+      'merchantTransactionReference',
+      'callbackIdentifier',
+      'callbackToken',
+      'callbackUrl',
+    ];
+
     const uniqueCandidates = Array.from(new Set(candidates));
 
     for (const candidate of uniqueCandidates) {
@@ -98,7 +115,15 @@ export class SettlementRecordRepository {
             { reference: candidate },
             { merchantTransactionReference: candidate },
             { metadata: { path: ['originalMerchantReference'], equals: candidate } },
+            { metadata: { path: ['parentMerchantTransactionReference'], equals: candidate } },
+            { metadata: { path: ['payoutReference'], equals: candidate } },
+            { metadata: { path: ['latestPayoutReference'], equals: candidate } },
+            { metadata: { path: ['lastPayoutCallback', 'reference'], equals: candidate } },
+            { metadata: { path: ['callbackIdentifier'], equals: candidate } },
+            { metadata: { path: ['callbackToken'], equals: candidate } },
+            { metadata: { path: ['callbackUrl'], equals: candidate } },
             { paymentPayload: { path: ['merchantTransactionReference'], equals: candidate } },
+            ...(metadataLookupFields.includes('merchantTransactionReference') ? [{ metadata: { path: ['merchantTransactionReference'], equals: candidate } }] : []),
           ],
         },
         include: { transactions: true },
@@ -106,6 +131,46 @@ export class SettlementRecordRepository {
 
       if (settlement) {
         return settlement;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Find settlement by B2B payout callback identifier (UUID from callback URL)
+   * Searches through payoutDispatches metadata for matching callbackIdentifier
+   */
+  async findSettlementByPayoutCallbackIdentifier(callbackIdentifier: string): Promise<(Settlement & { transactions: Transaction[] }) | null> {
+    const normalizedId = String(callbackIdentifier ?? '').trim();
+    if (!normalizedId) {
+      return null;
+    }
+
+    // Query all settlements and search through their metadata
+    const allSettlements = await this.prisma.settlement.findMany({
+      include: { transactions: true },
+      orderBy: { createdAt: 'desc' },
+      take: 1000, // Reasonable limit to prevent excessive queries
+    });
+
+    for (const settlement of allSettlements) {
+      const metadata = settlement.metadata as any;
+      if (!metadata) continue;
+
+      // Check if it's stored at top level
+      if (metadata.callbackIdentifier === normalizedId || metadata.callbackToken === normalizedId) {
+        return settlement;
+      }
+
+      // Search through payoutDispatches array
+      if (Array.isArray(metadata.payoutDispatches)) {
+        for (const dispatch of metadata.payoutDispatches) {
+          const dispatchMetadata = dispatch.metadata ?? dispatch;
+          if (dispatchMetadata.callbackIdentifier === normalizedId || dispatchMetadata.callbackToken === normalizedId) {
+            return settlement;
+          }
+        }
       }
     }
 

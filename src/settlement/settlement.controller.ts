@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Param, Body, Headers, UseGuards, BadRequestException, Req, UnauthorizedException, Logger } from '@nestjs/common';
+import { Controller, Post, Get, Param, Body, Headers, UseGuards, BadRequestException, Req, UnauthorizedException, Logger, UsePipes } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { ApiOperation, ApiResponse, ApiTags, ApiBearerAuth, ApiHeader, ApiBody } from '@nestjs/swagger';
 import { SettlementService } from './settlement.service';
@@ -18,6 +18,7 @@ import {
   ErrorResponseDto,
 } from './dto/settlement-response.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { MpesaCallbackTransformPipe } from './pipes/mpesa-callback-transform.pipe';
 
 @ApiTags('Settlement')
 @Controller('settlement')
@@ -284,11 +285,97 @@ export class SettlementController {
   }
 
   @Post('payouts/callback')
+  @UsePipes(new MpesaCallbackTransformPipe())
   @ApiOperation({ summary: 'Receive a B2B payout callback', description: 'Accepts the provider callback for a previously dispatched payout and updates supplier/retailer payout status.' })
   @ApiResponse({ status: 200, description: 'B2B payout callback processed successfully.' })
   @ApiResponse({ status: 404, description: 'Payout reference or settlement not found.' })
-  async b2bPayoutCallback(@Body() body: B2bPayoutCallbackDto): Promise<any> {
-    return this.settlementService.handleB2bPayoutCallback(body);
+  async b2bPayoutCallbackBase(@Body() body: B2bPayoutCallbackDto): Promise<any> {
+    this.logger.log('[B2B][CALLBACK][BASE_ROUTE] raw body received', {
+      timestamp: new Date().toISOString(),
+      bodyJSON: JSON.stringify(body),
+      bodyKeys: Object.keys(body ?? {}),
+    });
+    this.logger.log('[B2B][CALLBACK][BASE_ROUTE] received callback', {
+      timestamp: new Date().toISOString(),
+      reference: body?.reference,
+      merchantTransactionReference: body?.merchantTransactionReference,
+      status: body?.status,
+      party: body?.party,
+    });
+    return this.settlementService.handleB2bPayoutCallback(body, undefined);
+  }
+
+  @Post('payouts/callback/:callbackIdentifier')
+  @UsePipes(new MpesaCallbackTransformPipe())
+  @ApiOperation({ summary: 'Receive a B2B payout callback with identifier', description: 'Accepts the provider callback for a previously dispatched payout and updates supplier/retailer payout status.' })
+  @ApiResponse({ status: 200, description: 'B2B payout callback processed successfully.' })
+  @ApiResponse({ status: 404, description: 'Payout reference or settlement not found.' })
+  async b2bPayoutCallbackWithId(@Body() body: B2bPayoutCallbackDto, @Param('callbackIdentifier') callbackIdentifier: string): Promise<any> {
+    const decodedIdentifier = decodeURIComponent(callbackIdentifier);
+    this.logger.log('[B2B][CALLBACK][WITH_ID_ROUTE] raw body received', {
+      timestamp: new Date().toISOString(),
+      decodedCallbackIdentifier: decodedIdentifier,
+      bodyJSON: JSON.stringify(body),
+      bodyKeys: Object.keys(body ?? {}),
+    });
+    this.logger.log('[B2B][CALLBACK][WITH_ID_ROUTE] received callback', {
+      timestamp: new Date().toISOString(),
+      rawCallbackIdentifier: callbackIdentifier,
+      decodedCallbackIdentifier: decodedIdentifier,
+      reference: body?.reference,
+      merchantTransactionReference: body?.merchantTransactionReference,
+      status: body?.status,
+      party: body?.party,
+    });
+    return this.settlementService.handleB2bPayoutCallback(body, decodedIdentifier);
+  }
+
+  @Post('payouts/callback/:callbackIdentifier/callbacks/mpesa')
+  @UsePipes(new MpesaCallbackTransformPipe())
+  @ApiOperation({ summary: 'Receive a B2B payout callback via M-Pesa', description: 'Accepts the provider callback for a previously dispatched payout and updates supplier/retailer payout status.' })
+  @ApiResponse({ status: 200, description: 'B2B payout callback processed successfully.' })
+  @ApiResponse({ status: 404, description: 'Payout reference or settlement not found.' })
+  async b2bPayoutCallbackMpesa(@Body() body: B2bPayoutCallbackDto, @Param('callbackIdentifier') callbackIdentifier: string): Promise<any> {
+    const decodedIdentifier = decodeURIComponent(callbackIdentifier);
+    
+    // Log the raw request body received
+    this.logger.log('[B2B][CALLBACK][MPESA_ROUTE] raw body received from M-Pesa', {
+      timestamp: new Date().toISOString(),
+      rawCallbackIdentifier: callbackIdentifier,
+      decodedCallbackIdentifier: decodedIdentifier,
+      bodyKeys: Object.keys(body ?? {}),
+      bodyJSON: JSON.stringify(body),
+      bodyType: typeof body,
+      isArray: Array.isArray(body),
+    });
+
+    // Log parsed body fields
+    this.logger.log('[B2B][CALLBACK][MPESA_ROUTE] parsed callback fields', {
+      timestamp: new Date().toISOString(),
+      reference: body?.reference,
+      merchantTransactionReference: body?.merchantTransactionReference,
+      status: body?.status,
+      party: body?.party,
+      supplierMerchantId: body?.supplierMerchantId,
+      providerReference: body?.providerReference,
+      transactionId: body?.transactionId,
+      amount: body?.amount,
+      resultCode: body?.resultCode,
+      resultDescription: body?.resultDescription,
+      metadataKeys: Object.keys(body?.metadata ?? {}),
+    });
+
+    this.logger.log('[B2B][CALLBACK][MPESA_ROUTE] received M-Pesa callback', {
+      timestamp: new Date().toISOString(),
+      rawCallbackIdentifier: callbackIdentifier,
+      decodedCallbackIdentifier: decodedIdentifier,
+      reference: body?.reference,
+      merchantTransactionReference: body?.merchantTransactionReference,
+      status: body?.status,
+      party: body?.party,
+      bodyKeys: Object.keys(body),
+    });
+    return this.settlementService.handleB2bPayoutCallback(body, decodedIdentifier);
   }
 
   /**

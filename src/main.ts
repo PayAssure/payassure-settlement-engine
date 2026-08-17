@@ -1,7 +1,10 @@
 import 'reflect-metadata';
+import * as dotenv from 'dotenv';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+
+dotenv.config();
 import { NextFunction, Request, Response } from 'express';
 import { AppModule } from './app.module';
 import { OnbordingsModule } from './onbordings/onbordings.module';
@@ -10,6 +13,8 @@ import { SettlementModule } from './settlement/settlement.module';
 import { bootstrapSuperAdmin } from './auth/bootstrap';
 import { HealthModule } from './health/health.module';
 import { PaymentModule } from './payment/payment.module';
+import { ValidationErrorFilter } from './common/filters/validation-error.filter';
+import { RequestBodyLoggingInterceptor } from './common/interceptors/request-body-logging.interceptor';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -51,6 +56,8 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization', 'x-settlement-session', 'x-supplier-session', 'x-payassure-signature', 'x-payassure-timestamp'],
   });
 
+  app.useGlobalInterceptors(new RequestBodyLoggingInterceptor());
+  app.useGlobalFilters(new ValidationErrorFilter());
   app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
   app.use((req: Request, res: Response, next: NextFunction) => {
     console.log(`[REQUEST] ${req.method} ${req.originalUrl}`);

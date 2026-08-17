@@ -1,4 +1,8 @@
+import * as dotenv from 'dotenv';
+import * as path from 'node:path';
 import { PrismaClient } from '@prisma/client';
+
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 export interface MpesaEnvConfig {
   environment?: string;
