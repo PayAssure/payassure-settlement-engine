@@ -11,6 +11,12 @@ export class SettlementRecordRepository {
     internalMerchantTransactionReference: string,
     data: InitiateSettlementDto,
   ) {
+    const paymentMethod = {
+      type: data.paymentMethod.type,
+      payerPhoneNumber: String(data.paymentMethod.payerPhoneNumber ?? '').trim() || undefined,
+      provider: data.paymentMethod.provider ?? undefined,
+    };
+
     const paymentPayload = {
       merchantTransactionReference: data.merchantTransactionReference,
       merchantId: data.merchantId ?? undefined,
@@ -18,11 +24,7 @@ export class SettlementRecordRepository {
       currency: data.currency,
       settlementMethod: data.settlementMethod,
       description: data.description ?? undefined,
-      paymentMethod: {
-        type: data.paymentMethod.type,
-        payerPhoneNumber: data.paymentMethod.payerPhoneNumber,
-        provider: data.paymentMethod.provider ?? undefined,
-      },
+      paymentMethod,
       callbackUrl: data.callbackUrl ?? undefined,
       transactionDate: data.transactionDate,
       suppliers: data.suppliers.map((supplier) => ({
@@ -147,30 +149,40 @@ export class SettlementRecordRepository {
       return null;
     }
 
-    // Query all settlements and search through their metadata
+    const matchesCallbackId = (value: any): boolean => {
+      if (!value || typeof value !== 'object') {
+        return false;
+      }
+
+      if (Array.isArray(value)) {
+        return value.some((item) => matchesCallbackId(item));
+      }
+
+      if (value.callbackIdentifier === normalizedId || value.callbackToken === normalizedId) {
+        return true;
+      }
+
+      for (const nestedValue of Object.values(value)) {
+        if (matchesCallbackId(nestedValue)) {
+          return true;
+        }
+      }
+
+      return false;
+    };
+
     const allSettlements = await this.prisma.settlement.findMany({
       include: { transactions: true },
       orderBy: { createdAt: 'desc' },
-      take: 1000, // Reasonable limit to prevent excessive queries
+      take: 1000,
     });
 
     for (const settlement of allSettlements) {
       const metadata = settlement.metadata as any;
       if (!metadata) continue;
 
-      // Check if it's stored at top level
-      if (metadata.callbackIdentifier === normalizedId || metadata.callbackToken === normalizedId) {
+      if (matchesCallbackId(metadata)) {
         return settlement;
-      }
-
-      // Search through payoutDispatches array
-      if (Array.isArray(metadata.payoutDispatches)) {
-        for (const dispatch of metadata.payoutDispatches) {
-          const dispatchMetadata = dispatch.metadata ?? dispatch;
-          if (dispatchMetadata.callbackIdentifier === normalizedId || dispatchMetadata.callbackToken === normalizedId) {
-            return settlement;
-          }
-        }
       }
     }
 

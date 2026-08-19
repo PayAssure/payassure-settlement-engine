@@ -238,14 +238,15 @@ export class OnbordingsService {
         throw new ForbiddenException('MPESA payouts do not accept bankCode, accountNumber or shortcode in the request payload');
       }
 
-      if (!payment.payerPhoneNumber) {
-        throw new ForbiddenException('payerPhoneNumber is required for MPESA payout destinations');
+      const mpesaPhoneNumber = payment.phoneNumber ?? payment.payerPhoneNumber;
+      if (!mpesaPhoneNumber) {
+        throw new ForbiddenException('phoneNumber is required for MPESA payout destinations');
       }
     }
 
     if (payment.type === 'BANK') {
-      if (payment.payerPhoneNumber) {
-        throw new ForbiddenException('BANK payouts do not accept payerPhoneNumber in the request payload');
+      if (payment.phoneNumber || payment.payerPhoneNumber) {
+        throw new ForbiddenException('BANK payouts do not accept phoneNumber in the request payload');
       }
 
       if (!payment.bankCode || !payment.accountNumber) {
@@ -257,32 +258,27 @@ export class OnbordingsService {
       }
     }
 
-    if (payment.type === 'BANK') {
-      if (payment.payerPhoneNumber) {
-        throw new ForbiddenException('BANK payouts do not accept payerPhoneNumber in the request payload');
-      }
-
-      if (!payment.bankCode || !payment.accountNumber) {
-        throw new ForbiddenException('bankCode and accountNumber are required for BANK payout destinations');
-      }
-    }
   }
 
   private preparePaymentForStorage(payment: PaymentMethodDto): { payment: PaymentMethodDto; paymentActivationSecret?: string } {
     const activationSecret = `paysec_${randomBytes(16).toString('hex')}`;
     const activationSecretHash = createHash('sha256').update(activationSecret).digest('hex');
 
+    const normalizedPayment: PaymentMethodDto = {
+      ...payment,
+      phoneNumber: payment.phoneNumber ?? payment.payerPhoneNumber,
+      payerPhoneNumber: undefined,
+      status: 'PENDING_VERIFICATION',
+      isVerified: false,
+      paymentActivationSecretHash: activationSecretHash,
+      paymentActivationSecretExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      verificationAttempts: 0,
+      verificationMethod: undefined,
+      verifiedAt: undefined,
+    } as PaymentMethodDto;
+
     return {
-      payment: {
-        ...payment,
-        status: 'PENDING_VERIFICATION',
-        isVerified: false,
-        paymentActivationSecretHash: activationSecretHash,
-        paymentActivationSecretExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        verificationAttempts: 0,
-        verificationMethod: undefined,
-        verifiedAt: undefined,
-      },
+      payment: normalizedPayment,
       paymentActivationSecret: activationSecret,
     };
   }

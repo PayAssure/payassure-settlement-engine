@@ -105,7 +105,7 @@ function toPublicPaymentDetails(payment: any) {
   if (payment.type === 'MPESA') {
     return {
       ...base,
-      payerPhoneNumber: payment.payerPhoneNumber ?? undefined,
+      phoneNumber: payment.phoneNumber ?? payment.payerPhoneNumber ?? undefined,
     };
   }
 
@@ -201,7 +201,7 @@ export async function initiateOperation(
     const primarySettlement = await repository.createSettlement(businessId, integrationId, payAssureReference, internalMerchantTransactionReference, data);
 
     if (data.paymentMethod?.type?.toUpperCase() === 'MPESA') {
-      const mobileNumber = data.paymentMethod.payerPhoneNumber;
+      const mobileNumber = String(data.paymentMethod.payerPhoneNumber ?? '').trim();
       const amount = Number(data.totalAmount);
       const accountReference = getGatewayAccountReference();
       const transactionDesc = buildTransactionDescription(data);
@@ -211,11 +211,16 @@ export async function initiateOperation(
         currency: data.currency,
         settlementMethod: data.settlementMethod,
         description: data.description,
-        paymentMethod: data.paymentMethod,
+        paymentMethod: {
+          ...data.paymentMethod,
+          payerPhoneNumber: mobileNumber,
+          phoneNumber: undefined,
+        },
         transactionDate: data.transactionDate,
         metadata: data.metadata,
         suppliers: data.suppliers,
         mobileNumber,
+        payerPhoneNumber: mobileNumber,
         amount,
         accountReference,
         transactionDesc,

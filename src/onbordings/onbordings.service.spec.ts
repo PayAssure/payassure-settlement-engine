@@ -24,7 +24,7 @@ test('updatePayment stores a pending verification lifecycle and activation secre
   const response = await service.updatePayment('participant-1', {
     type: 'MPESA',
     accountName: 'Jane Doe',
-    payerPhoneNumber: '254700000000',
+    phoneNumber: '254700000000',
     provider: 'Safaricom',
   } as any);
 
@@ -42,7 +42,7 @@ test('updatePayment rejects client-supplied verification flags and bank-only fie
       type: 'MPESA',
       accountName: 'Jane Doe',
       isVerified: true,
-      payerPhoneNumber: '254700000000',
+      phoneNumber: '254700000000',
       provider: 'Safaricom',
       bankCode: '07',
       accountNumber: '1234567890',
@@ -51,19 +51,19 @@ test('updatePayment rejects client-supplied verification flags and bank-only fie
   );
 });
 
-test('updatePayment rejects payerPhoneNumber when the payment type is BANK', async () => {
+test('updatePayment rejects phoneNumber when the payment type is BANK', async () => {
   const service = new OnbordingsService({ updatePayment: async () => null } as any);
 
   await assert.rejects(
     () => service.updatePayment('participant-1', {
       type: 'BANK',
       accountName: 'Jane Doe',
-      payerPhoneNumber: '254700000000',
+      phoneNumber: '254700000000',
       provider: 'Safaricom',
       bankCode: '07',
       accountNumber: '1234567890',
     } as any),
-    /BANK payouts do not accept payerPhoneNumber/i,
+    /BANK payouts do not accept phoneNumber/i,
   );
 });
 

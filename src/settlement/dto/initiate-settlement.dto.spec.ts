@@ -174,6 +174,41 @@ test('accepts a simplified supplier-only settlement payload without item details
   console.log('step 1 passed: simplified supplier summary payload is accepted');
 });
 
+test('accepts MPESA payerPhoneNumber for collection and ignores empty legacy phoneNumber fields', async () => {
+  const payerPayload = plainToInstance(InitiateSettlementDto, {
+    merchantTransactionReference: 'TXN-0010',
+    totalAmount: 2000,
+    currency: 'KES',
+    settlementMethod: 'BANK_TRANSFER',
+    paymentMethod: {
+      type: 'MPESA',
+      phoneNumber: '',
+      payerPhoneNumber: '254712345678',
+    },
+    transactionDate: '2026-07-03T17:30:15+03:00',
+    suppliers: [{ supplierMerchantId: 'SUP-1001', supplierTotalAmount: 2000 }],
+  });
+
+  const legacyPayload = plainToInstance(InitiateSettlementDto, {
+    merchantTransactionReference: 'TXN-0011',
+    totalAmount: 2000,
+    currency: 'KES',
+    settlementMethod: 'BANK_TRANSFER',
+    paymentMethod: {
+      type: 'BANK',
+      payerPhoneNumber: '254712345678',
+    },
+    transactionDate: '2026-07-03T17:30:15+03:00',
+    suppliers: [{ supplierMerchantId: 'SUP-1001', supplierTotalAmount: 2000 }],
+  });
+
+  const payerErrors = await validate(payerPayload);
+  const legacyErrors = await validate(legacyPayload);
+
+  assert.equal(payerErrors.length, 0, 'expected payerPhoneNumber payload to validate');
+  assert.equal(legacyErrors.length, 0, 'expected legacy payerPhoneNumber payload to validate');
+});
+
 test('rejects unsupported currency and negative supplier allocations', async () => {
   console.log('step 1: validate a payload with unsupported currency and negative allocations');
   const dto = plainToInstance(InitiateSettlementDto, {

@@ -21,12 +21,14 @@ import { getTransactionOperation } from './operations/get-transaction.operation'
 import { reconcileOperation } from './operations/reconcile.operation';
 import { generateSessionToken, hashCredential } from './helpers/reference.helpers';
 import { b2bService } from '../payment/services/b2b.service';
+import { b2pochiService } from '../payment/services/b2pochi.service';
 
 interface B2bPayoutRecipient {
   type: string;
   provider?: string | null;
   shortcode?: string | null;
   accountName?: string | null;
+  phoneNumber?: string | null;
   payerPhoneNumber?: string | null;
 }
 
@@ -185,6 +187,19 @@ export class SettlementService {
       ? (settlement.paymentPayload as Record<string, any>).paymentMethod
       : null) as Record<string, any> | null;
 
+    const metadata = (settlement?.metadata && typeof settlement.metadata === 'object' && !Array.isArray(settlement.metadata))
+      ? (settlement.metadata as Record<string, any>)
+      : {};
+    const paymentPayload = (settlement?.paymentPayload && typeof settlement.paymentPayload === 'object' && !Array.isArray(settlement.paymentPayload))
+      ? (settlement.paymentPayload as Record<string, any>)
+      : {};
+
+    const supplierMerchantId = this.resolveSupplierMerchantId(settlement, 'SUPPLIER');
+    const retailerMerchantId = await this.resolveRetailerMerchantId(settlement);
+
+    const supplierRecipient = supplierMerchantId ? await this.resolveB2bRecipient(settlement, 'SUPPLIER', supplierMerchantId) : null;
+    const retailerRecipient = retailerMerchantId ? await this.resolveB2bRecipient(settlement, 'RETAILER', retailerMerchantId) : null;
+
     const allocationPlan = {
       customerReceived: Number(settlement.amount),
       ledgerEntries: [
@@ -223,14 +238,20 @@ export class SettlementService {
       ],
       paymentDetails: {
         supplier: {
-          type: paymentMethod?.type ?? 'MPESA',
-          provider: paymentMethod?.provider ?? 'Safaricom',
-          payerPhoneNumber: paymentMethod?.payerPhoneNumber ?? null,
+          type: supplierRecipient?.type ?? paymentMethod?.type ?? 'MPESA',
+          provider: supplierRecipient?.provider ?? paymentMethod?.provider ?? 'Safaricom',
+          shortcode: supplierRecipient?.shortcode ?? null,
+          accountName: supplierRecipient?.accountName ?? null,
+          phoneNumber: supplierRecipient?.phoneNumber ?? supplierRecipient?.payerPhoneNumber ?? null,
+          payerPhoneNumber: supplierRecipient?.payerPhoneNumber ?? supplierRecipient?.phoneNumber ?? null,
         },
         retailer: {
-          type: paymentMethod?.type ?? 'MPESA',
-          provider: paymentMethod?.provider ?? 'Safaricom',
-          payerPhoneNumber: paymentMethod?.payerPhoneNumber ?? null,
+          type: retailerRecipient?.type ?? paymentMethod?.type ?? 'MPESA',
+          provider: retailerRecipient?.provider ?? paymentMethod?.provider ?? 'Safaricom',
+          shortcode: retailerRecipient?.shortcode ?? null,
+          accountName: retailerRecipient?.accountName ?? null,
+          phoneNumber: retailerRecipient?.phoneNumber ?? retailerRecipient?.payerPhoneNumber ?? null,
+          payerPhoneNumber: retailerRecipient?.payerPhoneNumber ?? retailerRecipient?.phoneNumber ?? null,
         },
       },
     };
@@ -317,9 +338,79 @@ export class SettlementService {
     return settlement;
   }
 
+  private resolvePayoutGateway(recipientType?: string): 'B2POCHI' | 'B2B' {
+    const normalizedType = String(recipientType ?? '').trim().toUpperCase();
+    return normalizedType === 'MPESA' ? 'B2POCHI' : 'B2B';
+  }
+
   private async sendB2bGatewayPayoutRequest(payload: Record<string, any>): Promise<B2bGatewayResponse> {
+    const payoutMetadata = (payload.metadata && typeof payload.metadata === 'object' && !Array.isArray(payload.metadata)) ? payload.metadata as Record<string, any> : {};
+    const payoutPayment = (payoutMetadata.payment && typeof payoutMetadata.payment === 'object' && !Array.isArray(payoutMetadata.payment))
+      ? payoutMetadata.payment as Record<string, any>
+      : ((payload.payment && typeof payload.payment === 'object' && !Array.isArray(payload.payment)) ? payload.payment as Record<string, any> : {});
+    const recipientPhoneNumber = payload.recipientPhoneNumber ?? payoutPayment.phoneNumber ?? payoutPayment.payerPhoneNumber ?? null;
+    const recipientType = String(payload.recipientType ?? payoutPayment.type ?? (recipientPhoneNumber ? 'MPESA' : 'BANK')).trim().toUpperCase();
+    const resolvedRecipientType = recipientType === 'MPESA' || recipientType === 'BANK' ? recipientType : (recipientPhoneNumber ? 'MPESA' : 'BANK');
+    const selectedGateway = this.resolvePayoutGateway(resolvedRecipientType);
+
+    this.logger.log('[B2B][DISPATCH][GATEWAY][ROUTE]', {
+      recipientType,
+      selectedGateway,
+      settlementId: payload.metadata?.settlementId ?? payload.settlementId ?? null,
+      party: payload.party ?? null,
+      amount: Number(payload.amount ?? 0),
+      phoneNumber: recipientPhoneNumber,
+      payerPhoneNumber: payload.recipientPhoneNumber ?? payload.payerPhoneNumber ?? null,
+      recipientShortCode: payload.recipientShortCode ?? payload.accountReference ?? null,
+      callbackUrl: payload.callbackUrl ?? process.env.MPESA_CALLBACK_URL ?? process.env.B2B_PAYOUT_CALLBACK_URL ?? process.env.PAYMENT_GATEWAY_CALLBACK_URL,
+      timestamp: new Date().toISOString(),
+    });
+
     try {
-      this.logger.log('[B2B][DISPATCH][GATEWAY] attempting to call b2bService.initiateB2B', {
+      if (resolvedRecipientType === 'MPESA') {
+        const partyB = payload.recipientPhoneNumber ?? payload.phoneNumber ?? payload.payerPhoneNumber ?? payload.metadata?.payment?.phoneNumber ?? payload.metadata?.payment?.payerPhoneNumber ?? payload.recipientShortCode ?? '';
+        const request = {
+          OriginatorConversationID: payload.reference ?? payload.merchantTransactionReference ?? `${Date.now()}_pochi_${Math.random().toString(36).slice(2, 10)}`,
+          CommandID: 'BusinessPayToPochi',
+          Amount: String(Number(payload.amount ?? 0)),
+          PartyB: partyB,
+          Remarks: payload.remarks ?? payload.description ?? `B2Pochi payout to ${payload.party ?? 'recipient'}`,
+          QueueTimeOutURL: payload.callbackUrl ?? process.env.MPESA_CALLBACK_URL ?? process.env.B2B_PAYOUT_CALLBACK_URL ?? process.env.PAYMENT_GATEWAY_CALLBACK_URL,
+          ResultURL: payload.callbackUrl ?? process.env.MPESA_CALLBACK_URL ?? process.env.B2B_PAYOUT_CALLBACK_URL ?? process.env.PAYMENT_GATEWAY_CALLBACK_URL,
+          Occassion: payload.description ?? payload.remarks ?? `B2Pochi payout to ${payload.party ?? 'recipient'}`,
+        };
+
+        this.logger.log('[B2B][DISPATCH][GATEWAY][B2POCHI] attempting to call b2pochiService.initiateB2Pochi', {
+          recipientType,
+          partyB,
+          amount: Number(payload.amount ?? 0),
+          callbackUrl: request.QueueTimeOutURL,
+          timestamp: new Date().toISOString(),
+        });
+
+        const response = await b2pochiService.initiateB2Pochi(request as Record<string, any>);
+        const responseCode = response?.responseCode ?? response?.ResponseCode ?? 'UNKNOWN';
+        const responseDescription = response?.responseDescription ?? response?.ResponseDescription ?? 'Unknown B2Pochi gateway response';
+        const isAcceptedBySafaricom = String(responseCode) === '0';
+
+        this.logger.log('[B2B][DISPATCH][GATEWAY][B2POCHI][RESPONSE]', {
+          recipientType,
+          isAcceptedBySafaricom,
+          responseCode,
+          responseDescription,
+          fullResponse: response,
+        });
+
+        return {
+          success: isAcceptedBySafaricom,
+          statusCode: 200,
+          responseCode: String(responseCode),
+          responseDescription: String(responseDescription),
+          response,
+        };
+      }
+
+      this.logger.log('[B2B][DISPATCH][GATEWAY][B2B] attempting to call b2bService.initiateB2B', {
         recipientShortCode: payload.recipientShortCode ?? payload.recipientPhoneNumber ?? payload.accountReference ?? '174379',
         amount: Number(payload.amount ?? 0),
         description: payload.description ?? payload.remarks ?? 'Settlement payout',
@@ -340,7 +431,8 @@ export class SettlementService {
       const responseDescription = response?.responseDescription ?? response?.ResponseDescription ?? 'Unknown B2B gateway response';
       const isAcceptedBySafaricom = String(responseCode) === '0';
 
-      this.logger.log('[B2B][DISPATCH][GATEWAY][RESPONSE]', {
+      this.logger.log('[B2B][DISPATCH][GATEWAY][B2B][RESPONSE]', {
+        recipientType,
         isAcceptedBySafaricom,
         responseCode,
         responseDescription,
@@ -357,8 +449,10 @@ export class SettlementService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const errorStack = error instanceof Error ? error.stack : undefined;
-      
-      this.logger.error('[B2B][DISPATCH] external payment gateway B2B request failed', {
+
+      this.logger.error('[B2B][DISPATCH] external payment gateway request failed', {
+        recipientType,
+        selectedGateway,
         error: message,
         errorStack,
         payloadSummary: {
@@ -423,11 +517,27 @@ export class SettlementService {
     return fallbackSupplierMerchantId ? String(fallbackSupplierMerchantId) : null;
   }
 
+  private async resolveRetailerMerchantId(settlement: any): Promise<string | null> {
+    const participantId = settlement?.businessId ?? null;
+    if (participantId && typeof this.repository?.findIntegrationByParticipantId === 'function') {
+      const activeRetailerIntegration = await this.repository.findIntegrationByParticipantId(String(participantId));
+      if (activeRetailerIntegration?.merchantId) {
+        return String(activeRetailerIntegration.merchantId);
+      }
+    }
+
+    const metadataRetailerMerchantId = settlement?.metadata?.retailerMerchantId ?? null;
+    if (metadataRetailerMerchantId) {
+      return String(metadataRetailerMerchantId);
+    }
+
+    const paymentPayloadMerchantId = settlement?.paymentPayload?.merchantId ?? null;
+    return paymentPayloadMerchantId ? String(paymentPayloadMerchantId) : null;
+  }
+
   private async resolveB2bRecipient(settlement: any, party: 'SUPPLIER' | 'RETAILER', supplierMerchantId?: string): Promise<B2bPayoutRecipient> {
     if (party === 'RETAILER') {
-      const retailerMerchantId = settlement?.metadata?.retailerMerchantId
-        ?? settlement?.paymentPayload?.merchantId
-        ?? null;
+      const retailerMerchantId = await this.resolveRetailerMerchantId(settlement);
 
       this.logger.log(`[B2B][RECIPIENT] resolving retailer payout using merchantId=${retailerMerchantId ?? 'n/a'} settlementId=${settlement?.id ?? 'n/a'}`);
 
@@ -441,7 +551,8 @@ export class SettlementService {
             provider: payment.provider ?? null,
             shortcode: payment.shortcode ?? null,
             accountName: payment.accountName ?? null,
-            payerPhoneNumber: payment.payerPhoneNumber ?? null,
+            phoneNumber: payment.phoneNumber ?? payment.payerPhoneNumber ?? null,
+            payerPhoneNumber: payment.payerPhoneNumber ?? payment.phoneNumber ?? null,
           };
         }
       }
@@ -459,7 +570,8 @@ export class SettlementService {
         provider: payment.provider ?? null,
         shortcode: payment.shortcode ?? null,
         accountName: payment.accountName ?? null,
-        payerPhoneNumber: payment.payerPhoneNumber ?? null,
+        phoneNumber: payment.phoneNumber ?? payment.payerPhoneNumber ?? null,
+        payerPhoneNumber: payment.payerPhoneNumber ?? payment.phoneNumber ?? null,
       };
     }
 
@@ -478,7 +590,8 @@ export class SettlementService {
         provider: payment.provider ?? null,
         shortcode: payment.shortcode ?? null,
         accountName: payment.accountName ?? null,
-        payerPhoneNumber: payment.payerPhoneNumber ?? null,
+        phoneNumber: payment.phoneNumber ?? payment.payerPhoneNumber ?? null,
+        payerPhoneNumber: payment.payerPhoneNumber ?? payment.phoneNumber ?? null,
       };
     }
 
@@ -499,7 +612,8 @@ export class SettlementService {
       provider: supplierPayment.provider ?? null,
       shortcode: supplierPayment.shortcode ?? null,
       accountName: supplierPayment.accountName ?? null,
-      payerPhoneNumber: supplierPayment.payerPhoneNumber ?? null,
+      phoneNumber: supplierPayment.phoneNumber ?? supplierPayment.payerPhoneNumber ?? null,
+      payerPhoneNumber: supplierPayment.payerPhoneNumber ?? supplierPayment.phoneNumber ?? null,
     };
   }
 
@@ -539,9 +653,7 @@ export class SettlementService {
     const workingSettlement = validationSettlement ?? settlement;
     const party = (String(data.party || (existingMetadata?.supplierMerchantId ? 'SUPPLIER' : 'RETAILER')).toUpperCase() as 'SUPPLIER' | 'RETAILER');
     const resolvedSupplierMerchantId = this.resolveSupplierMerchantId(workingSettlement, party, data.supplierMerchantId);
-    const resolvedRetailerMerchantId = workingSettlement?.metadata?.retailerMerchantId
-      ?? workingSettlement?.paymentPayload?.merchantId
-      ?? null;
+    const resolvedRetailerMerchantId = await this.resolveRetailerMerchantId(workingSettlement);
     const resolvedPartyMerchantId = party === 'RETAILER' ? resolvedRetailerMerchantId : resolvedSupplierMerchantId;
     this.logger.log(`[B2B][DISPATCH] resolved party=${party} supplierMerchantId=${resolvedSupplierMerchantId ?? 'n/a'} retailerMerchantId=${resolvedRetailerMerchantId ?? 'n/a'} retailerParticipantId=${workingSettlement.businessId ?? settlement.businessId ?? 'n/a'} for settlement=${workingSettlement.id ?? settlement.id}`);
     const recipient = await this.resolveB2bRecipient(workingSettlement, party, resolvedSupplierMerchantId ?? undefined);
@@ -552,8 +664,9 @@ export class SettlementService {
       }
     }
     if (recipient.type === 'MPESA') {
-      if (!recipient.payerPhoneNumber) {
-        throw new BadRequestException({ statusCode: 400, message: 'MPESA payouts require a recipient payerPhoneNumber', error: 'MPESA_PAYOUT_DETAILS_INCOMPLETE' });
+      const recipientPhoneNumber = recipient.phoneNumber ?? recipient.payerPhoneNumber ?? null;
+      if (!recipientPhoneNumber) {
+        throw new BadRequestException({ statusCode: 400, message: 'MPESA payouts require a recipient phoneNumber', error: 'MPESA_PAYOUT_DETAILS_INCOMPLETE' });
       }
     }
 
@@ -577,13 +690,15 @@ export class SettlementService {
     const payoutReference = data.payoutReference ?? `${workingSettlement.merchantTransactionReference}-${party}-${Date.now()}`;
     const callbackIdentifier = (globalThis as any)?.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const callbackUrl = this.getB2bPayoutCallbackUrl(callbackIdentifier);
-    const recipientShortCode = recipient.shortcode ?? recipient.payerPhoneNumber ?? null;
+    const recipientPhoneNumber = recipient.phoneNumber ?? recipient.payerPhoneNumber ?? null;
+    const recipientShortCode = recipient.shortcode ?? recipientPhoneNumber ?? null;
     const payoutPayment = {
       type: recipient.type,
       provider: recipient.provider ?? null,
       shortcode: recipient.shortcode ?? null,
       accountName: recipient.accountName ?? null,
-      payerPhoneNumber: recipient.payerPhoneNumber ?? null,
+      phoneNumber: recipientPhoneNumber,
+      payerPhoneNumber: recipientPhoneNumber,
     };
 
     const requestPayload = {
@@ -600,7 +715,7 @@ export class SettlementService {
       callbackUrl: callbackUrl ?? undefined,
       recipientType: recipient.type,
       recipientProvider: recipient.provider,
-      recipientPhoneNumber: recipient.payerPhoneNumber ?? undefined,
+      recipientPhoneNumber: recipientPhoneNumber ?? undefined,
       metadata: {
         settlementId: settlement.id,
         party,
@@ -673,6 +788,8 @@ export class SettlementService {
       status: payoutStatus,
       amount,
       recipient,
+      callbackIdentifier,
+      callbackToken: callbackIdentifier,
       requestPayload,
       gatewayResult,
       requestedAt: new Date().toISOString(),
@@ -904,6 +1021,19 @@ export class SettlementService {
       ? (settlement.paymentPayload as Record<string, any>).paymentMethod
       : null) as Record<string, any> | null;
 
+    const metadata = (settlement?.metadata && typeof settlement.metadata === 'object' && !Array.isArray(settlement.metadata))
+      ? (settlement.metadata as Record<string, any>)
+      : {};
+    const paymentPayload = (settlement?.paymentPayload && typeof settlement.paymentPayload === 'object' && !Array.isArray(settlement.paymentPayload))
+      ? (settlement.paymentPayload as Record<string, any>)
+      : {};
+
+    const supplierMerchantId = this.resolveSupplierMerchantId(settlement, 'SUPPLIER');
+    const retailerMerchantId = await this.resolveRetailerMerchantId(settlement);
+
+    const supplierRecipient = supplierMerchantId ? await this.resolveB2bRecipient(settlement, 'SUPPLIER', supplierMerchantId) : null;
+    const retailerRecipient = retailerMerchantId ? await this.resolveB2bRecipient(settlement, 'RETAILER', retailerMerchantId) : null;
+
     const allocationPlan = {
       customerReceived: Number(settlement.amount),
       ledgerEntries: [
@@ -942,14 +1072,20 @@ export class SettlementService {
       ],
       paymentDetails: {
         supplier: {
-          type: paymentMethod?.type ?? 'MPESA',
-          provider: paymentMethod?.provider ?? 'Safaricom',
-          payerPhoneNumber: paymentMethod?.payerPhoneNumber ?? null,
+          type: supplierRecipient?.type ?? paymentMethod?.type ?? 'MPESA',
+          provider: supplierRecipient?.provider ?? paymentMethod?.provider ?? 'Safaricom',
+          shortcode: supplierRecipient?.shortcode ?? null,
+          accountName: supplierRecipient?.accountName ?? null,
+          phoneNumber: supplierRecipient?.phoneNumber ?? supplierRecipient?.payerPhoneNumber ?? null,
+          payerPhoneNumber: supplierRecipient?.payerPhoneNumber ?? supplierRecipient?.phoneNumber ?? null,
         },
         retailer: {
-          type: paymentMethod?.type ?? 'MPESA',
-          provider: paymentMethod?.provider ?? 'Safaricom',
-          payerPhoneNumber: paymentMethod?.payerPhoneNumber ?? null,
+          type: retailerRecipient?.type ?? paymentMethod?.type ?? 'MPESA',
+          provider: retailerRecipient?.provider ?? paymentMethod?.provider ?? 'Safaricom',
+          shortcode: retailerRecipient?.shortcode ?? null,
+          accountName: retailerRecipient?.accountName ?? null,
+          phoneNumber: retailerRecipient?.phoneNumber ?? retailerRecipient?.payerPhoneNumber ?? null,
+          payerPhoneNumber: retailerRecipient?.payerPhoneNumber ?? retailerRecipient?.phoneNumber ?? null,
         },
       },
     };
@@ -1130,6 +1266,8 @@ export class SettlementService {
       ? (settlement.paymentPayload as Record<string, any>)
       : {};
 
+    const resolvedRetailerMerchantId = await this.resolveRetailerMerchantId(settlement);
+
     const splitRecord = {
       timestamp,
       merchantTransactionReference: data.merchantTransactionReference,
@@ -1147,7 +1285,7 @@ export class SettlementService {
           status: 'PENDING_PAYOUT',
         },
         retailer: {
-          merchantId: settlementMetadata.retailerMerchantId ?? settlementPaymentPayload.merchantId ?? null,
+          merchantId: resolvedRetailerMerchantId,
           amount: retailerAmount,
           status: 'PENDING_PAYOUT',
         },

@@ -91,6 +91,7 @@ export class MpesaService {
         stk_query: MPESA_PRODUCTION_ENDPOINTS.stkPushQuery,
         b2c: MPESA_PRODUCTION_ENDPOINTS.b2c,
         b2b: MPESA_PRODUCTION_ENDPOINTS.b2b,
+        b2pochi: '/mpesa/b2pochi/v1/paymentrequest',
         c2b_register: MPESA_PRODUCTION_ENDPOINTS.c2bV1,
         c2b_register_v2: MPESA_PRODUCTION_ENDPOINTS.c2bV2,
         c2b_simulate: MPESA_PRODUCTION_ENDPOINTS.c2bSimulate,
@@ -108,6 +109,7 @@ export class MpesaService {
       stk_query: '/mpesa/stkpushquery/v1/query',
       b2c: '/mpesa/b2c/v1/paymentrequest',
       b2b: '/mpesa/b2b/v1/paymentrequest',
+      b2pochi: '/mpesa/b2pochi/v1/paymentrequest',
       c2b_register: '/mpesa/c2b/v1/registerurl',
       c2b_register_v2: '/mpesa/c2b/v1/registerurl', // Use v1 for sandbox
       c2b_simulate: '/mpesa/c2b/v1/simulate',
@@ -192,7 +194,8 @@ export class MpesaService {
     const timestamp = this.generateTimestamp();
     const shortcode = env.shortcode || '174379';
     const passkey = env.passkey || '';
-    const formattedNumber = this.formatPhoneNumber(String(request.mobileNumber ?? request.payerPhoneNumber ?? ''));
+    const payerPhoneNumber = typeof request.payerPhoneNumber === 'string' ? request.payerPhoneNumber : typeof request.mobileNumber === 'string' ? request.mobileNumber : '';
+    const formattedNumber = this.formatPhoneNumber(String(payerPhoneNumber || '').trim());
     const callbackToken = randomUUID();
 
     const record = await prisma.mpesaTransaction.create({
@@ -301,6 +304,23 @@ export class MpesaService {
     };
 
     return this.makeRequest('b2b', request);
+  }
+
+  async dispatchB2PochiPayment(payload: Record<string, any>): Promise<Record<string, unknown>> {
+    const request = {
+      ...payload,
+      CommandID: payload.CommandID || 'BusinessPayToPochi',
+      Amount: String(payload.Amount ?? '0'),
+    };
+
+    const response = await this.makeRequest('b2pochi', request);
+    return {
+      originatorConversationId: response.OriginatorConversationID,
+      conversationId: response.ConversationID,
+      responseCode: response.ResponseCode,
+      responseDescription: response.ResponseDescription,
+      timestamp: new Date().toISOString(),
+    };
   }
 }
 

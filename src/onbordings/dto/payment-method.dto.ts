@@ -27,6 +27,12 @@ export class PaymentMethodDto {
   @ValidateIf((o) => o.type === 'MPESA')
   @IsNotEmpty()
   @IsString()
+  phoneNumber?: string;
+
+  @ApiPropertyOptional({ example: '254712345678', description: 'Deprecated alias retained for backwards compatibility.' })
+  @ValidateIf((o) => o.type === 'MPESA')
+  @IsOptional()
+  @IsString()
   payerPhoneNumber?: string;
 
   @ApiPropertyOptional({ example: 'Safaricom', description: 'Optional payment provider or network name.' })

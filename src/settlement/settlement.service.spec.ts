@@ -1,9 +1,37 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { SettlementService } from './settlement.service';
+import { SettlementRecordRepository } from './repository/settlement/settlement.repository';
 import { paymentRecordService } from '../payment/services/payment-record.service';
 import { prisma } from '../payment/config/mpesa.env';
 import { b2bService } from '../payment/services/b2b.service';
+import { b2pochiService } from '../payment/services/b2pochi.service';
+
+test('SettlementRecordRepository resolves callback identifiers stored under nested payout request metadata', async () => {
+  const callbackIdentifier = '50e1f407-fd08-4640-930d-9718930dc29b';
+  const repository = new SettlementRecordRepository({
+    settlement: {
+      findMany: async () => [{
+        id: 'settlement-lookup-nested',
+        metadata: {
+          payoutDispatches: [{
+            requestPayload: {
+              metadata: {
+                callbackIdentifier,
+                callbackToken: callbackIdentifier,
+              },
+            },
+          }],
+        },
+        transactions: [],
+      }],
+    },
+  } as any);
+
+  const settlement = await repository.findSettlementByPayoutCallbackIdentifier(callbackIdentifier);
+
+  assert.equal(settlement?.id, 'settlement-lookup-nested');
+});
 
 test('resolveB2bRecipient resolves retailer payout details from the retailer merchant ID, not the settlement ID', async () => {
   const repository = {
@@ -40,6 +68,78 @@ test('resolveB2bRecipient resolves retailer payout details from the retailer mer
   assert.equal(recipient.type, 'BANK');
   assert.equal(recipient.shortcode, '600000');
   assert.equal(recipient.accountName, 'John Doe');
+});
+
+test('dispatchB2bPayouts routes a retailer MPESA payout through B2Pochi based on the participant payment type', async () => {
+  let b2PochiCalled = false;
+  let b2bCalled = false;
+
+  const originalB2Pochi = b2pochiService.initiateB2Pochi.bind(b2pochiService);
+  const originalB2B = b2bService.initiateB2B.bind(b2bService);
+
+  (b2pochiService as any).initiateB2Pochi = async () => {
+    b2PochiCalled = true;
+    return { responseCode: '0', responseDescription: 'Accepted' };
+  };
+  (b2bService as any).initiateB2B = async () => {
+    b2bCalled = true;
+    return { responseCode: '0', responseDescription: 'Accepted' };
+  };
+
+  const repository = {
+    findSettlementByReference: async () => ({
+      id: 'settlement-retailer-mpesa',
+      status: 'PENDING_PROCESSING',
+      businessId: 'retailer-1',
+      metadata: {
+        retailerMerchantId: 'pay_retailer_mpesa',
+        paymentCallback: { status: 'SUCCESS', merchantTransactionReference: 'TXN-RETAILER-MPESA' },
+      },
+      paymentPayload: {
+        merchantId: 'pay_retailer_mpesa',
+      },
+      merchantTransactionReference: 'TXN-RETAILER-MPESA',
+      reference: 'REF-RETAILER-MPESA',
+      currency: 'KES',
+      amount: 1000,
+    }),
+    findIntegrationByMerchantId: async (merchantId: string) => {
+      if (merchantId === 'pay_retailer_mpesa') {
+        return {
+          participant: {
+            payment: {
+              type: 'MPESA',
+              provider: 'Safaricom',
+              phoneNumber: '254712345678',
+              payerPhoneNumber: '254712345678',
+            },
+          },
+        };
+      }
+      return null;
+    },
+    updateSettlementStatus: async () => ({ id: 'settlement-retailer-mpesa' }),
+  };
+
+  const service = new SettlementService(repository as any);
+  (service as any).logger = { log: () => {}, warn: () => {}, error: () => {} };
+  (service as any).getB2bGatewayBaseUrl = async () => 'https://gateway.example.com';
+  (service as any).getB2bGatewayApiToken = () => 'token';
+
+  try {
+    const result = await service.dispatchB2bPayouts({
+      merchantTransactionReference: 'TXN-RETAILER-MPESA',
+      party: 'RETAILER',
+      amount: 1000,
+    } as any);
+
+    assert.equal(result.success, true);
+    assert.equal(b2PochiCalled, true);
+    assert.equal(b2bCalled, false);
+  } finally {
+    (b2pochiService as any).initiateB2Pochi = originalB2Pochi;
+    (b2bService as any).initiateB2B = originalB2B;
+  }
 });
 
 test('dispatchB2bPayouts preserves the payout callback identifier path instead of appending /callbacks/mpesa', async () => {
@@ -101,23 +201,31 @@ test('dispatchB2bPayouts preserves the payout callback identifier path instead o
   }
 });
 
-test('dispatchB2bPayouts prefers the merchant integration ID for retailer payouts and ignores the participant business ID', async () => {
+test('dispatchB2bPayouts prefers the authenticated retailer integration over stale settlement metadata', async () => {
   const repository = {
     findSettlementByReference: async () => ({
       id: 'settlement-merchant-map-1',
       status: 'PENDING_PROCESSING',
       businessId: 'cmr0ejumw0001f3nqvdke729y',
-      metadata: {},
+      metadata: {
+        retailerMerchantId: 'pay_stale_merchant',
+      },
       paymentPayload: {
-        merchantId: 'pay_merchant_123',
+        merchantId: 'pay_stale_merchant',
       },
       merchantTransactionReference: 'TXN-MERCHANT-MAP',
       reference: 'REF-MERCHANT-MAP',
       currency: 'KES',
       amount: 1000,
     }),
+    findIntegrationByParticipantId: async (participantId: string) => {
+      assert.equal(participantId, 'cmr0ejumw0001f3nqvdke729y');
+      return {
+        merchantId: 'pay_authenticated_merchant',
+      };
+    },
     findIntegrationByMerchantId: async (merchantId: string) => {
-      assert.equal(merchantId, 'pay_merchant_123');
+      assert.equal(merchantId, 'pay_authenticated_merchant');
       return {
         participant: {
           payment: {
@@ -139,9 +247,21 @@ test('dispatchB2bPayouts prefers the merchant integration ID for retailer payout
   (service as any).logger = { log: () => {}, warn: () => {}, error: () => {} };
   (service as any).getB2bGatewayBaseUrl = async () => 'https://gateway.example.com';
   (service as any).getB2bGatewayApiToken = () => 'token';
+  (service as any).prisma = {
+    integration: {
+      findFirst: async ({ where }: any) => {
+        assert.equal(where.participantId, 'cmr0ejumw0001f3nqvdke729y');
+        return {
+          merchantId: 'pay_authenticated_merchant',
+          participantId: 'cmr0ejumw0001f3nqvdke729y',
+          participant: { participantType: 'RETAILER' },
+        };
+      },
+    },
+  };
   (service as any).sendB2bGatewayPayoutRequest = async (payload: any) => {
-    assert.equal(payload.metadata.retailerMerchantId, 'pay_merchant_123');
-    assert.notEqual(payload.metadata.retailerMerchantId, 'cmr0ejumw0001f3nqvdke729y');
+    assert.equal(payload.metadata.retailerMerchantId, 'pay_authenticated_merchant');
+    assert.notEqual(payload.metadata.retailerMerchantId, 'pay_stale_merchant');
     return {
       success: true,
       statusCode: 200,
@@ -158,7 +278,166 @@ test('dispatchB2bPayouts prefers the merchant integration ID for retailer payout
   });
 
   assert.equal(result.success, true);
-  assert.equal(result.dispatchRecord.requestPayload.metadata.retailerMerchantId, 'pay_merchant_123');
+  assert.equal(result.dispatchRecord.requestPayload.metadata.retailerMerchantId, 'pay_authenticated_merchant');
+});
+
+test('dispatchB2bPayouts routes MPESA payouts through B2Pochi and BANK payouts through B2B', async () => {
+  const repository = {
+    findSettlementByReference: async () => ({
+      id: 'settlement-route-selection-1',
+      status: 'PENDING_PROCESSING',
+      businessId: 'retailer-1',
+      metadata: {},
+      paymentPayload: {
+        merchantId: 'pay_merchant_456',
+      },
+      merchantTransactionReference: 'TXN-ROUTE-SELECTION',
+      reference: 'REF-ROUTE-SELECTION',
+      currency: 'KES',
+      amount: 1000,
+    }),
+    findIntegrationByMerchantId: async (merchantId: string) => {
+      if (merchantId === 'pay_merchant_456') {
+        return {
+          participant: {
+            payment: {
+              type: 'MPESA',
+              provider: 'Safaricom',
+              payerPhoneNumber: '+254700000123',
+            },
+          },
+        };
+      }
+      return null;
+    },
+    updateSettlementStatus: async () => ({ id: 'settlement-route-selection-1' }),
+  };
+
+  const service = new SettlementService(repository as any);
+  (service as any).logger = { log: () => {}, warn: () => {}, error: () => {} };
+  (service as any).getB2bGatewayBaseUrl = async () => 'https://gateway.example.com';
+  (service as any).getB2bGatewayApiToken = () => 'token';
+
+  const originalB2B = b2bService.initiateB2B.bind(b2bService);
+  const originalB2Pochi = (await import('../payment/services/b2pochi.service')).b2pochiService.initiateB2Pochi.bind((await import('../payment/services/b2pochi.service')).b2pochiService);
+
+  let b2PochiCalled = false;
+  let b2BCalled = false;
+
+  (b2bService as any).initiateB2B = async () => {
+    b2BCalled = true;
+    return { success: true, statusCode: 200, responseCode: '0', responseDescription: 'Accepted', response: { accepted: true } };
+  };
+  (await import('../payment/services/b2pochi.service')).b2pochiService.initiateB2Pochi = async (request: any) => {
+    b2PochiCalled = true;
+    assert.equal(request.PartyB, '+254700000123');
+    return { success: true, responseCode: '0', responseDescription: 'Accepted', originatorConversationId: 'oc-1', conversationId: 'c-1' };
+  };
+
+  try {
+    const result = await service.dispatchB2bPayouts({
+      merchantTransactionReference: 'TXN-ROUTE-SELECTION',
+      party: 'RETAILER',
+      amount: 100,
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(b2PochiCalled, true);
+    assert.equal(b2BCalled, false);
+  } finally {
+    (b2bService as any).initiateB2B = originalB2B;
+    (await import('../payment/services/b2pochi.service')).b2pochiService.initiateB2Pochi = originalB2Pochi;
+  }
+});
+
+test('dispatchB2bPayouts ignores customer payer MPESA and uses supplier bank payout details when routing recipient funds', async () => {
+  const repository = {
+    findSettlementByReference: async () => ({
+      id: 'settlement-route-selection-supplier-bank',
+      status: 'PENDING_PROCESSING',
+      businessId: 'retailer-1',
+      metadata: {
+        retailerMerchantId: 'pay_retailer_123',
+      },
+      paymentPayload: {
+        merchantId: 'pay_retailer_123',
+        paymentMethod: {
+          type: 'MPESA',
+          provider: 'Safaricom',
+          payerPhoneNumber: '254700000111',
+        },
+      },
+      merchantTransactionReference: 'TXN-SUPPLIER-BANK-ROUTE',
+      reference: 'REF-SUPPLIER-BANK-ROUTE',
+      currency: 'KES',
+      amount: 1000,
+    }),
+    findIntegrationByMerchantId: async (merchantId: string) => {
+      if (merchantId === 'pay_retailer_123') {
+        return {
+          participant: {
+            payment: {
+              type: 'BANK',
+              provider: 'Safaricom',
+              shortcode: '600000',
+              accountName: 'Retailer Merchant',
+            },
+          },
+        };
+      }
+      if (merchantId === 'pay_supplier_456') {
+        return {
+          participant: {
+            payment: {
+              type: 'BANK',
+              provider: 'Safaricom',
+              shortcode: '600000',
+              accountName: 'Supplier Merchant',
+            },
+          },
+        };
+      }
+      return null;
+    },
+    updateSettlementStatus: async () => ({ id: 'settlement-route-selection-supplier-bank' }),
+  };
+
+  const service = new SettlementService(repository as any);
+  (service as any).logger = { log: () => {}, warn: () => {}, error: () => {} };
+  (service as any).getB2bGatewayBaseUrl = async () => 'https://gateway.example.com';
+  (service as any).getB2bGatewayApiToken = () => 'token';
+
+  const originalB2B = b2bService.initiateB2B.bind(b2bService);
+  const originalB2Pochi = (await import('../payment/services/b2pochi.service')).b2pochiService.initiateB2Pochi.bind((await import('../payment/services/b2pochi.service')).b2pochiService);
+
+  let b2PochiCalled = false;
+  let b2BCalled = false;
+
+  (b2bService as any).initiateB2B = async (request: any) => {
+    b2BCalled = true;
+    assert.equal(request.recipientShortCode, '600000');
+    assert.equal(request.accountReference, 'Retailer Merchant');
+    return { success: true, statusCode: 200, responseCode: '0', responseDescription: 'Accepted', response: { accepted: true } };
+  };
+  (await import('../payment/services/b2pochi.service')).b2pochiService.initiateB2Pochi = async () => {
+    b2PochiCalled = true;
+    throw new Error('B2Pochi should not be used when the recipient payout destination is BANK');
+  };
+
+  try {
+    const result = await service.dispatchB2bPayouts({
+      merchantTransactionReference: 'TXN-SUPPLIER-BANK-ROUTE',
+      party: 'RETAILER',
+      amount: 100,
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(b2BCalled, true);
+    assert.equal(b2PochiCalled, false);
+  } finally {
+    (b2bService as any).initiateB2B = originalB2B;
+    (await import('../payment/services/b2pochi.service')).b2pochiService.initiateB2Pochi = originalB2Pochi;
+  }
 });
 
 test('dispatchB2bPayouts prefers the child settlement when it already has a successful payment callback', async () => {
@@ -286,7 +565,7 @@ test('splitAndAllocateFunds persists payment callback metadata before B2B payout
   assert.equal(updatedMetadata.paymentCallback.providerReference, 'RCP-3001');
 });
 
-test('handlePaymentCallback transitions a settlement into pending processing', async () => {
+test('handlePaymentCallback transitions a settlement into pending processing using participant payout records instead of payer payload details', async () => {
   let updatedStatus: any = null;
   let updatedPayload: any = null;
 
@@ -294,18 +573,48 @@ test('handlePaymentCallback transitions a settlement into pending processing', a
     findSettlementByReference: async () => ({
       id: 'settlement-1',
       status: 'INITIATED',
-      metadata: {},
+      metadata: {
+        retailerMerchantId: 'pay_merchant_456',
+      },
       paymentSnapshot: null,
       processedAt: null,
       amount: 10000,
       paymentPayload: {
+        merchantId: 'pay_merchant_456',
         paymentMethod: {
           type: 'MPESA',
           provider: 'Safaricom',
           payerPhoneNumber: '+254700000000',
         },
+        suppliers: [{ supplierMerchantId: 'pay_supplier_789', supplierTotalAmount: 10000 }],
       },
     }),
+    findIntegrationByMerchantId: async (merchantId: string) => {
+      if (merchantId === 'pay_merchant_456') {
+        return {
+          participant: {
+            payment: {
+              type: 'BANK',
+              provider: 'Safaricom',
+              shortcode: '600000',
+              accountName: 'Retailer Account',
+            },
+          },
+        };
+      }
+      if (merchantId === 'pay_supplier_789') {
+        return {
+          participant: {
+            payment: {
+              type: 'MPESA',
+              provider: 'Safaricom',
+              phoneNumber: '254712345678',
+            },
+          },
+        };
+      }
+      return null;
+    },
     updateSettlementStatus: async (_id: string, status: string, updates: any) => {
       updatedStatus = status;
       updatedPayload = updates;
@@ -328,7 +637,10 @@ test('handlePaymentCallback transitions a settlement into pending processing', a
   assert.equal(updatedStatus, 'PENDING_PROCESSING');
   assert.equal(updatedPayload.metadata.paymentCallback.merchantTransactionReference, 'TXN-1001');
   assert.equal(response.allocationPlan.allocations[0].party, 'Supplier');
-  assert.equal(response.allocationPlan.paymentDetails.supplier.provider, 'Safaricom');
+  assert.equal(response.allocationPlan.paymentDetails.supplier.type, 'MPESA');
+  assert.equal(response.allocationPlan.paymentDetails.supplier.phoneNumber, '254712345678');
+  assert.equal(response.allocationPlan.paymentDetails.retailer.type, 'BANK');
+  assert.equal(response.allocationPlan.paymentDetails.retailer.shortcode ?? response.allocationPlan.paymentDetails.retailer.phoneNumber, '600000');
 });
 
 test('confirmSettlementPayment records a customer payment confirmation and marks the settlement as pending processing', async () => {

@@ -37,11 +37,15 @@ export async function validateSettlementData(
       errors.push({ field: 'paymentMethod.type', message: 'Payment method type is required' });
     } else {
       const methodType = data.paymentMethod.type.toUpperCase();
-      if (!['MPESA', 'CASH'].includes(methodType)) {
+      if (!['MPESA', 'BANK', 'CASH'].includes(methodType)) {
         errors.push({ field: 'paymentMethod.type', message: 'Unsupported payment method' });
       }
 
-      if (methodType === 'MPESA' && !data.paymentMethod.payerPhoneNumber) {
+      const mpesaPhoneNumber = String(data.paymentMethod.payerPhoneNumber ?? '').trim();
+      // The initiating retailer/customer payer details live on payerPhoneNumber. The supplier/retailer
+      // payout destination is resolved separately from each participant.payment record; it must not be
+      // inferred from the original payer payment payload during routing.
+      if (methodType === 'MPESA' && !mpesaPhoneNumber) {
         errors.push({ field: 'paymentMethod.payerPhoneNumber', message: 'Payer phone number is required for MPESA' });
       }
     }
@@ -147,6 +151,21 @@ export async function validateSettlementData(
   logger.log(`Settlement payload validation completed: computedTotal=${computedTotal}, errors=${errors.length}`);
 
   if (errors.length > 0) {
+    logger.warn('[SETTLEMENT][VALIDATION] request rejected with validation errors', {
+      merchantTransactionReference: data.merchantTransactionReference,
+      totalAmount: data.totalAmount,
+      currency: data.currency,
+      paymentMethodType: data.paymentMethod?.type,
+      paymentMethodPhoneNumber: data.paymentMethod?.phoneNumber ?? data.paymentMethod?.payerPhoneNumber ?? null,
+      suppliers: data.suppliers?.map((supplier) => ({
+        supplierMerchantId: supplier.supplierMerchantId,
+        supplierTotalAmount: supplier.supplierTotalAmount,
+        retailerTotalAmount: supplier.retailerTotalAmount,
+        platformFee: supplier.platformFee,
+      })) ?? [],
+      errors,
+    });
+
     throw new BadRequestException({
       statusCode: 400,
       message: 'Validation failed',

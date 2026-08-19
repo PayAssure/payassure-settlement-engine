@@ -8,10 +8,15 @@ export class PaymentMethodDto {
   @IsNotEmpty()
   type: string = '';
 
-  @ApiProperty({ example: '254712345678', description: 'Payer phone number or payment identifier.' })
+  @ApiProperty({ example: '254712345678', description: 'Phone number for MPESA payout destinations.' })
   @IsString()
-  @IsNotEmpty()
-  payerPhoneNumber: string = '';
+  @IsOptional()
+  phoneNumber?: string = '';
+
+  @ApiPropertyOptional({ example: '254712345678', description: 'Deprecated alias kept for backwards compatibility with legacy payloads.' })
+  @IsString()
+  @IsOptional()
+  payerPhoneNumber?: string = '';
 
   @ApiPropertyOptional({ example: 'Safaricom', description: 'Optional payment provider or network name.' })
   @IsString()

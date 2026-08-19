@@ -111,6 +111,7 @@ export async function makeMpesaRequest(env: SharedMpesaEnv, endpoint: string, pa
     stk_query: '/mpesa/stkpushquery/v1/query',
     b2c: '/mpesa/b2c/v1/paymentrequest',
     b2b: '/mpesa/b2b/v1/paymentrequest',
+    b2pochi: '/mpesa/b2pochi/v1/paymentrequest',
     c2b_register: '/mpesa/c2b/v1/registerurl',
     c2b_simulate: '/mpesa/c2b/v1/simulate',
     reversal: '/mpesa/reversal/v1/request',
@@ -149,7 +150,7 @@ export async function initiateMpesaStkPush(request: Record<string, any>): Promis
   const timestamp = generateTimestamp();
   const shortcode = env.MPESA_SHORTCODE || '174379';
   const passkey = env.MPESA_PASSKEY || '';
-  const formattedNumber = formatPhoneNumber(String(request.mobileNumber ?? request.payerPhoneNumber ?? ''));
+  const formattedNumber = formatPhoneNumber(String(request.payerPhoneNumber ?? request.mobileNumber ?? ''));
   const callbackToken = randomUUID();
 
   const prisma = new PrismaClient();

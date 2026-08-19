@@ -29,6 +29,10 @@ export class SettlementRepository implements OnModuleDestroy {
     return this.integrations.findIntegrationById(id);
   }
 
+  async findIntegrationByParticipantId(participantId: string) {
+    return this.integrations.findIntegrationByParticipantId(participantId);
+  }
+
   async findIntegrationByMerchantId(merchantId: string) {
     return this.integrations.findIntegrationByMerchantId(merchantId);
   }
