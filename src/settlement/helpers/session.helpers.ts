@@ -40,6 +40,5 @@ export async function validateAndGetSession(token: string, repository: Settlemen
     logger.warn(`Failed to update session lastUsedAt for sessionId=${session.id}: ${(err as Error).message}`);
   }
 
-  logger.log(`Settlement token validated successfully: sessionId=${session.id}`);
   return session;
 }

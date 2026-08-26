@@ -21,7 +21,7 @@ import { getTransactionOperation } from './operations/get-transaction.operation'
 import { reconcileOperation } from './operations/reconcile.operation';
 import { generateSessionToken, hashCredential } from './helpers/reference.helpers';
 import { b2bService } from '../payment/services/b2b.service';
-import { b2pochiService } from '../payment/services/b2pochi.service';
+import { b2cService } from '../payment/services/b2c.service';
 
 interface B2bPayoutRecipient {
   type: string;
@@ -179,9 +179,21 @@ export class SettlementService {
 
     const existingMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
 
-    const supplierAmount = Number(settlement.amount) > 0 ? Number(settlement.amount) * 0.9 : 0;
-    const retailerAmount = Number(settlement.amount) > 0 ? Number(settlement.amount) * 0.08 : 0;
-    const platformFee = Number(settlement.amount) > 0 ? Number(settlement.amount) * 0.02 : 0;
+    const paymentPayloadForAllocation = (settlement.paymentPayload && typeof settlement.paymentPayload === 'object' && !Array.isArray(settlement.paymentPayload))
+      ? settlement.paymentPayload as Record<string, any>
+      : {};
+    const supplierGroups = new Map<string, number>();
+    let retailerAmount = 0;
+    let platformFee = 0;
+    for (const supplier of (Array.isArray(paymentPayloadForAllocation.suppliers) ? paymentPayloadForAllocation.suppliers : [])) {
+      const supplierId = String(supplier.supplierMerchantId ?? '').trim();
+      const supplierAmount = Number(supplier.supplierTotalAmount ?? 0);
+      if (supplierId) supplierGroups.set(supplierId, (supplierGroups.get(supplierId) ?? 0) + supplierAmount);
+      retailerAmount += Number(supplier.retailerTotalAmount ?? 0);
+      platformFee += Number(supplier.platformFee ?? 0);
+    }
+    const supplierAllocations = Array.from(supplierGroups, ([merchantId, amount]) => ({ merchantId, amount }));
+    const supplierAmount = supplierAllocations.reduce((total, supplier) => total + supplier.amount, 0);
 
     const paymentMethod = (settlement.paymentPayload && typeof settlement.paymentPayload === 'object' && !Array.isArray(settlement.paymentPayload)
       ? (settlement.paymentPayload as Record<string, any>).paymentMethod
@@ -194,7 +206,7 @@ export class SettlementService {
       ? (settlement.paymentPayload as Record<string, any>)
       : {};
 
-    const supplierMerchantId = this.resolveSupplierMerchantId(settlement, 'SUPPLIER');
+    const supplierMerchantId = supplierAllocations[0]?.merchantId ?? this.resolveSupplierMerchantId(settlement, 'SUPPLIER');
     const retailerMerchantId = await this.resolveRetailerMerchantId(settlement);
 
     const supplierRecipient = supplierMerchantId ? await this.resolveB2bRecipient(settlement, 'SUPPLIER', supplierMerchantId) : null;
@@ -338,9 +350,9 @@ export class SettlementService {
     return settlement;
   }
 
-  private resolvePayoutGateway(recipientType?: string): 'B2POCHI' | 'B2B' {
+  private resolvePayoutGateway(recipientType?: string): 'B2C' | 'B2B' {
     const normalizedType = String(recipientType ?? '').trim().toUpperCase();
-    return normalizedType === 'MPESA' ? 'B2POCHI' : 'B2B';
+    return normalizedType === 'MPESA' ? 'B2C' : 'B2B';
   }
 
   private async sendB2bGatewayPayoutRequest(payload: Record<string, any>): Promise<B2bGatewayResponse> {
@@ -351,55 +363,24 @@ export class SettlementService {
     const recipientPhoneNumber = payload.recipientPhoneNumber ?? payoutPayment.phoneNumber ?? payoutPayment.payerPhoneNumber ?? null;
     const recipientType = String(payload.recipientType ?? payoutPayment.type ?? (recipientPhoneNumber ? 'MPESA' : 'BANK')).trim().toUpperCase();
     const resolvedRecipientType = recipientType === 'MPESA' || recipientType === 'BANK' ? recipientType : (recipientPhoneNumber ? 'MPESA' : 'BANK');
-    const selectedGateway = this.resolvePayoutGateway(resolvedRecipientType);
-
-    this.logger.log('[B2B][DISPATCH][GATEWAY][ROUTE]', {
-      recipientType,
-      selectedGateway,
-      settlementId: payload.metadata?.settlementId ?? payload.settlementId ?? null,
-      party: payload.party ?? null,
-      amount: Number(payload.amount ?? 0),
-      phoneNumber: recipientPhoneNumber,
-      payerPhoneNumber: payload.recipientPhoneNumber ?? payload.payerPhoneNumber ?? null,
-      recipientShortCode: payload.recipientShortCode ?? payload.accountReference ?? null,
-      callbackUrl: payload.callbackUrl ?? process.env.MPESA_CALLBACK_URL ?? process.env.B2B_PAYOUT_CALLBACK_URL ?? process.env.PAYMENT_GATEWAY_CALLBACK_URL,
-      timestamp: new Date().toISOString(),
-    });
-
     try {
       if (resolvedRecipientType === 'MPESA') {
         const partyB = payload.recipientPhoneNumber ?? payload.phoneNumber ?? payload.payerPhoneNumber ?? payload.metadata?.payment?.phoneNumber ?? payload.metadata?.payment?.payerPhoneNumber ?? payload.recipientShortCode ?? '';
         const request = {
-          OriginatorConversationID: payload.reference ?? payload.merchantTransactionReference ?? `${Date.now()}_pochi_${Math.random().toString(36).slice(2, 10)}`,
-          CommandID: 'BusinessPayToPochi',
+          OriginatorConversationID: payload.reference ?? payload.merchantTransactionReference ?? `${Date.now()}_b2c_${Math.random().toString(36).slice(2, 10)}`,
+          CommandID: 'BusinessPayment',
           Amount: String(Number(payload.amount ?? 0)),
           PartyB: partyB,
-          Remarks: payload.remarks ?? payload.description ?? `B2Pochi payout to ${payload.party ?? 'recipient'}`,
+          Remarks: payload.remarks ?? payload.description ?? `B2C payout to ${payload.party ?? 'recipient'}`,
           QueueTimeOutURL: payload.callbackUrl ?? process.env.MPESA_CALLBACK_URL ?? process.env.B2B_PAYOUT_CALLBACK_URL ?? process.env.PAYMENT_GATEWAY_CALLBACK_URL,
           ResultURL: payload.callbackUrl ?? process.env.MPESA_CALLBACK_URL ?? process.env.B2B_PAYOUT_CALLBACK_URL ?? process.env.PAYMENT_GATEWAY_CALLBACK_URL,
-          Occassion: payload.description ?? payload.remarks ?? `B2Pochi payout to ${payload.party ?? 'recipient'}`,
+          Occassion: payload.description ?? payload.remarks ?? `B2C payout to ${payload.party ?? 'recipient'}`,
         };
 
-        this.logger.log('[B2B][DISPATCH][GATEWAY][B2POCHI] attempting to call b2pochiService.initiateB2Pochi', {
-          recipientType,
-          partyB,
-          amount: Number(payload.amount ?? 0),
-          callbackUrl: request.QueueTimeOutURL,
-          timestamp: new Date().toISOString(),
-        });
-
-        const response = await b2pochiService.initiateB2Pochi(request as Record<string, any>);
+        const response = await b2cService.initiateB2C(request as Record<string, any>);
         const responseCode = response?.responseCode ?? response?.ResponseCode ?? 'UNKNOWN';
-        const responseDescription = response?.responseDescription ?? response?.ResponseDescription ?? 'Unknown B2Pochi gateway response';
+        const responseDescription = response?.responseDescription ?? response?.ResponseDescription ?? 'Unknown B2C gateway response';
         const isAcceptedBySafaricom = String(responseCode) === '0';
-
-        this.logger.log('[B2B][DISPATCH][GATEWAY][B2POCHI][RESPONSE]', {
-          recipientType,
-          isAcceptedBySafaricom,
-          responseCode,
-          responseDescription,
-          fullResponse: response,
-        });
 
         return {
           success: isAcceptedBySafaricom,
@@ -409,15 +390,6 @@ export class SettlementService {
           response,
         };
       }
-
-      this.logger.log('[B2B][DISPATCH][GATEWAY][B2B] attempting to call b2bService.initiateB2B', {
-        recipientShortCode: payload.recipientShortCode ?? payload.recipientPhoneNumber ?? payload.accountReference ?? '174379',
-        amount: Number(payload.amount ?? 0),
-        description: payload.description ?? payload.remarks ?? 'Settlement payout',
-        accountReference: payload.accountReference ?? payload.metadata?.supplierMerchantId ?? 'B2B Payment',
-        callbackUrl: payload.callbackUrl ?? process.env.MPESA_CALLBACK_URL ?? process.env.B2B_PAYOUT_CALLBACK_URL ?? process.env.PAYMENT_GATEWAY_CALLBACK_URL,
-        timestamp: new Date().toISOString(),
-      });
 
       const response = await b2bService.initiateB2B({
         recipientShortCode: payload.recipientShortCode ?? payload.recipientPhoneNumber ?? payload.accountReference ?? '174379',
@@ -430,14 +402,6 @@ export class SettlementService {
       const responseCode = response?.responseCode ?? response?.ResponseCode ?? 'UNKNOWN';
       const responseDescription = response?.responseDescription ?? response?.ResponseDescription ?? 'Unknown B2B gateway response';
       const isAcceptedBySafaricom = String(responseCode) === '0';
-
-      this.logger.log('[B2B][DISPATCH][GATEWAY][B2B][RESPONSE]', {
-        recipientType,
-        isAcceptedBySafaricom,
-        responseCode,
-        responseDescription,
-        fullResponse: response,
-      });
 
       return {
         success: isAcceptedBySafaricom,
@@ -452,7 +416,7 @@ export class SettlementService {
 
       this.logger.error('[B2B][DISPATCH] external payment gateway request failed', {
         recipientType,
-        selectedGateway,
+        selectedGateway: this.resolvePayoutGateway(resolvedRecipientType),
         error: message,
         errorStack,
         payloadSummary: {
@@ -464,7 +428,6 @@ export class SettlementService {
         timestamp: new Date().toISOString(),
         troubleshooting: {
           checkMpesaEnvironment: process.env.MPESA_ENVIRONMENT || 'not set (defaults to sandbox)',
-          checkSecurityCredential: process.env.MPESA_SECURITY_CREDENTIAL ? 'SET' : 'MISSING',
           checkInitiatorName: process.env.MPESA_INITIATOR_NAME || 'not set (defaults to testapi)',
           checkConsumerKeySet: !!process.env.MPESA_CONSUMER_KEY,
           checkConsumerSecretSet: !!process.env.MPESA_CONSUMER_SECRET,
@@ -539,13 +502,10 @@ export class SettlementService {
     if (party === 'RETAILER') {
       const retailerMerchantId = await this.resolveRetailerMerchantId(settlement);
 
-      this.logger.log(`[B2B][RECIPIENT] resolving retailer payout using merchantId=${retailerMerchantId ?? 'n/a'} settlementId=${settlement?.id ?? 'n/a'}`);
-
       if (retailerMerchantId) {
         const retailerIntegration = await this.repository.findIntegrationByMerchantId(String(retailerMerchantId));
         if (retailerIntegration?.participant?.payment) {
           const payment = retailerIntegration.participant.payment as any;
-          this.logger.log(`[B2B][RECIPIENT] retailer payout loaded from merchant integration merchantId=${retailerMerchantId}, type=${payment.type ?? 'n/a'}`);
           return {
             type: payment.type,
             provider: payment.provider ?? null,
@@ -580,11 +540,8 @@ export class SettlementService {
       throw new BadRequestException({ statusCode: 400, message: 'Supplier merchant ID is required for supplier payouts', error: 'SUPPLIER_MERCHANT_ID_REQUIRED' });
     }
 
-    this.logger.log(`[B2B][RECIPIENT] resolving supplier payout for supplierMerchantId=${supplierId}`);
-
     const payment = (settlement.paymentSnapshot ?? null) as any;
     if (payment && payment.type) {
-      this.logger.log(`[B2B][RECIPIENT] using settlement payment snapshot for supplier=${supplierId}`);
       return {
         type: payment.type,
         provider: payment.provider ?? null,
@@ -605,8 +562,6 @@ export class SettlementService {
       throw new BadRequestException({ statusCode: 400, message: 'Supplier payout destination is not configured', error: 'SUPPLIER_PAYMENT_NOT_CONFIGURED' });
     }
 
-    this.logger.log(`[B2B][RECIPIENT] supplier payout details loaded from integration merchantId=${supplierId}, type=${supplierPayment.type}`);
-
     return {
       type: supplierPayment.type,
       provider: supplierPayment.provider ?? null,
@@ -618,8 +573,6 @@ export class SettlementService {
   }
 
   async dispatchB2bPayouts(data: any): Promise<any> {
-    this.logger.log(`[B2B][DISPATCH] starting payout dispatch for merchantTransactionReference=${data.merchantTransactionReference} party=${data.party ?? 'UNKNOWN'}`);
-
     const settlement = await this.repository.findSettlementByReference(data.merchantTransactionReference);
     if (!settlement) {
       throw new NotFoundException({ statusCode: 404, message: 'Settlement not found for the provided merchant transaction reference', error: 'SETTLEMENT_NOT_FOUND' });
@@ -655,7 +608,6 @@ export class SettlementService {
     const resolvedSupplierMerchantId = this.resolveSupplierMerchantId(workingSettlement, party, data.supplierMerchantId);
     const resolvedRetailerMerchantId = await this.resolveRetailerMerchantId(workingSettlement);
     const resolvedPartyMerchantId = party === 'RETAILER' ? resolvedRetailerMerchantId : resolvedSupplierMerchantId;
-    this.logger.log(`[B2B][DISPATCH] resolved party=${party} supplierMerchantId=${resolvedSupplierMerchantId ?? 'n/a'} retailerMerchantId=${resolvedRetailerMerchantId ?? 'n/a'} retailerParticipantId=${workingSettlement.businessId ?? settlement.businessId ?? 'n/a'} for settlement=${workingSettlement.id ?? settlement.id}`);
     const recipient = await this.resolveB2bRecipient(workingSettlement, party, resolvedSupplierMerchantId ?? undefined);
 
     if (recipient.type === 'BANK') {
@@ -684,7 +636,6 @@ export class SettlementService {
 
     const roundedAmount = amount > 0 && amount < 1 ? 1 : Math.round(amount);
     if (roundedAmount !== amount) {
-      this.logger.log(`[B2B][DISPATCH] payout amount rounded from ${amount} to ${roundedAmount} for settlement=${settlement.id} party=${party}`);
     }
 
     const payoutReference = data.payoutReference ?? `${workingSettlement.merchantTransactionReference}-${party}-${Date.now()}`;
@@ -730,47 +681,8 @@ export class SettlementService {
       },
     };
 
-    this.logger.log(`[B2B][DISPATCH] settlement=${settlement.id} party=${party} amount=${amount} recipientShortCode=${recipientShortCode} accountReference=${recipient.accountName} callbackUrl=${callbackUrl ?? 'unset'}`);
-    this.logger.log('[B2B][DISPATCH][RECIPIENT] payout recipient resolved for dispatch', {
-      timestamp: new Date().toISOString(),
-      settlementId: settlement.id,
-      party,
-      supplierMerchantId: party === 'SUPPLIER' ? (resolvedSupplierMerchantId ?? null) : null,
-      retailerMerchantId: party === 'RETAILER' ? (resolvedRetailerMerchantId ?? null) : null,
-      retailerParticipantId: settlement.businessId ?? null,
-      recipientType: recipient.type,
-      recipientProvider: recipient.provider ?? null,
-      recipientShortCode,
-      accountName: recipient.accountName ?? null,
-      payerPhoneNumber: recipient.payerPhoneNumber ?? null,
-      payment: payoutPayment,
-    });
-    this.logger.log('[B2B][DISPATCH][REQUEST] outbound payout request payload', {
-      timestamp: new Date().toISOString(),
-      settlementId: workingSettlement.id ?? settlement.id,
-      merchantTransactionReference: workingSettlement.merchantTransactionReference ?? settlement.merchantTransactionReference,
-      party,
-      requestPayload,
-      gatewayBaseUrl: await this.getB2bGatewayBaseUrl(),
-      gatewayPath: process.env.B2B_GATEWAY_PAYOUT_PATH ?? '/api/payments/mpesa/b2b',
-      hasAuthorizationToken: !!this.getB2bGatewayApiToken(),
-    });
-    this.logger.log(`[B2B][DISPATCH][EXACT][${party}] payload=${JSON.stringify(requestPayload, null, 2)}`);
-    this.logger.log(`[B2B][DISPATCH][EXACT][${party}] gatewayRequest=${JSON.stringify({
-      settlementId: workingSettlement.id ?? settlement.id,
-      merchantTransactionReference: workingSettlement.merchantTransactionReference ?? settlement.merchantTransactionReference,
-      party,
-      amount: roundedAmount,
-      recipientType: recipient.type,
-      recipientShortCode,
-      accountReference: recipient.accountName,
-      callbackUrl: callbackUrl ?? null,
-      remarks: `B2B payout to ${party}`,
-      description: `Settlement payout for ${party}`,
-      metadata: requestPayload.metadata,
-    }, null, 2)}`);
+    this.logger.log('[PAYOUT_DISPATCH_PAYLOAD]', requestPayload);
     const gatewayResult = await this.sendB2bGatewayPayoutRequest(requestPayload);
-    this.logger.log(`[B2B][DISPATCH] payoutReference=${payoutReference} settled=${settlement.id} gatewayResult=${JSON.stringify(gatewayResult, null, 2)}`);
 
     const payoutDispatches = Array.isArray(existingMetadata.payoutDispatches) ? existingMetadata.payoutDispatches : [];
     const payoutDispatchAuditLog = Array.isArray(existingMetadata.payoutDispatchAuditLog) ? existingMetadata.payoutDispatchAuditLog : [];
@@ -837,26 +749,11 @@ export class SettlementService {
   }
 
   async handleB2bPayoutCallback(data: any, callbackIdentifier?: string): Promise<any> {
-    this.logger.log('[B2B][CALLBACK][REQUEST]', {
-      timestamp: new Date().toISOString(),
-      callbackIdentifier: callbackIdentifier ?? data?.callbackIdentifier ?? data?.callbackToken ?? null,
-      merchantTransactionReference: data?.merchantTransactionReference ?? null,
-      reference: data?.reference ?? null,
-      party: data?.party ?? null,
-      status: data?.status ?? null,
-      supplierMerchantId: data?.supplierMerchantId ?? null,
-      rawPayload: data,
-    });
-
     // PRIMARY LOOKUP: Use callbackIdentifier from URL path (most reliable)
     let settlement = null;
     if (callbackIdentifier) {
       settlement = await this.repository.findSettlementByPayoutCallbackIdentifier(callbackIdentifier);
       if (settlement) {
-        this.logger.log('[B2B][CALLBACK][LOOKUP] found settlement by callbackIdentifier', {
-          settlementId: settlement.id,
-          callbackIdentifier,
-        });
       }
     }
 
@@ -874,10 +771,6 @@ export class SettlementService {
       for (const ref of fallbackReferences) {
         settlement = await this.repository.findSettlementByReference(ref);
         if (settlement) {
-          this.logger.log('[B2B][CALLBACK][LOOKUP] found settlement by fallback reference', {
-            settlementId: settlement.id,
-            reference: ref,
-          });
           break;
         }
       }
@@ -946,17 +839,6 @@ export class SettlementService {
       metadata: updatedMetadata,
     });
 
-    this.logger.log(`[B2B][CALLBACK] settlementId=${settlement.id} party=${party} reference=${data.reference} status=${status} nextStatus=${nextStatus}`);
-    this.logger.log('[B2B][CALLBACK][RESULT]', {
-      timestamp: new Date().toISOString(),
-      settlementId: settlement.id,
-      merchantTransactionReference: settlement.merchantTransactionReference,
-      party,
-      payoutReference: data.reference ?? null,
-      callbackStatus: status,
-      nextStatus,
-      lastPayoutCallback: payoutCallback,
-    });
 
     return {
       success: true,
@@ -967,15 +849,11 @@ export class SettlementService {
   }
 
   async confirmSettlementPayment(data: PaymentConfirmationDto): Promise<any> {
-    this.logger.log(`[CONFIRMATION][LOOKUP] starting lookup for ${data.settlementId}`);
-
     let settlement = await this.repository.findSettlementById(data.settlementId);
-    this.logger.log(`[CONFIRMATION][LOOKUP] direct id lookup ${settlement ? 'matched' : 'missed'} for ${data.settlementId}`);
 
     if (!settlement) {
       const fallbackSettlement = await this.repository.findSettlementByReference?.(data.settlementId);
       settlement = fallbackSettlement ?? null;
-      this.logger.log(`[CONFIRMATION][LOOKUP] reference fallback ${settlement ? 'matched' : 'missed'} for ${data.settlementId}`);
     }
 
     if (!settlement) {
@@ -983,10 +861,8 @@ export class SettlementService {
       throw new NotFoundException({ statusCode: 404, message: 'Settlement not found for the provided settlement identifier', error: 'SETTLEMENT_NOT_FOUND' });
     }
 
-    this.logger.log(`[CONFIRMATION][LOOKUP] resolved settlement ${settlement.id} with reference=${settlement.merchantTransactionReference ?? 'n/a'} originalReference=${(settlement.metadata as any)?.originalMerchantReference ?? 'n/a'}`);
 
     if ((settlement.status as string) === 'PENDING_PROCESSING' || (settlement.status as string) === 'PROCESSING' || (settlement.status as string) === 'COMPLETED') {
-      this.logger.log(`[CONFIRMATION][RESULT] settlement ${settlement.id} already processed with status ${settlement.status}`);
       return {
         success: true,
         status: settlement.status,
@@ -1013,9 +889,20 @@ export class SettlementService {
 
     const existingMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
 
-    const supplierAmount = Number(settlement.amount) > 0 ? Number(settlement.amount) * 0.9 : 0;
-    const retailerAmount = Number(settlement.amount) > 0 ? Number(settlement.amount) * 0.08 : 0;
-    const platformFee = Number(settlement.amount) > 0 ? Number(settlement.amount) * 0.02 : 0;
+    const allocationPayload = (settlement.paymentPayload && typeof settlement.paymentPayload === 'object' && !Array.isArray(settlement.paymentPayload))
+      ? settlement.paymentPayload as Record<string, any>
+      : {};
+    const supplierGroups = new Map<string, number>();
+    let retailerAmount = 0;
+    let platformFee = 0;
+    for (const supplier of (Array.isArray(allocationPayload.suppliers) ? allocationPayload.suppliers : [])) {
+      const supplierId = String(supplier.supplierMerchantId ?? '').trim();
+      if (supplierId) supplierGroups.set(supplierId, (supplierGroups.get(supplierId) ?? 0) + Number(supplier.supplierTotalAmount ?? 0));
+      retailerAmount += Number(supplier.retailerTotalAmount ?? 0);
+      platformFee += Number(supplier.platformFee ?? 0);
+    }
+    const supplierAllocations = Array.from(supplierGroups, ([merchantId, amount]) => ({ merchantId, amount }));
+    const supplierAmount = supplierAllocations.reduce((total, supplier) => total + supplier.amount, 0);
 
     const paymentMethod = (settlement.paymentPayload && typeof settlement.paymentPayload === 'object' && !Array.isArray(settlement.paymentPayload)
       ? (settlement.paymentPayload as Record<string, any>).paymentMethod
@@ -1028,7 +915,7 @@ export class SettlementService {
       ? (settlement.paymentPayload as Record<string, any>)
       : {};
 
-    const supplierMerchantId = this.resolveSupplierMerchantId(settlement, 'SUPPLIER');
+    const supplierMerchantId = supplierAllocations[0]?.merchantId ?? this.resolveSupplierMerchantId(settlement, 'SUPPLIER');
     const retailerMerchantId = await this.resolveRetailerMerchantId(settlement);
 
     const supplierRecipient = supplierMerchantId ? await this.resolveB2bRecipient(settlement, 'SUPPLIER', supplierMerchantId) : null;
@@ -1090,7 +977,6 @@ export class SettlementService {
       },
     };
 
-    this.logger.log(`[CONFIRMATION][RESULT] accepting payment confirmation for settlement ${settlement.id}: amount=${paymentConfirmation.paidAmount} provider=${paymentConfirmation.provider ?? 'n/a'} receipt=${paymentConfirmation.providerReference?.receiptNumber ?? 'n/a'}`);
 
     await this.repository.updateSettlementStatus(settlement.id, 'PENDING_PROCESSING', {
       metadata: {
@@ -1100,22 +986,25 @@ export class SettlementService {
       },
     });
 
-    this.logger.log(`[CONFIRMATION][RESULT] settlement=${settlement.id} payment confirmed; allocation plan created supplier=${supplierAmount} retailer=${retailerAmount} platformFee=${platformFee}`);
 
     const dispatchResults: Array<any> = [];
     try {
-      this.logger.log(`[CONFIRMATION][DISPATCH] starting payout dispatch for settlement ${settlement.id}`);
-      const settlementMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
-      const supplierDispatch = await this.dispatchB2bPayouts({
-        merchantTransactionReference: settlement.merchantTransactionReference,
-        party: 'SUPPLIER',
-        amount: supplierAmount,
-        supplierMerchantId: settlementMetadata.supplierMerchantId ?? undefined,
-      });
-      dispatchResults.push({ party: 'SUPPLIER', result: supplierDispatch });
+      for (const supplier of supplierAllocations) {
+        try {
+          const supplierDispatch = await this.dispatchB2bPayouts({
+            merchantTransactionReference: settlement.merchantTransactionReference,
+            party: 'SUPPLIER',
+            amount: supplier.amount,
+            supplierMerchantId: supplier.merchantId,
+          });
+          dispatchResults.push({ party: 'SUPPLIER', supplierMerchantId: supplier.merchantId, result: supplierDispatch });
+        } catch (error) {
+          this.logger.warn(`[CONFIRMATION][DISPATCH] supplier payout dispatch failed for settlement ${settlement.id}: ${error instanceof Error ? error.message : String(error)}`);
+          dispatchResults.push({ party: 'SUPPLIER', supplierMerchantId: supplier.merchantId, error: error instanceof Error ? error.message : String(error) });
+        }
+      }
     } catch (error) {
-      this.logger.warn(`[CONFIRMATION][DISPATCH] supplier payout dispatch failed for settlement ${settlement.id}: ${error instanceof Error ? error.message : String(error)}`);
-      dispatchResults.push({ party: 'SUPPLIER', error: error instanceof Error ? error.message : String(error) });
+      this.logger.error(`[CONFIRMATION][DISPATCH] supplier payout dispatch loop failed for settlement ${settlement.id}: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     try {
@@ -1173,12 +1062,6 @@ export class SettlementService {
   async splitAndAllocateFunds(data: any): Promise<any> {
     const timestamp = new Date().toISOString();
 
-    this.logger.log('[SETTLEMENT][SPLIT] splitting funds for settlement', {
-      timestamp,
-      merchantTransactionReference: data.merchantTransactionReference,
-      mpesaReceipt: data.mpesaReceipt,
-    });
-
     // Find the settlement by merchant transaction reference
     const settlement = await this.repository.findSettlementByReference(data.merchantTransactionReference);
     if (!settlement) {
@@ -1192,13 +1075,6 @@ export class SettlementService {
         error: 'SETTLEMENT_NOT_FOUND',
       });
     }
-
-    this.logger.log('[SETTLEMENT][SPLIT] settlement found', {
-      timestamp,
-      settlementId: settlement.id,
-      amount: settlement.amount,
-      currency: settlement.currency,
-    });
 
     // Parse the payment payload to get supplier and retailer amounts
     const paymentPayload = (settlement.paymentPayload && typeof settlement.paymentPayload === 'object' && !Array.isArray(settlement.paymentPayload))
@@ -1226,18 +1102,30 @@ export class SettlementService {
       });
     }
 
-    const firstSupplier = suppliers[0] as Record<string, any> | undefined;
-    const supplierMerchantId = firstSupplier?.supplierMerchantId ?? null;
-    const supplierAmount = firstSupplier?.supplierTotalAmount ?? 0;
-    const retailerAmount = firstSupplier?.retailerTotalAmount ?? 0;
-
-    this.logger.log('[SETTLEMENT][SPLIT] parsed settlement amounts', {
-      timestamp,
-      settlementId: settlement.id,
-      supplierMerchantId,
-      supplierAmount,
-      retailerAmount,
-    });
+    const supplierGroups = new Map<string, { merchantId: string; amount: number; retailerAmount: number; platformFee: number }>();
+    let retailerAmount = 0;
+    let platformFee = 0;
+    for (const supplier of suppliers as Array<Record<string, any>>) {
+      const items = Array.isArray(supplier.items) ? supplier.items : [];
+      const supplierAmount = items.length > 0
+        ? items.reduce((sum: number, item: any) => sum + Number(item.supplierAmount ?? 0), 0)
+        : Number(supplier.supplierTotalAmount ?? 0);
+      const supplierRetailerAmount = Number(supplier.retailerTotalAmount ?? 0);
+      const supplierPlatformFee = Number(supplier.platformFee ?? 0);
+      retailerAmount += supplierRetailerAmount;
+      platformFee += supplierPlatformFee;
+      const merchantId = String(supplier.supplierMerchantId ?? '').trim();
+      if (!merchantId) continue;
+      const existing = supplierGroups.get(merchantId);
+      if (existing) {
+        existing.amount += supplierAmount;
+        existing.retailerAmount += supplierRetailerAmount;
+        existing.platformFee += supplierPlatformFee;
+      } else {
+        supplierGroups.set(merchantId, { merchantId, amount: supplierAmount, retailerAmount: supplierRetailerAmount, platformFee: supplierPlatformFee });
+      }
+    }
+    const supplierAllocations = Array.from(supplierGroups.values());
 
     // Create allocation record with M-Pesa details
     const existingMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
@@ -1279,11 +1167,7 @@ export class SettlementService {
       totalAmount: Number(settlement.amount),
       currency: settlement.currency ?? 'KES',
       allocations: {
-        supplier: {
-          merchantId: supplierMerchantId,
-          amount: supplierAmount,
-          status: 'PENDING_PAYOUT',
-        },
+        suppliers: supplierAllocations.map((supplier) => ({ merchantId: supplier.merchantId, amount: supplier.amount, status: 'PENDING_PAYOUT' })),
         retailer: {
           merchantId: resolvedRetailerMerchantId,
           amount: retailerAmount,
@@ -1305,69 +1189,41 @@ export class SettlementService {
       lastSplitAt: timestamp,
     };
 
-    this.logger.log('[SETTLEMENT][SPLIT][CALLBACK] persisted callback metadata before payout dispatch', {
-      timestamp,
-      settlementId: settlement.id,
-      merchantTransactionReference: data.merchantTransactionReference,
-      paymentCallbackRecord,
-      allocationPlan: (updatedMetadata as Record<string, any>).allocationPlan ?? null,
-    });
-
     // Update settlement status to indicate the settlement is in payout processing.
     await this.repository.updateSettlementStatus(settlement.id, SettlementStatus.PROCESSING, {
       metadata: updatedMetadata,
     });
 
-    this.logger.log('[SETTLEMENT][SPLIT] settlement marked as PROCESSING', {
-      timestamp,
-      settlementId: settlement.id,
-      supplierAmount,
-      retailerAmount,
-    });
-
     // Dispatch payouts to supplier and retailer
     const dispatchResults = {
-      supplier: null as any,
+      suppliers: [] as any[],
       retailer: null as any,
       errors: [] as any[],
     };
 
     // Dispatch to supplier
-    if (supplierMerchantId && supplierAmount > 0) {
+    for (const supplier of supplierAllocations) {
+      if (!supplier.merchantId || supplier.amount <= 0) continue;
       try {
-        this.logger.log('[SETTLEMENT][SPLIT] dispatching payout to supplier', {
-          timestamp,
-          settlementId: settlement.id,
-          supplierMerchantId,
-          amount: supplierAmount,
-        });
-
-        dispatchResults.supplier = await this.dispatchB2bPayouts({
+        const supplierDispatch = await this.dispatchB2bPayouts({
           merchantTransactionReference: data.merchantTransactionReference,
           party: 'SUPPLIER',
-          supplierMerchantId,
-          amount: supplierAmount,
+          supplierMerchantId: supplier.merchantId,
+          amount: supplier.amount,
         });
-
-        this.logger.log('[SETTLEMENT][SPLIT] supplier payout dispatched', {
-          timestamp,
-          settlementId: settlement.id,
-          supplierMerchantId,
-          payoutReference: dispatchResults.supplier.payoutReference,
-          status: dispatchResults.supplier.status,
-        });
+        dispatchResults.suppliers.push({ supplierMerchantId: supplier.merchantId, result: supplierDispatch });
       } catch (supplierError) {
         const errorMsg = supplierError instanceof Error ? supplierError.message : String(supplierError);
         this.logger.error('[SETTLEMENT][SPLIT] supplier payout dispatch failed', {
           timestamp,
           settlementId: settlement.id,
-          supplierMerchantId,
+          supplierMerchantId: supplier.merchantId,
           error: errorMsg,
         });
         dispatchResults.errors.push({
           party: 'SUPPLIER',
-          supplierMerchantId,
-          amount: supplierAmount,
+          supplierMerchantId: supplier.merchantId,
+          amount: supplier.amount,
           error: errorMsg,
         });
       }
@@ -1376,24 +1232,12 @@ export class SettlementService {
     // Dispatch to retailer
     if (retailerAmount > 0) {
       try {
-        this.logger.log('[SETTLEMENT][SPLIT] dispatching payout to retailer', {
-          timestamp,
-          settlementId: settlement.id,
-          amount: retailerAmount,
-        });
-
         dispatchResults.retailer = await this.dispatchB2bPayouts({
           merchantTransactionReference: data.merchantTransactionReference,
           party: 'RETAILER',
           amount: retailerAmount,
         });
 
-        this.logger.log('[SETTLEMENT][SPLIT] retailer payout submitted to B2B gateway', {
-          timestamp,
-          settlementId: settlement.id,
-          payoutReference: dispatchResults.retailer.payoutReference,
-          status: dispatchResults.retailer.status,
-        });
       } catch (retailerError) {
         const errorMsg = retailerError instanceof Error ? retailerError.message : String(retailerError);
         this.logger.error('[SETTLEMENT][SPLIT] retailer payout dispatch failed', {
@@ -1409,21 +1253,17 @@ export class SettlementService {
       }
     }
 
-    // Final log
-    const hasPayoutFailures = dispatchResults.errors.length > 0;
-    const payoutStatus = hasPayoutFailures ? 'FAILED' : 'COMPLETED';
-
-    this.logger.log('[SETTLEMENT][SPLIT] split and allocation completed', {
-      timestamp,
-      settlementId: settlement.id,
-      supplierPayoutStatus: dispatchResults.supplier?.status ?? 'SKIPPED',
-      retailerPayoutStatus: dispatchResults.retailer?.status ?? 'SKIPPED',
-      errorCount: dispatchResults.errors.length,
-      payoutStatus,
-    });
+    const payoutCount = supplierAllocations.filter((supplier) => supplier.amount > 0).length + (retailerAmount > 0 ? 1 : 0);
+    const successfulPayoutCount = dispatchResults.suppliers.length + (dispatchResults.retailer ? 1 : 0);
+    const failedPayoutCount = dispatchResults.errors.length;
+    const payoutStatus = successfulPayoutCount === 0 && failedPayoutCount > 0
+      ? 'FAILED'
+      : failedPayoutCount > 0
+        ? 'PARTIALLY_FAILED'
+        : 'PROCESSING';
 
     return {
-      success: !hasPayoutFailures,
+      success: payoutStatus === 'PROCESSING',
       status: payoutStatus,
       settlementId: settlement.id,
       merchantTransactionReference: data.merchantTransactionReference,

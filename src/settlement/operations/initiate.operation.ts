@@ -18,6 +18,32 @@ function buildTransactionDescription(data: InitiateSettlementDto) {
   return isGoods ? 'Goods payment' : 'Settlement payment';
 }
 
+function aggregateSuppliers(suppliers: InitiateSettlementDto['suppliers']) {
+  const grouped = new Map<string, any>();
+
+  for (const supplier of suppliers ?? []) {
+    const existing = grouped.get(supplier.supplierMerchantId);
+    const items = Array.isArray(supplier.items) ? supplier.items : [];
+    if (!existing) {
+      grouped.set(supplier.supplierMerchantId, {
+        ...supplier,
+        supplierTotalAmount: Number(supplier.supplierTotalAmount ?? 0),
+        retailerTotalAmount: Number(supplier.retailerTotalAmount ?? 0),
+        platformFee: Number(supplier.platformFee ?? 0),
+        items: [...items],
+      });
+      continue;
+    }
+
+    existing.supplierTotalAmount += Number(supplier.supplierTotalAmount ?? 0);
+    existing.retailerTotalAmount += Number(supplier.retailerTotalAmount ?? 0);
+    existing.platformFee += Number(supplier.platformFee ?? 0);
+    existing.items.push(...items);
+  }
+
+  return Array.from(grouped.values());
+}
+
 async function sendStkPushRequest(payload: Record<string, any>) {
   return mpesaService.initiateStkPush(payload);
 }
@@ -129,19 +155,16 @@ export async function initiateOperation(
   data: InitiateSettlementDto,
   supportedCurrencies: string[],
 ) {
-  logger.log(`Initiate settlement requested: session=${token}, merchantTransactionReference=${data.merchantTransactionReference}`);
   const session = await validateAndGetSession(token, repository, logger);
   const integration = await repository.findIntegrationById(session.integrationId);
   const businessId = (session as any).businessId ?? (session as any).business?.id ?? integration?.participantId ?? integration?.participant?.id ?? 'unknown';
   const integrationId = (session as any).integrationId ?? (session as any).integration?.id ?? integration?.id ?? 'unknown';
-  logger.log(`Settlement session validated for business=${businessId}, integration=${integrationId}`);
   if (!integration || !integration.participant) {
     logger.warn(`Invalid session context: session=${token}, integrationId=${session.integrationId}`);
     throw new UnauthorizedException({ statusCode: 401, message: 'Invalid session or retailer context', error: 'INVALID_SESSION' });
   }
 
   const retailerMerchantId = integration.merchantId;
-  logger.log(`Authenticated retailer merchantId=${retailerMerchantId}, participant=${integration.participant.id}`);
 
   if (integration.participant.participantType !== ParticipantType.RETAILER || !([ParticipantStatus.ACTIVE, ParticipantStatus.LIVE] as ParticipantStatus[]).includes(integration.participant.status)) {
     logger.warn(`Retailer not authorized or inactive: merchantId=${retailerMerchantId}, status=${integration.participant.status}`);
@@ -149,10 +172,8 @@ export async function initiateOperation(
   }
 
   try {
-    logger.log(`Checking for existing settlement for business=${businessId}, reference=${data.merchantTransactionReference}`);
     const existingSettlement = await repository.findSettlementByBusinessAndPayloadReference(businessId, data.merchantTransactionReference);
     if (existingSettlement) {
-      logger.log(`Existing settlement found for reference=${data.merchantTransactionReference}, settlementId=${existingSettlement.id}`);
       await repository.touchSession(session.id);
       const existingTransactions = Array.isArray(existingSettlement.transactions)
         ? existingSettlement.transactions.map((txn: any) => ({
@@ -191,16 +212,47 @@ export async function initiateOperation(
       };
     }
 
-    logger.log(`No existing settlement found, validating request payload for merchantTransactionReference=${data.merchantTransactionReference}`);
-    await validateSettlementData(data, repository, logger, supportedCurrencies);
-    logger.log(`Payload validation passed for merchantTransactionReference=${data.merchantTransactionReference}`);
+    const validationResult = await validateSettlementData(data, repository, logger, supportedCurrencies);
+    const invalidSupplierIndexes = new Set(validationResult.invalidSuppliers.map((supplier) => supplier.index));
+    const invalidSuppliers = validationResult.invalidSuppliers.map((supplier) => ({
+      supplierMerchantId: supplier.supplierMerchantId,
+      errors: supplier.errors,
+    }));
+
+    if (invalidSupplierIndexes.size > 0) {
+      const eligibleSuppliers = data.suppliers.filter((_supplier, index) => !invalidSupplierIndexes.has(index));
+      if (eligibleSuppliers.length === 0) {
+        throw new BadRequestException({
+          statusCode: 400,
+          message: 'No eligible suppliers remain for settlement',
+          error: 'NO_ELIGIBLE_SUPPLIERS',
+          invalidSuppliers,
+        });
+      }
+
+      data.suppliers = eligibleSuppliers;
+      data.totalAmount = data.suppliers.reduce((total, supplier) => {
+        const items = Array.isArray(supplier.items) ? supplier.items : [];
+        const supplierAmount = items.length > 0
+          ? items.reduce((sum, item) => sum + Number(item.supplierAmount ?? 0), 0)
+          : Number(supplier.supplierTotalAmount ?? 0);
+        return total + supplierAmount + Number(supplier.retailerTotalAmount ?? 0) + Number(supplier.platformFee ?? 0);
+      }, 0);
+      data.metadata = {
+        ...(data.metadata ?? {}),
+        excludedSuppliers: invalidSuppliers,
+      };
+      logger.warn(`Excluded ${invalidSuppliers.length} invalid supplier allocation(s) from settlement`, { invalidSuppliers });
+    }
+
+    data.suppliers = aggregateSuppliers(data.suppliers) as any;
 
     const payAssureReference = generatePayAssureReference();
     const internalMerchantTransactionReference = generateInternalMerchantTransactionReference();
-    logger.log(`Creating primary settlement with payAssureReference=${payAssureReference}, internalReference=${internalMerchantTransactionReference}`);
     const primarySettlement = await repository.createSettlement(businessId, integrationId, payAssureReference, internalMerchantTransactionReference, data);
 
-    if (data.paymentMethod?.type?.toUpperCase() === 'MPESA') {
+    const initiateCustomerPayment = async () => {
+      if (data.paymentMethod?.type?.toUpperCase() === 'MPESA') {
       const mobileNumber = String(data.paymentMethod.payerPhoneNumber ?? '').trim();
       const amount = Number(data.totalAmount);
       const accountReference = getGatewayAccountReference();
@@ -226,10 +278,7 @@ export async function initiateOperation(
         transactionDesc,
       };
 
-      logger.log(`Persisting settlement payment request payload for callback lookup and reconciliation: merchantTransactionReference=${data.merchantTransactionReference}`);
-
-      logger.log(`Initiating STK push through internal payment service for merchantTransactionReference=${data.merchantTransactionReference}`);
-      logger.log(`STK push payload: ${JSON.stringify(gatewayRequestPayload)}`);
+      logger.log('[PAYMENT_DISPATCH_PAYLOAD]', gatewayRequestPayload);
       const gatewayResult = await sendStkPushRequestWithRetry(
         async (payload) => sendStkPushRequest({ gatewayPayload: gatewayRequestPayload, ...gatewayRequestPayload, ...payload }),
         logger,
@@ -288,8 +337,6 @@ export async function initiateOperation(
         };
       }
 
-      logger.log(`STK push response received for merchantTransactionReference=${data.merchantTransactionReference}`);
-
       data.metadata = {
         ...(data.metadata ?? {}),
         paymentGateway: {
@@ -303,10 +350,10 @@ export async function initiateOperation(
           response: gatewayResult.response,
         },
       };
-    }
+      }
+    };
 
     await repository.touchSession(session.id);
-    logger.log(`Session touched (lastUsedAt updated) for sessionId=${session.id}`);
 
     const childSettlements: Array<{
       id: string;
@@ -319,9 +366,9 @@ export async function initiateOperation(
     let totalSupplierAmount = 0;
     let totalRetailerAmount = 0;
     let totalSystemAmount = 0;
+    const supplierAmountSummary: Array<{ supplierMerchantId?: string; supplierAmount: number; retailerAmount: number; platformFee: number }> = [];
 
-    for (const supplier of data.suppliers) {
-      logger.log(`Processing supplier ${supplier.supplierMerchantId} for settlement ${primarySettlement.id}`);
+    for (const [supplierIndex, supplier] of data.suppliers.entries()) {
       const supplierItems = Array.isArray(supplier.items) ? supplier.items : [];
       const hasItems = supplierItems.length > 0;
       const supplierAmount = hasItems ? supplierItems.reduce((sum: number, item: any) => sum + Number(item.supplierAmount ?? 0), 0) : Number(supplier.supplierTotalAmount ?? 0);
@@ -331,8 +378,8 @@ export async function initiateOperation(
       totalRetailerAmount += retailerAmount;
       totalSystemAmount += platformFee;
 
-      logger.log(`Supplier ${supplier.supplierMerchantId} amount=${supplierAmount}, retailerAmount=${retailerAmount}, platformFee=${platformFee}, itemCount=${hasItems ? supplierItems.length : 0}`);
-      const supplierMerchantTransactionReference = `${internalMerchantTransactionReference}-${supplier.supplierMerchantId}`;
+      supplierAmountSummary.push({ supplierMerchantId: supplier.supplierMerchantId, supplierAmount, retailerAmount, platformFee });
+      const supplierMerchantTransactionReference = `${internalMerchantTransactionReference}-${supplier.supplierMerchantId}-${supplierIndex}`;
 
       const supplierIntegration = await prisma.integration.findFirst({ where: { merchantId: supplier.supplierMerchantId, isActive: true }, include: { participant: true } });
       const paymentSnapshot = supplierIntegration?.participant?.payment ?? null;
@@ -342,7 +389,7 @@ export async function initiateOperation(
         amount: supplierAmount,
         currency: data.currency,
         settlementMethod: data.settlementMethod,
-        reference: `${data.merchantTransactionReference}-${supplier.supplierMerchantId}`,
+        reference: `${data.merchantTransactionReference}-${supplier.supplierMerchantId}-${supplierIndex}`,
         merchantTransactionReference: supplierMerchantTransactionReference,
         description: data.description,
         metadata: {
@@ -384,7 +431,6 @@ export async function initiateOperation(
 
       await repository.createMultipleTransactions(settlement.id, transactionItems);
 
-      logger.log(`Created supplier settlement ${settlement.id} for supplier ${supplier.supplierMerchantId}`);
       childSettlements.push({
         id: settlement.id,
         reference: settlement.reference,
@@ -399,6 +445,13 @@ export async function initiateOperation(
         systemAmount: platformFee,
         amount: supplierAmount + retailerAmount + platformFee,
       });
+    }
+
+    logger.log('[SUPPLIER_SETTLEMENT_AMOUNTS]', supplierAmountSummary);
+
+    const deferredPaymentResult = await initiateCustomerPayment();
+    if (deferredPaymentResult) {
+      return deferredPaymentResult;
     }
 
     const requestPaymentDetails = toPublicPaymentDetails(data.paymentMethod);
@@ -421,6 +474,7 @@ export async function initiateOperation(
       },
       message: 'Settlement request received and queued for processing',
       children: childSettlements,
+      ...(invalidSuppliers.length > 0 ? { excludedSuppliers: invalidSuppliers } : {}),
     };
   } catch (error) {
     if (error instanceof BadRequestException || error instanceof ConflictException || error instanceof ForbiddenException) {
@@ -429,7 +483,6 @@ export async function initiateOperation(
 
     const err = error as Error;
     logger.error(`Settlement initiation failed: ${err.message ?? 'Unknown error'} | context=${JSON.stringify({ requestBody: data, settlementSessionToken: token })}`, err.stack);
-    logger.log(`Settlement initiation flow ended with error for merchantTransactionReference=${data.merchantTransactionReference}`);
     throw new InternalServerErrorException({ statusCode: 500, message: 'An error occurred while initiating settlement. Please check logs for details.', error: 'INITIATION_FAILED' });
   }
 }

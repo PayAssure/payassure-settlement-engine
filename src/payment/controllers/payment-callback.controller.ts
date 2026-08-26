@@ -21,27 +21,9 @@ export class PaymentCallbackController {
     const callbackIdentifier = (req.params as any).callbackIdentifier ?? null;
     const timestamp = new Date().toISOString();
 
-    this.logger.log('[PAYMENT][CALLBACK] received M-Pesa callback', {
-      timestamp,
-      method: req.method,
-      path: req.originalUrl,
-      callbackIdentifier,
-      bodySize: JSON.stringify(req.body).length,
-    });
-
     try {
       // Step 1: Parse the M-Pesa callback
       const parsed = parseStkCallback(req.body as Record<string, unknown>);
-      this.logger.log('[PAYMENT][CALLBACK] M-Pesa callback parsed', {
-        timestamp,
-        status: parsed.status,
-        resultCode: parsed.resultCode,
-        resultDesc: parsed.resultDesc,
-        checkoutRequestId: parsed.checkoutRequestId,
-        merchantRequestId: parsed.merchantRequestId,
-        receipt: parsed.receipt,
-      });
-
       // Step 2: Update M-Pesa transaction record in database
       const transactionResult = await paymentRecordService.upsertFromMpesaCallback(
         req.body as Record<string, unknown>,
@@ -69,20 +51,8 @@ export class PaymentCallbackController {
         });
       }
 
-      this.logger.log('[PAYMENT][CALLBACK] M-Pesa transaction record updated', {
-        timestamp,
-        transactionId: transactionResult.id,
-        status: transactionResult.status,
-      });
-
       // Step 3: If payment was successful, call settlement split endpoint
       if (parsed.status === 'completed') {
-        this.logger.log('[PAYMENT][CALLBACK] payment successful - calling settlement split endpoint', {
-          timestamp,
-          transactionId: transactionResult.id,
-          checkoutRequestId: parsed.checkoutRequestId,
-        });
-
         const gatewayPayload = (req.body as any)?.Body?.gatewayPayload;
         const merchantTransactionReference =
           gatewayPayload?.merchantTransactionReference ??
@@ -92,20 +62,6 @@ export class PaymentCallbackController {
         if (merchantTransactionReference) {
           try {
             // Call settlement split endpoint - this will handle all the splitting logic
-            this.logger.log('[PAYMENT][CALLBACK] callback lookup resolved merchant reference', {
-              timestamp,
-              callbackIdentifier,
-              checkoutRequestId: parsed.checkoutRequestId,
-              merchantTransactionReference,
-              storedInDb: transactionResult?.merchantTransactionReference ?? null,
-            });
-
-            this.logger.log('[PAYMENT][CALLBACK] invoking settlement split and allocation', {
-              timestamp,
-              merchantTransactionReference,
-              mpesaReceipt: parsed.receipt,
-            });
-
             const splitResult = await this.settlementService.splitAndAllocateFunds({
               merchantTransactionReference,
               mpesaReceipt: parsed.receipt ?? undefined,
@@ -113,12 +69,6 @@ export class PaymentCallbackController {
               mpesaMerchantRequestId: parsed.merchantRequestId ?? undefined,
               resultCode: parsed.resultCode ?? undefined,
               resultDesc: parsed.resultDesc ?? undefined,
-            });
-
-            this.logger.log('[PAYMENT][CALLBACK] settlement split and allocation completed', {
-              timestamp,
-              merchantTransactionReference,
-              splitResult,
             });
 
             return res.status(200).json({
@@ -167,13 +117,6 @@ export class PaymentCallbackController {
       }
 
       // If payment failed, just acknowledge receipt
-      this.logger.log('[PAYMENT][CALLBACK] payment failed - not invoking settlement', {
-        timestamp,
-        status: parsed.status,
-        resultCode: parsed.resultCode,
-        resultDesc: parsed.resultDesc,
-      });
-
       return res.status(200).json({
         received: true,
         accepted: true,
@@ -218,30 +161,9 @@ export class PaymentCallbackController {
     @Res() res: Response,
   ) {
     const timestamp = new Date().toISOString();
-    this.logger.log('[PAYMENT][CALLBACK] received M-Pesa callback with identifier', {
-      timestamp,
-      callbackIdentifier,
-      bodySize: JSON.stringify(req.body).length,
-    });
-
     try {
-      this.logger.log('[PAYMENT][CALLBACK][RAW] exact callback payload received from MPesa', {
-        timestamp,
-        callbackIdentifier,
-        rawCallbackBody: req.body,
-      });
-
       // Step 1: Parse the M-Pesa callback
       const parsed = parseStkCallback(req.body as Record<string, unknown>);
-      this.logger.log('[PAYMENT][CALLBACK] M-Pesa callback parsed', {
-        timestamp,
-        callbackIdentifier,
-        status: parsed.status,
-        resultCode: parsed.resultCode,
-        checkoutRequestId: parsed.checkoutRequestId,
-        receipt: parsed.receipt,
-      });
-
       // Step 2: Update M-Pesa transaction record
       const result = await paymentRecordService.upsertFromMpesaCallback(
         req.body as Record<string, unknown>,
@@ -269,32 +191,8 @@ export class PaymentCallbackController {
         });
       }
 
-      this.logger.log('[PAYMENT][CALLBACK] M-Pesa transaction record updated', {
-        timestamp,
-        callbackIdentifier,
-        transactionId: result.id,
-        status: result.status,
-      });
-
-      this.logger.log('[PAYMENT][CALLBACK][MAPPING] callback to settlement mapping', {
-        timestamp,
-        callbackIdentifier,
-        checkoutRequestId: parsed.checkoutRequestId,
-        merchantRequestId: parsed.merchantRequestId,
-        receipt: parsed.receipt,
-        resolvedMerchantTransactionReference: resolvedMerchantTransactionReference,
-        storedInDb: result?.merchantTransactionReference ?? null,
-      });
-
       // Step 3: If payment was successful, trigger settlement split
       if (parsed.status === 'completed') {
-        this.logger.log('[PAYMENT][CALLBACK] payment successful - triggering settlement split and payout', {
-          timestamp,
-          callbackIdentifier,
-          transactionId: result.id,
-          checkoutRequestId: parsed.checkoutRequestId,
-        });
-
         const gatewayPayload = (req.body as any)?.Body?.gatewayPayload;
         const merchantTransactionReference =
           gatewayPayload?.merchantTransactionReference ??
@@ -303,21 +201,6 @@ export class PaymentCallbackController {
 
         if (merchantTransactionReference) {
           try {
-            this.logger.log('[PAYMENT][CALLBACK] callback lookup resolved merchant reference', {
-              timestamp,
-              callbackIdentifier,
-              checkoutRequestId: parsed.checkoutRequestId,
-              merchantTransactionReference,
-              storedInDb: result?.merchantTransactionReference ?? null,
-            });
-
-            this.logger.log('[PAYMENT][CALLBACK] invoking settlement split and payout dispatch', {
-              timestamp,
-              callbackIdentifier,
-              merchantTransactionReference,
-              mpesaReceipt: parsed.receipt,
-            });
-
             // Call settlement split endpoint which will handle all splitting and payout logic
             const splitResult = await this.settlementService.splitAndAllocateFunds({
               merchantTransactionReference,
@@ -326,16 +209,6 @@ export class PaymentCallbackController {
               mpesaMerchantRequestId: parsed.merchantRequestId ?? undefined,
               resultCode: parsed.resultCode ?? undefined,
               resultDesc: parsed.resultDesc ?? undefined,
-            });
-
-            this.logger.log('[PAYMENT][CALLBACK] settlement split and payout dispatch completed', {
-              timestamp,
-              callbackIdentifier,
-              merchantTransactionReference,
-              settlementId: splitResult.settlementId,
-              supplierPayoutStatus: splitResult.dispatchResults?.supplier?.status ?? 'FAILED',
-              retailerPayoutStatus: splitResult.dispatchResults?.retailer?.status ?? 'FAILED',
-              hasErrors: (splitResult.errors?.length ?? 0) > 0,
             });
 
             return res.status(200).json({
@@ -385,14 +258,6 @@ export class PaymentCallbackController {
       }
 
       // If payment failed, just acknowledge receipt
-      this.logger.log('[PAYMENT][CALLBACK] payment failed - not invoking settlement split', {
-        timestamp,
-        callbackIdentifier,
-        status: parsed.status,
-        resultCode: parsed.resultCode,
-        resultDesc: parsed.resultDesc,
-      });
-
       return res.status(200).json({
         received: true,
         accepted: true,

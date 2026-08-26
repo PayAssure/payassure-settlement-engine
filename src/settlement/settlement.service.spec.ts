@@ -5,7 +5,7 @@ import { SettlementRecordRepository } from './repository/settlement/settlement.r
 import { paymentRecordService } from '../payment/services/payment-record.service';
 import { prisma } from '../payment/config/mpesa.env';
 import { b2bService } from '../payment/services/b2b.service';
-import { b2pochiService } from '../payment/services/b2pochi.service';
+import { b2cService } from '../payment/services/b2c.service';
 
 test('SettlementRecordRepository resolves callback identifiers stored under nested payout request metadata', async () => {
   const callbackIdentifier = '50e1f407-fd08-4640-930d-9718930dc29b';
@@ -70,15 +70,15 @@ test('resolveB2bRecipient resolves retailer payout details from the retailer mer
   assert.equal(recipient.accountName, 'John Doe');
 });
 
-test('dispatchB2bPayouts routes a retailer MPESA payout through B2Pochi based on the participant payment type', async () => {
-  let b2PochiCalled = false;
+test('dispatchB2bPayouts routes a retailer MPESA payout through B2C based on the participant payment type', async () => {
+  let b2cCalled = false;
   let b2bCalled = false;
 
-  const originalB2Pochi = b2pochiService.initiateB2Pochi.bind(b2pochiService);
+  const originalB2C = b2cService.initiateB2C.bind(b2cService);
   const originalB2B = b2bService.initiateB2B.bind(b2bService);
 
-  (b2pochiService as any).initiateB2Pochi = async () => {
-    b2PochiCalled = true;
+  (b2cService as any).initiateB2C = async () => {
+    b2cCalled = true;
     return { responseCode: '0', responseDescription: 'Accepted' };
   };
   (b2bService as any).initiateB2B = async () => {
@@ -134,10 +134,10 @@ test('dispatchB2bPayouts routes a retailer MPESA payout through B2Pochi based on
     } as any);
 
     assert.equal(result.success, true);
-    assert.equal(b2PochiCalled, true);
+    assert.equal(b2cCalled, true);
     assert.equal(b2bCalled, false);
   } finally {
-    (b2pochiService as any).initiateB2Pochi = originalB2Pochi;
+    (b2cService as any).initiateB2C = originalB2C;
     (b2bService as any).initiateB2B = originalB2B;
   }
 });
@@ -281,7 +281,7 @@ test('dispatchB2bPayouts prefers the authenticated retailer integration over sta
   assert.equal(result.dispatchRecord.requestPayload.metadata.retailerMerchantId, 'pay_authenticated_merchant');
 });
 
-test('dispatchB2bPayouts routes MPESA payouts through B2Pochi and BANK payouts through B2B', async () => {
+test('dispatchB2bPayouts routes MPESA payouts through B2C and BANK payouts through B2B', async () => {
   const repository = {
     findSettlementByReference: async () => ({
       id: 'settlement-route-selection-1',
@@ -319,17 +319,18 @@ test('dispatchB2bPayouts routes MPESA payouts through B2Pochi and BANK payouts t
   (service as any).getB2bGatewayApiToken = () => 'token';
 
   const originalB2B = b2bService.initiateB2B.bind(b2bService);
-  const originalB2Pochi = (await import('../payment/services/b2pochi.service')).b2pochiService.initiateB2Pochi.bind((await import('../payment/services/b2pochi.service')).b2pochiService);
+  const originalB2C = b2cService.initiateB2C.bind(b2cService);
 
-  let b2PochiCalled = false;
+  let b2cCalled = false;
   let b2BCalled = false;
 
   (b2bService as any).initiateB2B = async () => {
     b2BCalled = true;
     return { success: true, statusCode: 200, responseCode: '0', responseDescription: 'Accepted', response: { accepted: true } };
   };
-  (await import('../payment/services/b2pochi.service')).b2pochiService.initiateB2Pochi = async (request: any) => {
-    b2PochiCalled = true;
+  (b2cService as any).initiateB2C = async (request: any) => {
+    b2cCalled = true;
+    assert.equal(request.CommandID, 'BusinessPayment');
     assert.equal(request.PartyB, '+254700000123');
     return { success: true, responseCode: '0', responseDescription: 'Accepted', originatorConversationId: 'oc-1', conversationId: 'c-1' };
   };
@@ -342,11 +343,11 @@ test('dispatchB2bPayouts routes MPESA payouts through B2Pochi and BANK payouts t
     });
 
     assert.equal(result.success, true);
-    assert.equal(b2PochiCalled, true);
+    assert.equal(b2cCalled, true);
     assert.equal(b2BCalled, false);
   } finally {
     (b2bService as any).initiateB2B = originalB2B;
-    (await import('../payment/services/b2pochi.service')).b2pochiService.initiateB2Pochi = originalB2Pochi;
+    (b2cService as any).initiateB2C = originalB2C;
   }
 });
 
@@ -408,9 +409,9 @@ test('dispatchB2bPayouts ignores customer payer MPESA and uses supplier bank pay
   (service as any).getB2bGatewayApiToken = () => 'token';
 
   const originalB2B = b2bService.initiateB2B.bind(b2bService);
-  const originalB2Pochi = (await import('../payment/services/b2pochi.service')).b2pochiService.initiateB2Pochi.bind((await import('../payment/services/b2pochi.service')).b2pochiService);
+  const originalB2C = b2cService.initiateB2C.bind(b2cService);
 
-  let b2PochiCalled = false;
+  let b2cCalled = false;
   let b2BCalled = false;
 
   (b2bService as any).initiateB2B = async (request: any) => {
@@ -419,9 +420,9 @@ test('dispatchB2bPayouts ignores customer payer MPESA and uses supplier bank pay
     assert.equal(request.accountReference, 'Retailer Merchant');
     return { success: true, statusCode: 200, responseCode: '0', responseDescription: 'Accepted', response: { accepted: true } };
   };
-  (await import('../payment/services/b2pochi.service')).b2pochiService.initiateB2Pochi = async () => {
-    b2PochiCalled = true;
-    throw new Error('B2Pochi should not be used when the recipient payout destination is BANK');
+  (b2cService as any).initiateB2C = async () => {
+    b2cCalled = true;
+    throw new Error('B2C should not be used when the recipient payout destination is BANK');
   };
 
   try {
@@ -433,10 +434,10 @@ test('dispatchB2bPayouts ignores customer payer MPESA and uses supplier bank pay
 
     assert.equal(result.success, true);
     assert.equal(b2BCalled, true);
-    assert.equal(b2PochiCalled, false);
+    assert.equal(b2cCalled, false);
   } finally {
     (b2bService as any).initiateB2B = originalB2B;
-    (await import('../payment/services/b2pochi.service')).b2pochiService.initiateB2Pochi = originalB2Pochi;
+    (b2cService as any).initiateB2C = originalB2C;
   }
 });
 

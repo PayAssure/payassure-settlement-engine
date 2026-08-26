@@ -1,4 +1,5 @@
 import { getMpesaEnv } from '../config/mpesa.env';
+import { generateSecurityCredential } from '../lib/mpesa-security-credential';
 import { mpesaService } from './mpesa.service';
 import type { MpesaEnv } from '../types/mpesa';
 
@@ -25,7 +26,7 @@ class B2PochiService {
   async initiateB2Pochi(request: Record<string, any>): Promise<Record<string, unknown>> {
     const env = getMpesaEnv() as MpesaEnv;
     const initiatorName = process.env.MPESA_INITIATOR_NAME || env.MPESA_INITIATOR_NAME || 'testapi';
-    const securityCredential = process.env.MPESA_SECURITY_CREDENTIAL || env.MPESA_SECURITY_CREDENTIAL || '';
+    const securityCredential = generateSecurityCredential();
     const partyA = process.env.MPESA_PARTYA || env.MPESA_PARTYA || env.MPESA_SHORTCODE || '174379';
 
     const payload = {
@@ -35,7 +36,7 @@ class B2PochiService {
       CommandID: request.CommandID || 'BusinessPayToPochi',
       Amount: String(request.Amount ?? request.amount ?? 0),
       PartyA: partyA,
-      PartyB: request.PartyB || request.partyB || request.recipientPhone || '',
+      PartyB: Number(request.PartyB ?? request.partyB ?? request.recipientPhone ?? 0),
       Remarks: resolveDescription(request.Remarks || request.remarks, 'B2Pochi disbursement'),
       QueueTimeOutURL: request.QueueTimeOutURL || request.queueTimeoutUrl || resolveCallbackUrl(request.callbackUrl, env.MPESA_CALLBACK_URL, '/callbacks/mpesa'),
       ResultURL: request.ResultURL || request.resultUrl || resolveCallbackUrl(request.callbackUrl, env.MPESA_CALLBACK_URL, '/callbacks/mpesa'),
@@ -46,7 +47,7 @@ class B2PochiService {
       request,
       payload: {
         ...payload,
-        SecurityCredential: securityCredential ? '[set from MPESA_SECURITY_CREDENTIAL]' : '[missing MPESA_SECURITY_CREDENTIAL]',
+        SecurityCredential: '[generated from initiator password]',
       },
       environment: {
         shortCode: env.MPESA_SHORTCODE,
@@ -60,14 +61,6 @@ class B2PochiService {
       const response = await mpesaService.makeRequest('b2pochi', payload as Record<string, unknown>);
       const responseCode = response.ResponseCode ?? response.responseCode ?? 'UNKNOWN';
       const responseDescription = response.ResponseDescription ?? response.responseDescription ?? 'Unknown M-Pesa B2Pochi response';
-
-      console.log('[B2POCHI][RESPONSE][SUCCESS]', {
-        responseCode,
-        responseDescription,
-        originatorConversationId: response.OriginatorConversationID ?? response.originatorConversationId,
-        conversationId: response.ConversationID ?? response.conversationId,
-        timestamp: new Date().toISOString(),
-      });
 
       return {
         responseCode,

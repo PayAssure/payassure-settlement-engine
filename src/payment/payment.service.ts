@@ -10,7 +10,6 @@ export interface SharedMpesaEnv {
   MPESA_PASSKEY?: string;
   MPESA_INITIATOR_NAME?: string;
   MPESA_INITIATOR_PASSWORD?: string;
-  MPESA_SECURITY_CREDENTIAL?: string;
   MPESA_CALLBACK_URL?: string;
   PORT?: string;
 }
@@ -25,7 +24,6 @@ export function getSharedMpesaEnv(): SharedMpesaEnv {
     MPESA_PASSKEY: process.env.MPESA_PASSKEY,
     MPESA_INITIATOR_NAME: process.env.MPESA_INITIATOR_NAME,
     MPESA_INITIATOR_PASSWORD: process.env.MPESA_INITIATOR_PASSWORD,
-    MPESA_SECURITY_CREDENTIAL: process.env.MPESA_SECURITY_CREDENTIAL,
     MPESA_CALLBACK_URL: process.env.MPESA_CALLBACK_URL,
     PORT: process.env.PORT,
   };

@@ -7,7 +7,6 @@ export interface MpesaEnv {
   MPESA_PASSKEY?: string;
   MPESA_INITIATOR_NAME?: string;
   MPESA_INITIATOR_PASSWORD?: string;
-  MPESA_SECURITY_CREDENTIAL?: string;
   MPESA_CALLBACK_URL?: string;
 }
 

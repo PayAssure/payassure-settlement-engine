@@ -3,7 +3,8 @@ import { ApiOperation, ApiTags, ApiResponse } from '@nestjs/swagger';
 import { Request, Response } from 'express';
 import { mpesaService } from '../services/mpesa.service';
 import { b2pochiService } from '../services/b2pochi.service';
-import { InitiateStkPushDto, QueryStkStatusDto, DispatchB2bPayoutDto, DispatchB2PochiPayoutDto, MpesaCallbackDto } from '../dto';
+import { b2cService } from '../services/b2c.service';
+import { InitiateStkPushDto, QueryStkStatusDto, DispatchB2bPayoutDto, DispatchB2PochiPayoutDto, DispatchB2CPayoutDto } from '../dto';
 
 @ApiTags('Payments')
 @Controller('payments')
@@ -45,6 +46,14 @@ export class MpesaController {
   @ApiResponse({ status: 400, description: 'Invalid B2Pochi payout request payload' })
   async b2pochi(@Body() body: DispatchB2PochiPayoutDto) {
     return b2pochiService.initiateB2Pochi(body as Record<string, any>);
+  }
+
+  @Post('mpesa/b2c')
+  @ApiOperation({ summary: 'Dispatch a B2C payment to an M-Pesa customer' })
+  @ApiResponse({ status: 200, description: 'B2C payment request accepted by M-Pesa' })
+  @ApiResponse({ status: 400, description: 'Invalid B2C payment request payload' })
+  async b2c(@Body() body: DispatchB2CPayoutDto) {
+    return b2cService.initiateB2C(body as Record<string, any>);
   }
 
   @Post('callbacks/mpesa')

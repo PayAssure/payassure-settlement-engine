@@ -133,7 +133,6 @@ MPESA_PARTYA=<your_party_a>
 MPESA_PASSKEY=<your_production_passkey>
 MPESA_INITIATOR_NAME=<your_initiator_name>
 MPESA_INITIATOR_PASSWORD=<your_initiator_password>
-MPESA_SECURITY_CREDENTIAL=<your_security_credential>
 MPESA_CALLBACK_URL=https://<your_domain>/callbacks/mpesa
 ```
 

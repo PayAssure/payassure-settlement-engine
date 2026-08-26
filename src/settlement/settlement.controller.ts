@@ -182,6 +182,7 @@ export class SettlementController {
     @Body() body: InitiateSettlementDto,
     @Headers('x-settlement-session') settlementSessionToken: string,
   ): Promise<SettlementResponseDto> {
+    this.logger.log('[SETTLEMENT_REQUEST_PAYLOAD]', body);
     return this.settlementService.initiateSettlement(settlementSessionToken, body);
   }
 
@@ -202,8 +203,6 @@ export class SettlementController {
     const signature = this.getHeaderValue(headers, 'x-payassure-signature') ?? this.getHeaderValue(headers, 'X-PayAssure-Signature');
     const timestamp = this.getHeaderValue(headers, 'x-payassure-timestamp') ?? this.getHeaderValue(headers, 'X-PayAssure-Timestamp');
 
-    this.logger.log(`[CONFIRMATION][REQUEST] incoming settlement confirmation body=${JSON.stringify({ settlementId: body.settlementId, paymentId: body.paymentId, status: body.status, provider: body.provider, paidAmount: body.paidAmount, paidAt: body.paidAt })}`);
-    this.logger.log(`[CONFIRMATION][REQUEST] headers authorization=${authorization ?? 'missing'} signature=${signature ?? 'missing'} timestamp=${timestamp ?? 'missing'}`);
 
     const expectedToken = process.env.PAYMENT_GATEWAY_API_TOKEN || process.env.SETTLEMENT_API_TOKEN || process.env.INTERNAL_GATEWAY_TOKEN;
     const expectedSecret = process.env.PAYMENT_GATEWAY_SIGNATURE_SECRET || process.env.SETTLEMENT_SIGNATURE_SECRET || process.env.PAYASSURE_INTERNAL_SECRET;
@@ -239,9 +238,6 @@ export class SettlementController {
     const bodyString = JSON.stringify(signatureBody);
     const expectedSignature = crypto.createHmac('sha256', expectedSecret).update(bodyString).digest('hex');
 
-    this.logger.log(
-      `[CONFIRMATION][AUTH] signingMethod=crypto.createHmac('sha256', secret).update(bodyString).digest('hex') secretSource=${expectedSecret ? 'configured' : 'missing'} bodyString=${bodyString} algorithm=HMAC-SHA256 computedSignature=${expectedSignature} expectedToken=${expectedToken ?? 'missing'} timestamp=${timestamp} token=${authorization} for ${body.settlementId}`,
-    );
 
     if (expectedSignature !== signature) {
       const authMethod = authorization ? String(authorization).split(' ')[0] : 'missing';
@@ -258,7 +254,6 @@ export class SettlementController {
       throw new UnauthorizedException({ statusCode: 401, message: 'Expired or invalid timestamp', error: 'UNAUTHORIZED' });
     }
 
-    this.logger.log(`[CONFIRMATION][AUTH] authenticated successfully for ${body.settlementId}`);
     return this.settlementService.confirmSettlementPayment(body);
   }
 
@@ -290,18 +285,6 @@ export class SettlementController {
   @ApiResponse({ status: 200, description: 'B2B payout callback processed successfully.' })
   @ApiResponse({ status: 404, description: 'Payout reference or settlement not found.' })
   async b2bPayoutCallbackBase(@Body() body: B2bPayoutCallbackDto): Promise<any> {
-    this.logger.log('[B2B][CALLBACK][BASE_ROUTE] raw body received', {
-      timestamp: new Date().toISOString(),
-      bodyJSON: JSON.stringify(body),
-      bodyKeys: Object.keys(body ?? {}),
-    });
-    this.logger.log('[B2B][CALLBACK][BASE_ROUTE] received callback', {
-      timestamp: new Date().toISOString(),
-      reference: body?.reference,
-      merchantTransactionReference: body?.merchantTransactionReference,
-      status: body?.status,
-      party: body?.party,
-    });
     return this.settlementService.handleB2bPayoutCallback(body, undefined);
   }
 
@@ -312,21 +295,6 @@ export class SettlementController {
   @ApiResponse({ status: 404, description: 'Payout reference or settlement not found.' })
   async b2bPayoutCallbackWithId(@Body() body: B2bPayoutCallbackDto, @Param('callbackIdentifier') callbackIdentifier: string): Promise<any> {
     const decodedIdentifier = decodeURIComponent(callbackIdentifier);
-    this.logger.log('[B2B][CALLBACK][WITH_ID_ROUTE] raw body received', {
-      timestamp: new Date().toISOString(),
-      decodedCallbackIdentifier: decodedIdentifier,
-      bodyJSON: JSON.stringify(body),
-      bodyKeys: Object.keys(body ?? {}),
-    });
-    this.logger.log('[B2B][CALLBACK][WITH_ID_ROUTE] received callback', {
-      timestamp: new Date().toISOString(),
-      rawCallbackIdentifier: callbackIdentifier,
-      decodedCallbackIdentifier: decodedIdentifier,
-      reference: body?.reference,
-      merchantTransactionReference: body?.merchantTransactionReference,
-      status: body?.status,
-      party: body?.party,
-    });
     return this.settlementService.handleB2bPayoutCallback(body, decodedIdentifier);
   }
 
@@ -338,43 +306,6 @@ export class SettlementController {
   async b2bPayoutCallbackMpesa(@Body() body: B2bPayoutCallbackDto, @Param('callbackIdentifier') callbackIdentifier: string): Promise<any> {
     const decodedIdentifier = decodeURIComponent(callbackIdentifier);
     
-    // Log the raw request body received
-    this.logger.log('[B2B][CALLBACK][MPESA_ROUTE] raw body received from M-Pesa', {
-      timestamp: new Date().toISOString(),
-      rawCallbackIdentifier: callbackIdentifier,
-      decodedCallbackIdentifier: decodedIdentifier,
-      bodyKeys: Object.keys(body ?? {}),
-      bodyJSON: JSON.stringify(body),
-      bodyType: typeof body,
-      isArray: Array.isArray(body),
-    });
-
-    // Log parsed body fields
-    this.logger.log('[B2B][CALLBACK][MPESA_ROUTE] parsed callback fields', {
-      timestamp: new Date().toISOString(),
-      reference: body?.reference,
-      merchantTransactionReference: body?.merchantTransactionReference,
-      status: body?.status,
-      party: body?.party,
-      supplierMerchantId: body?.supplierMerchantId,
-      providerReference: body?.providerReference,
-      transactionId: body?.transactionId,
-      amount: body?.amount,
-      resultCode: body?.resultCode,
-      resultDescription: body?.resultDescription,
-      metadataKeys: Object.keys(body?.metadata ?? {}),
-    });
-
-    this.logger.log('[B2B][CALLBACK][MPESA_ROUTE] received M-Pesa callback', {
-      timestamp: new Date().toISOString(),
-      rawCallbackIdentifier: callbackIdentifier,
-      decodedCallbackIdentifier: decodedIdentifier,
-      reference: body?.reference,
-      merchantTransactionReference: body?.merchantTransactionReference,
-      status: body?.status,
-      party: body?.party,
-      bodyKeys: Object.keys(body),
-    });
     return this.settlementService.handleB2bPayoutCallback(body, decodedIdentifier);
   }
 
@@ -620,11 +551,6 @@ export class SettlementController {
     description: 'Settlement not found',
   })
   async triggerSplitAndPayout(@Param('merchantTransactionReference') merchantTransactionReference: string, @Body() body: any): Promise<any> {
-    this.logger.log('[SETTLEMENT][TEST] Manual split and payout trigger requested', {
-      merchantTransactionReference,
-      timestamp: new Date().toISOString(),
-    });
-
     try {
       const result = await this.settlementService.splitAndAllocateFunds({
         merchantTransactionReference,
@@ -633,12 +559,6 @@ export class SettlementController {
         mpesaMerchantRequestId: body?.mpesaMerchantRequestId ?? undefined,
         resultCode: body?.resultCode ?? 0,
         resultDesc: body?.resultDesc ?? 'Manual trigger',
-      });
-
-      this.logger.log('[SETTLEMENT][TEST] Manual split and payout completed', {
-        merchantTransactionReference,
-        settlementId: result.settlementId,
-        timestamp: new Date().toISOString(),
       });
 
       return {

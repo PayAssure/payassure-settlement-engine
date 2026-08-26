@@ -13,7 +13,6 @@ export interface MpesaEnvConfig {
   passkey?: string;
   initiatorName?: string;
   initiatorPassword?: string;
-  securityCredential?: string;
   callbackUrl?: string;
 }
 
@@ -25,7 +24,7 @@ export const MPESA_PRODUCTION_ENDPOINTS = {
   oauth: '/oauth/v1/generate',
   stkPush: '/mpesa/stkpush/v1/processrequest',
   stkPushQuery: '/mpesa/stkpushquery/v1/query',
-  b2c: '/mpesa/b2c/v1/paymentrequest',
+  b2c: '/mpesa/b2c/v3/paymentrequest',
   b2b: '/mpesa/b2b/v1/paymentrequest',
   c2bV1: '/mpesa/c2b/v1/registerurl',
   c2bV2: '/mpesa/c2b/v2/registerurl',
@@ -60,7 +59,6 @@ export const getMpesaEnv = (): MpesaEnvConfig => ({
   passkey: process.env.MPESA_PASSKEY,
   initiatorName: process.env.MPESA_INITIATOR_NAME,
   initiatorPassword: process.env.MPESA_INITIATOR_PASSWORD,
-  securityCredential: process.env.MPESA_SECURITY_CREDENTIAL,
   callbackUrl: process.env.MPESA_CALLBACK_URL,
 });
 

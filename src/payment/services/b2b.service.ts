@@ -1,4 +1,5 @@
 import { getMpesaEnv } from '../config/mpesa.env';
+import { generateSecurityCredential } from '../lib/mpesa-security-credential';
 import { mpesaService } from './mpesa.service';
 import type { B2BRequest, MpesaEnv } from '../types/mpesa';
 
@@ -30,7 +31,7 @@ class B2BService {
     const env = getMpesaEnv() as MpesaEnv;
     const initiatorName = process.env.MPESA_INITIATOR_NAME || env.MPESA_INITIATOR_NAME || 'testapi';
     const partyA = process.env.MPESA_PARTYA || env.MPESA_PARTYA || env.MPESA_SHORTCODE || '174379';
-    const securityCredential = process.env.MPESA_SECURITY_CREDENTIAL || env.MPESA_SECURITY_CREDENTIAL || '';
+    const securityCredential = generateSecurityCredential();
 
     const payload = {
       Initiator: initiatorName,
@@ -51,7 +52,7 @@ class B2BService {
       request,
       payload: {
         ...payload,
-        SecurityCredential: securityCredential ? '[set from MPESA_SECURITY_CREDENTIAL]' : '[missing MPESA_SECURITY_CREDENTIAL]',
+        SecurityCredential: '[generated from initiator password]',
       },
       environment: {
         shortCode: env.MPESA_SHORTCODE,
@@ -65,13 +66,6 @@ class B2BService {
       const response = await mpesaService.makeRequest('b2b', payload as Record<string, unknown>);
       const responseCode = response.ResponseCode ?? response.responseCode ?? 'UNKNOWN';
       const responseDescription = response.ResponseDescription ?? response.responseDescription ?? 'Unknown M-Pesa B2B response';
-
-      console.log('[B2B][RESPONSE][SUCCESS]', {
-        responseCode,
-        responseDescription,
-        originatorConversationId: response.OriginatorConversationID ?? response.originatorConversationId,
-        timestamp: new Date().toISOString(),
-      });
 
       return {
         responseCode,

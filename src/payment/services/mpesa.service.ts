@@ -46,7 +46,6 @@ export class MpesaService {
           pathParams: (entry.pathParams ?? Prisma.JsonNull) as Prisma.InputJsonValue,
         },
       });
-      this.logger.log(`[PAYMENT][LOG] request recorded endpoint=${entry.endpoint} method=${entry.method} path=${entry.path}`);
     } catch (error) {
       this.logger.warn(`[PAYMENT][LOG] failed to persist gateway request log: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -56,7 +55,6 @@ export class MpesaService {
     const env = getMpesaEnv();
     const auth = Buffer.from(`${env.consumerKey}:${env.consumerSecret}`).toString('base64');
     const tokenUrl = `${this.getBaseUrl(env.environment)}/oauth/v1/generate?grant_type=client_credentials`;
-    this.logger.log(`[PAYMENT][AUTH] requesting M-Pesa access token`);
 
     const response = await fetch(tokenUrl, {
       method: 'GET',
@@ -107,7 +105,7 @@ export class MpesaService {
     const sandboxEndpoints: Record<string, string> = {
       stk_push: '/mpesa/stkpush/v1/processrequest',
       stk_query: '/mpesa/stkpushquery/v1/query',
-      b2c: '/mpesa/b2c/v1/paymentrequest',
+      b2c: '/mpesa/b2c/v3/paymentrequest',
       b2b: '/mpesa/b2b/v1/paymentrequest',
       b2pochi: '/mpesa/b2pochi/v1/paymentrequest',
       c2b_register: '/mpesa/c2b/v1/registerurl',
@@ -132,7 +130,6 @@ export class MpesaService {
 
     const token = await this.getAccessToken();
     const url = `${baseUrl}${apiEndpoint}`;
-    this.logger.log(`[PAYMENT][REQUEST] environment=${env.environment} endpoint=${endpoint} url=${url} payload=${JSON.stringify(payload)}`);
 
     await this.logRequest({
       endpoint,
@@ -185,7 +182,6 @@ export class MpesaService {
       throw new Error(`M-Pesa ${endpoint} request failed: ${response.status} ${response.statusText} ${message}`);
     }
 
-    this.logger.log(`[PAYMENT][RESPONSE] endpoint=${endpoint} status=${response.status} data=${JSON.stringify(data)}`);
     return typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : {};
   }
 
@@ -311,9 +307,29 @@ export class MpesaService {
       ...payload,
       CommandID: payload.CommandID || 'BusinessPayToPochi',
       Amount: String(payload.Amount ?? '0'),
+      PartyB: Number(payload.PartyB ?? payload.partyB ?? payload.recipientPhone ?? 0),
     };
 
     const response = await this.makeRequest('b2pochi', request);
+    return {
+      originatorConversationId: response.OriginatorConversationID,
+      conversationId: response.ConversationID,
+      responseCode: response.ResponseCode,
+      responseDescription: response.ResponseDescription,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  async dispatchB2CPayment(payload: Record<string, any>): Promise<Record<string, unknown>> {
+    const request = {
+      ...payload,
+      CommandID: payload.CommandID || 'BusinessPayment',
+      Amount: String(payload.Amount ?? '0'),
+      PartyA: String(payload.PartyA ?? payload.partyA ?? ''),
+      PartyB: String(payload.PartyB ?? payload.partyB ?? payload.recipientPhone ?? ''),
+    };
+
+    const response = await this.makeRequest('b2c', request);
     return {
       originatorConversationId: response.OriginatorConversationID,
       conversationId: response.ConversationID,

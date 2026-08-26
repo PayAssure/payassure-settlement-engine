@@ -5,7 +5,6 @@ import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 dotenv.config();
-import { NextFunction, Request, Response } from 'express';
 import { AppModule } from './app.module';
 import { OnbordingsModule } from './onbordings/onbordings.module';
 import { AuthModule } from './auth/auth.module';
@@ -59,10 +58,6 @@ async function bootstrap() {
   app.useGlobalInterceptors(new RequestBodyLoggingInterceptor());
   app.useGlobalFilters(new ValidationErrorFilter());
   app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
-  app.use((req: Request, res: Response, next: NextFunction) => {
-    console.log(`[REQUEST] ${req.method} ${req.originalUrl}`);
-    next();
-  });
   const config = new DocumentBuilder()
     .setTitle('PayAssure Platform API')
     .setDescription(`

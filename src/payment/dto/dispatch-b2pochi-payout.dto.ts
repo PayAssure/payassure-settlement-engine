@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
 
 export default class DispatchB2PochiPayoutDto {
   @ApiProperty({
@@ -26,12 +26,12 @@ export default class DispatchB2PochiPayoutDto {
   Amount: string | number = '10';
 
   @ApiProperty({
-    example: '254705912645',
+    example: 254705912645,
     description: 'Customer mobile number receiving the disbursement, without the + sign.',
   })
-  @IsString()
+  @IsNumber()
   @IsNotEmpty()
-  PartyB: string = '';
+  PartyB: number = 0;
 
   @ApiProperty({
     example: 'remarked',

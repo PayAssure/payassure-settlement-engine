@@ -9,8 +9,9 @@ export async function validateSettlementData(
   repository: SettlementRepository,
   logger: Logger,
   supportedCurrencies: string[],
-): Promise<void> {
+): Promise<{ invalidSuppliers: Array<{ index: number; supplierMerchantId?: string; errors: Array<{ field: string; message: string }> }> }> {
   const errors: Array<{ field: string; message: string }> = [];
+  const invalidSuppliers: Array<{ index: number; supplierMerchantId?: string; errors: Array<{ field: string; message: string }> }> = [];
 
   if (data.totalAmount <= 0) {
     errors.push({ field: 'totalAmount', message: 'Total amount must be greater than 0' });
@@ -59,10 +60,10 @@ export async function validateSettlementData(
     errors.push({ field: 'suppliers', message: 'At least one supplier allocation is required' });
   }
 
-  logger.log(`Starting settlement payload validation: totalAmount=${data.totalAmount}, supplierGroups=${data.suppliers?.length ?? 0}`);
   let computedTotal = 0;
 
   for (const [supplierIndex, supplier] of (data.suppliers ?? []).entries()) {
+    const supplierErrorStart = errors.length;
     if (!supplier.supplierMerchantId) {
       errors.push({ field: `suppliers[${supplierIndex}].supplierMerchantId`, message: 'Supplier merchant ID is required for each supplier group' });
     }
@@ -124,7 +125,6 @@ export async function validateSettlementData(
       logger.warn(`Supplier lookup failed during validation: supplierMerchantId=${supplier.supplierMerchantId}`);
       errors.push({ field: `suppliers[${supplierIndex}].supplierMerchantId`, message: 'Supplier was not found in PayAssure' });
     } else {
-      logger.log(`Supplier found during validation: supplierMerchantId=${supplier.supplierMerchantId}, status=${supplierIntegration.participant.status}`);
       const supplierStatus = supplierIntegration.participant.status as ParticipantStatus;
       const isActiveSupplier = supplierIntegration.participant.participantType === ParticipantType.SUPPLIER && ([ParticipantStatus.ACTIVE, ParticipantStatus.LIVE] as ParticipantStatus[]).includes(supplierStatus);
 
@@ -142,13 +142,35 @@ export async function validateSettlementData(
         errors.push({ field: `suppliers[${supplierIndex}].supplierMerchantId`, message: 'Supplier payout destination must be verified before settlement' });
       }
     }
+
+    const supplierErrors = errors.splice(supplierErrorStart);
+    if (supplierErrors.length > 0) {
+      invalidSuppliers.push({
+        index: supplierIndex,
+        supplierMerchantId: supplier.supplierMerchantId,
+        errors: supplierErrors,
+      });
+    }
   }
 
-  if (!areAmountsEqual(data.totalAmount, computedTotal)) {
+  const invalidSupplierIndexes = new Set(invalidSuppliers.map((supplier) => supplier.index));
+  const validComputedTotal = (data.suppliers ?? []).reduce((total, supplier, index) => {
+    if (invalidSupplierIndexes.has(index)) return total;
+    const items = Array.isArray(supplier.items) ? supplier.items : [];
+    const supplierAmount = items.length > 0
+      ? items.reduce((sum, item) => sum + Number(item.supplierAmount ?? 0), 0)
+      : Number(supplier.supplierTotalAmount ?? 0);
+    return total + supplierAmount + Number(supplier.retailerTotalAmount ?? 0) + Number(supplier.platformFee ?? 0);
+  }, 0);
+
+  if (invalidSuppliers.length > 0 && (data.suppliers ?? []).length === 1) {
+    errors.push(...invalidSuppliers[0].errors);
+  }
+
+  if (invalidSuppliers.length === 0 && !areAmountsEqual(data.totalAmount, computedTotal)) {
     errors.push({ field: 'totalAmount', message: `Total amount ${data.totalAmount} does not match sum of supplier allocations ${computedTotal}` });
   }
 
-  logger.log(`Settlement payload validation completed: computedTotal=${computedTotal}, errors=${errors.length}`);
 
   if (errors.length > 0) {
     logger.warn('[SETTLEMENT][VALIDATION] request rejected with validation errors', {
@@ -164,6 +186,7 @@ export async function validateSettlementData(
         platformFee: supplier.platformFee,
       })) ?? [],
       errors,
+      invalidSuppliers,
     });
 
     throw new BadRequestException({
@@ -173,4 +196,6 @@ export async function validateSettlementData(
       errors,
     });
   }
+
+  return { invalidSuppliers };
 }

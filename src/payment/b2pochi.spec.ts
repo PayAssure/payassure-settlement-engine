@@ -13,7 +13,8 @@ test('B2Pochi payout request is built with the documented Safaricom fields', asy
     assert.equal(payload.CommandID, 'BusinessPayToPochi');
     assert.equal(payload.Amount, '10');
     assert.equal(payload.PartyA, '600997');
-    assert.equal(payload.PartyB, '254705912645');
+    assert.equal(payload.PartyB, 254705912645);
+    assert.equal(typeof payload.PartyB, 'number');
     assert.equal(payload.Remarks, 'remarked');
     assert.equal(payload.ResultURL, 'https://mydomain.com/b2c/result');
     assert.equal(payload.QueueTimeOutURL, 'https://mydomain.com/b2c/timedout');
@@ -32,7 +33,7 @@ test('B2Pochi payout request is built with the documented Safaricom fields', asy
     CommandID: 'BusinessPayToPochi',
     Amount: '10',
     PartyA: '600997',
-    PartyB: '254705912645',
+    PartyB: 254705912645,
     Remarks: 'remarked',
     QueueTimeOutURL: 'https://mydomain.com/b2c/timedout',
     ResultURL: 'https://mydomain.com/b2c/result',

@@ -1,34 +1,16 @@
-import { Injectable, PipeTransform, ArgumentMetadata, Logger } from '@nestjs/common';
+import { Injectable, PipeTransform, ArgumentMetadata } from '@nestjs/common';
 
 @Injectable()
 export class MpesaCallbackTransformPipe implements PipeTransform {
-  private readonly logger = new Logger(MpesaCallbackTransformPipe.name);
-
   transform(value: any, metadata: ArgumentMetadata) {
     if (metadata.type !== 'body' || !value) {
       return value;
     }
 
-    // Log raw incoming value
-    this.logger.log('[MPESA_TRANSFORM] raw value before transformation', {
-      valueKeys: Object.keys(value ?? {}),
-      hasResult: !!value?.Result,
-      rawValueJSON: JSON.stringify(value),
-    });
-
     // If the payload is { Result: {...} }, extract and transform it
     if (value.Result && typeof value.Result === 'object') {
       const result = value.Result;
       
-      this.logger.log('[MPESA_TRANSFORM] detected M-Pesa Result format, extracting', {
-        resultKeys: Object.keys(result),
-        resultCode: result.ResultCode,
-        resultDesc: result.ResultDesc,
-        transactionId: result.TransactionID,
-        originatorConversationId: result.OriginatorConversationID,
-        conversationId: result.ConversationID,
-      });
-
       // Extract reference data if present
       let extractedReference = '';
       if (result.ReferenceData?.ReferenceItem && Array.isArray(result.ReferenceData.ReferenceItem)) {
@@ -67,24 +49,11 @@ export class MpesaCallbackTransformPipe implements PipeTransform {
           originalResult: result,
         },
         
-        // Include full Result for logging
         Result: result,
       };
 
-      this.logger.log('[MPESA_TRANSFORM] transformation complete', {
-        transformedKeys: Object.keys(transformed),
-        reference: transformed.reference,
-        status: transformed.status,
-        resultCode: transformed.resultCode,
-      });
-
       return transformed;
     }
-
-    // If it's already in our format, return as is
-    this.logger.log('[MPESA_TRANSFORM] payload is not M-Pesa Result format, passing through', {
-      valueKeys: Object.keys(value),
-    });
 
     return value;
   }
