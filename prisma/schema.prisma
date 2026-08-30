@@ -209,6 +209,7 @@ model Settlement {
   metadata              Json?
   paymentSnapshot       Json?
   transactions          Transaction[]
+  b2bPayoutAttempts     B2BPayoutAttempt[]  @relation("B2BPayoutAttempts")
   createdAt             DateTime            @default(now())
   processedAt           DateTime?
   completedAt           DateTime?
@@ -239,5 +240,63 @@ model Transaction {
 
   @@index([settlementId])
   @@index([status])
+}
+
+enum B2BPayoutStatus {
+  PENDING
+  SUBMITTED
+  COMPLETED
+  FAILED
+  RETRYING
+}
+
+model B2BPayoutAttempt {
+  id                          String              @id @default(cuid())
+  settlementId                String
+  settlement                  Settlement          @relation("B2BPayoutAttempts", fields: [settlementId], references: [id], onDelete: Cascade)
+  merchantTransactionReference String
+  payoutReference             String              @unique
+  idempotencyKey              String              @unique
+  party                       ParticipantType
+  amount                      Decimal             @db.Decimal(18, 2)
+  recipientMerchantId         String?
+  recipientType               String              @default("MPESA")
+  recipientPhone              String?
+  status                      B2BPayoutStatus     @default(PENDING)
+  gatewayResponseCode         String?
+  gatewayResponseDescription  String?
+  gatewayResponse             Json?
+  callbackIdentifier          String?
+  callbackReceived            Boolean             @default(false)
+  callbackReceivedAt          DateTime?
+  attemptCount                Int                 @default(1)
+  lastAttemptAt               DateTime            @default(now())
+  nextRetryAt                 DateTime?
+  failureReason               String?
+  metadata                    Json?
+  createdAt                   DateTime            @default(now())
+  updatedAt                   DateTime            @updatedAt
+
+  @@unique([settlementId, party, recipientMerchantId])
+  @@index([settlementId])
+  @@index([merchantTransactionReference])
+  @@index([status])
+  @@index([idempotencyKey])
+  @@index([nextRetryAt])
+  @@index([createdAt])
+
+  @@map("b2b_payout_attempts")
+}
+
+model B2BPayoutRetryPolicy {
+  id            String    @id @default(cuid())
+  maxRetries    Int       @default(5)
+  initialDelayMs Int      @default(60000)
+  maxDelayMs    Int       @default(3600000)
+  backoffMultiplier Float @default(2.0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@map("b2b_payout_retry_policies")
 }
 

@@ -22,6 +22,8 @@ import { reconcileOperation } from './operations/reconcile.operation';
 import { generateSessionToken, hashCredential } from './helpers/reference.helpers';
 import { b2bService } from '../payment/services/b2b.service';
 import { b2cService } from '../payment/services/b2c.service';
+import { B2BPayoutIdempotencyService } from './services/b2b-payout-idempotency.service';
+import { B2BPayoutRetryService } from './services/b2b-payout-retry.service';
 
 interface B2bPayoutRecipient {
   type: string;
@@ -48,7 +50,11 @@ export class SettlementService {
   private readonly TOKEN_EXPIRY = 3600; // 1 hour in seconds
   private readonly SUPPORTED_CURRENCIES = ['KES', 'USD', 'TZS'];
 
-  constructor(private readonly repository: SettlementRepository) {
+  constructor(
+    private readonly repository: SettlementRepository,
+    private readonly idempotencyService: B2BPayoutIdempotencyService,
+    private readonly retryService: B2BPayoutRetryService
+  ) {
     this.prisma = new PrismaClient();
   }
 
@@ -638,7 +644,43 @@ export class SettlementService {
     if (roundedAmount !== amount) {
     }
 
-    const payoutReference = data.payoutReference ?? `${workingSettlement.merchantTransactionReference}-${party}-${Date.now()}`;
+    // Check for existing payout attempt (idempotency)
+    const payoutAttemptResult = await this.idempotencyService.createOrGetPayoutAttempt({
+      settlementId: settlement.id,
+      merchantTransactionReference: data.merchantTransactionReference,
+      party,
+      amount: roundedAmount,
+      recipientMerchantId: resolvedPartyMerchantId ?? undefined,
+      recipientType: recipient.type,
+      recipientPhone: recipient.phoneNumber ?? recipient.payerPhoneNumber ?? undefined,
+    });
+
+    // If payout was already attempted and completed, don't retry
+    if (!payoutAttemptResult.isNewAttempt && payoutAttemptResult.status === 'COMPLETED') {
+      this.logger.warn('[PAYOUT] Payout already completed, skipping duplicate', {
+        settlementId: settlement.id,
+        payoutReference: payoutAttemptResult.payoutReference,
+        party,
+        attemptCount: payoutAttemptResult.attemptCount,
+      });
+
+      return {
+        success: true,
+        status: 'COMPLETED',
+        payoutReference: payoutAttemptResult.payoutReference,
+        isDuplicate: true,
+        message: 'Payout already completed. Duplicate dispatch prevented.',
+        dispatchRecord: {
+          reference: payoutAttemptResult.payoutReference,
+          party,
+          status: 'COMPLETED',
+          amount: roundedAmount,
+          attemptCount: payoutAttemptResult.attemptCount,
+        },
+      };
+    }
+
+    const payoutReference = payoutAttemptResult.payoutReference;
     const callbackIdentifier = (globalThis as any)?.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const callbackUrl = this.getB2bPayoutCallbackUrl(callbackIdentifier);
     const recipientPhoneNumber = recipient.phoneNumber ?? recipient.payerPhoneNumber ?? null;
@@ -681,8 +723,48 @@ export class SettlementService {
       },
     };
 
-    this.logger.log('[PAYOUT_DISPATCH_PAYLOAD]', requestPayload);
-    const gatewayResult = await this.sendB2bGatewayPayoutRequest(requestPayload);
+    this.logger.log('[PAYOUT_DISPATCH_PAYLOAD]', {
+      ...requestPayload,
+      idempotencyKey: payoutAttemptResult.idempotencyKey,
+      isNewAttempt: payoutAttemptResult.isNewAttempt,
+      attemptCount: payoutAttemptResult.attemptCount,
+    });
+
+    let gatewayResult: B2bGatewayResponse;
+    try {
+      gatewayResult = await this.sendB2bGatewayPayoutRequest(requestPayload);
+
+      // Update payout attempt status based on gateway response
+      await this.idempotencyService.updatePayoutAttemptStatus(
+        payoutAttemptResult.idempotencyKey,
+        gatewayResult.success ? 'SUBMITTED' : 'FAILED',
+        {
+          responseCode: gatewayResult.responseCode,
+          responseDescription: gatewayResult.responseDescription,
+          response: gatewayResult.response,
+        }
+      );
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+
+      // Schedule retry for failed payout
+      if (payoutAttemptResult.isNewAttempt) {
+        const retrySchedule = await this.retryService.scheduleFailedPayoutForRetry(
+          payoutAttemptResult.idempotencyKey,
+          errorMsg
+        );
+
+        this.logger.error('[PAYOUT] Payout dispatch failed, scheduled for retry', {
+          payoutReference,
+          settlementId: settlement.id,
+          error: errorMsg,
+          retrySchedule,
+        });
+      }
+
+      // Re-throw error only if it's a critical issue
+      throw error;
+    }
 
     const payoutDispatches = Array.isArray(existingMetadata.payoutDispatches) ? existingMetadata.payoutDispatches : [];
     const payoutDispatchAuditLog = Array.isArray(existingMetadata.payoutDispatchAuditLog) ? existingMetadata.payoutDispatchAuditLog : [];
@@ -790,6 +872,23 @@ export class SettlementService {
     const payoutStatus = String(data.status || 'FAILED').toUpperCase();
     const isSuccess = payoutStatus === 'SUCCESS' || payoutStatus === 'PAID';
     const status = isSuccess ? 'PAID' : 'FAILED';
+
+    // Update idempotency tracking if callback reference is available
+    if (data.callbackIdentifier || data.callbackToken) {
+      const callbackRef = data.callbackIdentifier ?? data.callbackToken;
+      try {
+        await this.idempotencyService.markCallbackReceived(callbackRef, data);
+        this.logger.log('[B2B][CALLBACK] Marked callback as received in idempotency tracking', {
+          callbackIdentifier: callbackRef,
+          payoutStatus: status,
+        });
+      } catch (error) {
+        this.logger.warn('[B2B][CALLBACK] Failed to update idempotency tracking', {
+          callbackIdentifier: callbackRef,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
 
     const existingMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
     const currentAllocation = Array.isArray(existingMetadata.allocationPlan?.allocations)
@@ -1275,5 +1374,75 @@ export class SettlementService {
 
   async onModuleDestroy() {
     await this.prisma.$disconnect();
+  }
+
+  /**
+   * Get retry statistics for a settlement
+   */
+  async getPayoutRetryStatistics(settlementId: string): Promise<any> {
+    return this.retryService.getRetryStatistics(settlementId);
+  }
+
+  /**
+   * Get all pending payouts due for retry
+   */
+  async getPendingPayoutRetries(): Promise<any[]> {
+    return this.retryService.getPayoutsDueForRetry();
+  }
+
+  /**
+   * Manually retry payouts for a settlement
+   */
+  async manualRetryPayouts(settlementId: string): Promise<any> {
+    const settlement = await this.repository.findSettlementById(settlementId);
+    if (!settlement) {
+      throw new NotFoundException({
+        statusCode: 404,
+        message: 'Settlement not found',
+        error: 'SETTLEMENT_NOT_FOUND',
+      });
+    }
+
+    const payouts = await this.idempotencyService.getSettlementPayouts(settlementId);
+    const failedPayouts = payouts.filter((p) => ['FAILED', 'RETRYING'].includes(p.status));
+
+    if (failedPayouts.length === 0) {
+      return {
+        success: true,
+        message: 'No failed payouts to retry',
+        count: 0,
+      };
+    }
+
+    const results = [];
+    for (const payout of failedPayouts) {
+      try {
+        const dispatchResult = await this.dispatchB2bPayouts({
+          merchantTransactionReference: payout.merchantTransactionReference,
+          party: payout.party,
+          supplierMerchantId: payout.recipientMerchantId,
+          amount: Number(payout.amount),
+        });
+
+        results.push({
+          payoutReference: payout.payoutReference,
+          status: dispatchResult.status,
+          success: dispatchResult.success,
+        });
+      } catch (error) {
+        results.push({
+          payoutReference: payout.payoutReference,
+          status: 'FAILED',
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return {
+      success: true,
+      message: `Manually retried ${failedPayouts.length} failed payouts`,
+      count: failedPayouts.length,
+      results,
+    };
   }
 }

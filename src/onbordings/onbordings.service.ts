@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { createHash, randomBytes } from 'crypto';
 import { ParticipantStatus } from '@prisma/client';
 import { CreateIntegrationDto } from './dto/create-integration.dto';
@@ -61,6 +61,29 @@ export class OnbordingsService {
     }
 
     return this.toResponse(participant);
+  }
+
+  async findParticipantByAuthenticatedUser(user: any): Promise<OnboardingResponseDto> {
+    const email = user?.email;
+    if (!email) {
+      throw new UnauthorizedException('Authenticated user email is required');
+    }
+
+    const participant = await this.repository.findParticipantByEmail(email);
+    if (!participant) {
+      throw new NotFoundException('Onboarding participant not found for the authenticated user');
+    }
+
+    return this.toResponse(participant);
+  }
+
+  async getIntegrationCredentialsByEmail(email: string, isActive?: boolean) {
+    if (!email) {
+      throw new NotFoundException('User email is required');
+    }
+
+    const activeStatus = isActive === undefined ? undefined : Boolean(isActive);
+    return this.repository.findIntegrationCredentialsByEmail(email, activeStatus);
   }
 
   async updateParticipant(id: string, data: UpdateOnboardingDto): Promise<OnboardingResponseDto> {

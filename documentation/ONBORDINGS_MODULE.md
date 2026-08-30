@@ -68,6 +68,15 @@ Main entry point for onboarding endpoints.
 - **Status Code**: 200
 - **Errors**: 401 if unauthorized
 
+#### GET `/onbordings/me`
+- **Description**: Get the authenticated onboarding participant using the current JWT user
+- **Auth Required**: Yes (Bearer Token)
+- **Returns**: `OnboardingResponseDto`
+- **Status Code**: 200
+- **Errors**:
+  - 401: Unauthorized
+  - 404: No onboarding participant exists for the authenticated user
+
 #### GET `/onbordings/:id`
 - **Description**: Get a specific onboarding participant by ID
 - **Auth Required**: Yes (Bearer Token)

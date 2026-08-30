@@ -364,7 +364,7 @@ test('covers auth, onboarding, and settlement API flows end to end', async () =>
 
   console.log('step 6: settlement authenticate');
   const settlementRepository = new SettlementRepositoryStub();
-  const settlementService = new SettlementService(settlementRepository as any);
+  const settlementService = new SettlementService(settlementRepository as any, {} as any, {} as any);
   (settlementService as any).prisma = {
     integration: {
       findFirst: async () => ({
@@ -422,7 +422,7 @@ test('covers rejected authentication and settlement failure scenarios', async ()
 
   console.log('step 2: reject invalid settlement authentication credentials');
   const settlementRepository = new SettlementRepositoryStub();
-  const settlementService = new SettlementService(settlementRepository as any);
+  const settlementService = new SettlementService(settlementRepository as any, {} as any, {} as any);
   (settlementService as any).prisma = {
     integration: {
       findFirst: async () => ({
@@ -487,7 +487,7 @@ test('covers rejected authentication and settlement failure scenarios', async ()
 
 test('exposes a swagger-driven settlement scenario runner', async () => {
   const settlementRepository = new SettlementRepositoryStub();
-  const settlementService = new SettlementService(settlementRepository as any);
+  const settlementService = new SettlementService(settlementRepository as any, {} as any, {} as any);
   (settlementService as any).prisma = {
     integration: {
       findFirst: async () => ({

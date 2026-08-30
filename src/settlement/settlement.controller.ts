@@ -579,6 +579,106 @@ export class SettlementController {
   }
 
   /**
+   * Get retry status for a settlement
+   */
+  @Get('payouts/retry-status/:settlementId')
+  @ApiOperation({
+    summary: 'Get payout retry status for a settlement',
+    description: 'View the status of payout attempts and retries for a specific settlement.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Retry status retrieved successfully',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Settlement not found',
+  })
+  async getRetryStatus(@Param('settlementId') settlementId: string, @Req() req: any): Promise<any> {
+    try {
+      const retryStats = await this.settlementService.getPayoutRetryStatistics(settlementId);
+      return {
+        success: true,
+        settlementId,
+        retryStatistics: retryStats,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error('[RETRY] Failed to get retry status', {
+        settlementId,
+        error: errorMsg,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get all pending payouts due for retry
+   */
+  @Get('payouts/pending-retries')
+  @ApiOperation({
+    summary: 'Get all pending payout retries',
+    description: 'Retrieve all payouts that are currently pending retry across all settlements.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Pending retries retrieved successfully',
+  })
+  async getPendingRetries(@Req() req: any): Promise<any> {
+    try {
+      const pendingRetries = await this.settlementService.getPendingPayoutRetries();
+      return {
+        success: true,
+        count: pendingRetries.length,
+        pendingRetries,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error('[RETRY] Failed to get pending retries', {
+        error: errorMsg,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Manually trigger retry processing (for testing or manual intervention)
+   */
+  @Post('payouts/manual-retry/:settlementId')
+  @ApiOperation({
+    summary: 'Manually trigger retry for a settlement',
+    description: 'Force immediate retry of failed payouts for a specific settlement.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Retry triggered successfully',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Settlement not found',
+  })
+  async manualRetry(@Param('settlementId') settlementId: string, @Body() body: any, @Req() req: any): Promise<any> {
+    try {
+      const result = await this.settlementService.manualRetryPayouts(settlementId);
+      return {
+        success: true,
+        settlementId,
+        retryResult: result,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error('[RETRY] Manual retry failed', {
+        settlementId,
+        error: errorMsg,
+      });
+      throw error;
+    }
+  }
+
+  /**
    * Helper: Extract Bearer token from Authorization header
    */
   private extractBearerToken(authHeader: string): string {

@@ -236,7 +236,7 @@ test('rejects unsupported currency and negative supplier allocations', async () 
 
 test('rejects unsupported payment methods during settlement initiation', async () => {
   console.log('step 1: exercise the service-level rejection path for unsupported payment methods');
-  const settlementService = new SettlementService(new StubSettlementRepository() as any);
+  const settlementService = new SettlementService(new StubSettlementRepository() as any, {} as any, {} as any);
 
   await assert.rejects(
     () => settlementService.initiateSettlement('token-1', {
@@ -271,7 +271,7 @@ test('returns the existing settlement when the merchant reference is duplicated'
     transactions: [],
   });
 
-  const settlementService = new SettlementService(repository);
+  const settlementService = new SettlementService(repository, {} as any, {} as any);
   const result = await settlementService.initiateSettlement('token-1', {
     merchantTransactionReference: 'TXN-0007',
     totalAmount: 7200,
@@ -305,7 +305,7 @@ test('rejects a reused settlement session token', async () => {
     lastUsedAt: new Date(),
   });
 
-  const settlementService = new SettlementService(repository);
+  const settlementService = new SettlementService(repository, {} as any, {} as any);
   await assert.rejects(
     () => settlementService.initiateSettlement('token-1', {
       merchantTransactionReference: 'TXN-0008',
@@ -328,7 +328,7 @@ test('rejects a reused settlement session token', async () => {
 
 test('rejects a settlement when the supplier payout destination is not verified', async () => {
   console.log('step 1: exercise the service-level rejection path for unverified supplier payout');
-  const settlementService = new SettlementService(new StubSettlementRepository() as any);
+  const settlementService = new SettlementService(new StubSettlementRepository() as any, {} as any, {} as any);
   (settlementService as any).prisma = {
     integration: {
       findFirst: async () => ({
@@ -405,7 +405,7 @@ test('shows the full merchant flow from authentication to settlement', async () 
   console.log('step 4 passed: payment verified');
 
   console.log('step 5: initiate settlement');
-  const settlementService = new SettlementService(new StubSettlementRepository() as any);
+  const settlementService = new SettlementService(new StubSettlementRepository() as any, {} as any, {} as any);
   const settlementResult = await settlementService.initiateSettlement('token-1', {
     merchantTransactionReference: 'TXN-0003',
     totalAmount: 7200,

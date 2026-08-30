@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, Get, Logger, Param, Patch, Post, Request, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Delete, Get, Logger, Param, Patch, Post, Query, Request, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CreateIntegrationDto } from './dto/create-integration.dto';
 import { CreateOnboardingDto } from './dto/create-onboarding.dto';
@@ -69,6 +69,45 @@ export class OnbordingsController {
     return this.service.viewApiKeys(req.user);
   }
 
+  @Get('integration/credentials')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Get a user integration credentials by email and active status' })
+  @ApiQuery({ name: 'email', required: true, type: String, example: 'merchant@example.com' })
+  @ApiQuery({
+    name: 'isActive',
+    required: false,
+    type: Boolean,
+    example: true,
+    description: 'Filter on active integration status',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Integration credentials for the requested user and active status.',
+    schema: {
+      example: {
+        id: 'integration-id',
+        participantId: 'participant-id',
+        participantEmail: 'merchant@example.com',
+        merchantId: 'pay_4bec11e5a382fe7c',
+        apiKey: 'pk_live_d093937d634dcb700b6d34ba6f29c55e',
+        apiSecret: 'sk_live_85faf3a09cb5b38cb84c48b09a67da9f',
+        environment: 'production',
+        isActive: true,
+        createdAt: '2026-06-30T09:03:33.975Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 401, type: ErrorResponseDto, description: 'Authentication token is missing or invalid.' })
+  @ApiResponse({ status: 404, type: ErrorResponseDto, description: 'Integration credentials not found for the provided email and active status.' })
+  async getIntegrationCredentialsByEmail(
+    @Query('email') email: string,
+    @Query('isActive') isActive?: string,
+  ) {
+    const parsedIsActive = isActive === undefined ? undefined : isActive.toLowerCase() === 'true' || isActive === '1';
+    return this.service.getIntegrationCredentialsByEmail(email, parsedIsActive);
+  }
+
   @Get()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
@@ -81,6 +120,25 @@ export class OnbordingsController {
   })
   async findAll(): Promise<OnboardingResponseDto[]> {
     return this.service.findAllParticipants();
+  }
+
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Get the authenticated onboarding participant' })
+  @ApiResponse({ status: 200, type: OnboardingResponseDto })
+  @ApiResponse({
+    status: 401,
+    type: ErrorResponseDto,
+    description: 'Authentication token is missing or invalid.',
+  })
+  @ApiResponse({
+    status: 404,
+    type: ErrorResponseDto,
+    description: 'Onboarding participant not found for the authenticated user.',
+  })
+  async findCurrentUser(@Request() req: any): Promise<OnboardingResponseDto> {
+    return this.service.findParticipantByAuthenticatedUser(req.user);
   }
 
   @Get(':id')
