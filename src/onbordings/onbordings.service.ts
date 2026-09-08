@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException, Optional, UnauthorizedException } from '@nestjs/common';
 import { createHash, randomBytes } from 'crypto';
 import { ParticipantStatus } from '@prisma/client';
 import { CreateIntegrationDto } from './dto/create-integration.dto';
@@ -8,12 +8,16 @@ import { PublicOnboardingResponseDto } from './dto/public-onboarding-response.dt
 import { PaymentMethodDto } from './dto/payment-method.dto';
 import { UpdateOnboardingDto } from './dto/update-onboarding.dto';
 import { OnbordingsRepository } from './onbordings.repository';
+import { EmailService } from './email.service';
 
 @Injectable()
 export class OnbordingsService {
   private readonly logger = new Logger(OnbordingsService.name);
 
-  constructor(private readonly repository: OnbordingsRepository) {}
+  constructor(
+    private readonly repository: OnbordingsRepository,
+    @Optional() private readonly emailService?: EmailService,
+  ) {}
 
   async createParticipant(data: CreateOnboardingDto): Promise<OnboardingResponseDto> {
     if (data.payment) {
@@ -47,7 +51,29 @@ export class OnbordingsService {
     }
 
     const created = await this.repository.createParticipantWithoutIntegration(normalizedData);
-    return this.toResponse(this.attachActivationSecret(created, preparedPayment?.paymentActivationSecret), undefined, draftReasonMessage ?? completionMessage);
+    const response = this.toResponse(
+      this.attachActivationSecret(created, preparedPayment?.paymentActivationSecret),
+      undefined,
+      draftReasonMessage ?? completionMessage,
+    );
+
+    if (normalizedData.email && preparedPayment?.paymentActivationSecret && this.emailService) {
+      try {
+        this.logger.log(
+          `[PAYMENT_SECRET_EMAIL] Sending payment secret=${preparedPayment.paymentActivationSecret} to ${normalizedData.email}`,
+        );
+        await this.emailService.sendPaymentSecretEmail({
+          email: normalizedData.email,
+          name: normalizedData.contactName || normalizedData.businessName,
+          paymentSecret: preparedPayment.paymentActivationSecret,
+          expiresAt: response.payment?.paymentActivationSecretExpiresAt || '24 hours from registration',
+        });
+      } catch (error) {
+        this.logger.error(`Unable to send payment secret email to ${normalizedData.email}`, error);
+      }
+    }
+
+    return response;
   }
 
   async findAllParticipants(): Promise<PublicOnboardingResponseDto[]> {
