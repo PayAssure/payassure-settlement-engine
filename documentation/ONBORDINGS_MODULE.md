@@ -62,11 +62,10 @@ Main entry point for onboarding endpoints.
 
 #### GET `/onbordings`
 - **Description**: List all onboarding participants
-- **Auth Required**: Yes (Bearer Token)
-- **Permissions**: Admin or owner
-- **Returns**: `OnboardingResponseDto[]`
+- **Auth Required**: No
+- **Returns**: Public onboarding participant details, integration credentials (`merchantId`, `apiKey`, `apiSecret`, `environment`, `isActive`), and safe payment status fields
+- **Sensitive data excluded**: Payment activation secrets, secret hashes, expiry timestamps, and verification attempts
 - **Status Code**: 200
-- **Errors**: 401 if unauthorized
 
 #### GET `/onbordings/me`
 - **Description**: Get the authenticated onboarding participant using the current JWT user

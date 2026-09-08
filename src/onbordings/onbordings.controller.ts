@@ -9,6 +9,7 @@ import { UpdateOnboardingDto } from './dto/update-onboarding.dto';
 import { ActivatePaymentDto } from './dto/activate-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { UpdateWebhookDto } from './dto/update-webhook.dto';
+import { PublicOnboardingResponseDto } from './dto/public-onboarding-response.dto';
 import { OnbordingsService } from './onbordings.service';
 
 @ApiTags('onbordings')
@@ -27,7 +28,10 @@ export class OnbordingsController {
     description: 'An unexpected error occurred while creating the onboarding record.',
   })
   async create(@Body() body: CreateOnboardingDto): Promise<OnboardingResponseDto> {
-    return this.service.createParticipant(body);
+    this.logger.log('[ONBOARDING_CREATE_REQUEST]', body);
+    const response = await this.service.createParticipant(body);
+    this.logger.log('[ONBOARDING_CREATE_RESPONSE]', response);
+    return response;
   }
 
   @Post('generate-keys')
@@ -40,7 +44,7 @@ export class OnbordingsController {
     type: ErrorResponseDto,
     description: 'Authentication token is missing or invalid.',
   })
-  @ApiResponse({
+  @ApiResponse({ 
     status: 500,
     type: ErrorResponseDto,
     description:
@@ -109,16 +113,13 @@ export class OnbordingsController {
   }
 
   @Get()
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth('access-token')
-  @ApiOperation({ summary: 'List onboarding participants' })
-  @ApiResponse({ status: 200, type: [OnboardingResponseDto] })
-  @ApiResponse({
-    status: 401,
-    type: ErrorResponseDto,
-    description: 'Authentication token is missing or invalid.',
+  @ApiOperation({
+    summary: 'List onboarding participants',
+    description:
+      'Publicly lists onboarding participants, integration credentials, and safe payment status details. Authentication is not required. Payment activation secrets, secret hashes, expiry timestamps, and verification attempts are never returned.',
   })
-  async findAll(): Promise<OnboardingResponseDto[]> {
+  @ApiResponse({ status: 200, type: [PublicOnboardingResponseDto] })
+  async findAll(): Promise<PublicOnboardingResponseDto[]> {
     return this.service.findAllParticipants();
   }
 

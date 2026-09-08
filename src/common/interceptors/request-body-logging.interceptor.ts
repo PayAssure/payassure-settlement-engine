@@ -9,6 +9,8 @@ export class RequestBodyLoggingInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
     const request = context.switchToHttp().getRequest<Request>();
 
+    this.logger.log(`[REQUEST] ${request.method} ${request.originalUrl}`);
+
     if (request.path.includes('/callback') || request.path.includes('/callbacks')) {
       this.logger.log('[PAYOUT_CALLBACK_PAYLOAD]', request.body);
     }

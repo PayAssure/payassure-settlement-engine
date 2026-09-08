@@ -2,7 +2,7 @@ import assert = require('node:assert/strict');
 import test = require('node:test');
 import { OnbordingsService } from './onbordings.service';
 
-test('updatePayment stores a pending verification lifecycle and activation secret hash', async () => {
+test('updatePayment returns payment status without activation secret internals', async () => {
   const repository = {
     updatePayment: async (_id: string, payment: any) => ({
       id: 'participant-1',
@@ -30,8 +30,102 @@ test('updatePayment stores a pending verification lifecycle and activation secre
 
   assert.equal(response.payment?.status, 'PENDING_VERIFICATION');
   assert.equal(response.payment?.isVerified, false);
-  assert.ok(response.payment?.paymentActivationSecretHash);
-  assert.ok(response.payment?.paymentActivationSecretExpiresAt);
+  assert.equal(response.payment?.paymentActivationSecretHash, undefined);
+  assert.equal(response.payment?.paymentActivationSecretExpiresAt, undefined);
+  assert.equal(response.payment?.verificationAttempts, undefined);
+});
+
+test('findAllParticipants returns a public response without secrets or integration credentials', async () => {
+  const service = new OnbordingsService({
+    findAllParticipants: async () => [{
+      id: 'participant-1',
+      participantType: 'RETAILER',
+      businessName: 'Test Merchant',
+      businessType: null,
+      contactName: 'Jane Doe',
+      email: 'jane@example.com',
+      status: 'DRAFT',
+      payment: {
+        type: 'MPESA',
+        accountName: 'Jane Doe',
+        phoneNumber: '254748595539',
+        status: 'PENDING_VERIFICATION',
+        isVerified: false,
+        provider: 'Safaricom',
+        paymentActivationSecretHash: 'hash',
+        paymentActivationSecretExpiresAt: '2026-07-24T08:53:13.919Z',
+        verificationAttempts: 0,
+      },
+      integrations: [{
+        merchantId: 'pay_4bec11e5a382fe7c',
+        apiKey: 'pk_live_d093937d634dcb700b6d34ba6f29c55e',
+        apiSecret: 'sk_live_85faf3a09cb5b38cb84c48b09a67da9f',
+        environment: 'production',
+        isActive: true,
+      }],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }],
+  } as any);
+
+  const [response] = await service.findAllParticipants();
+
+  assert.deepEqual(response.payment, {
+    type: 'MPESA',
+    accountName: 'Jane Doe',
+    phoneNumber: '254748595539',
+    status: 'PENDING_VERIFICATION',
+    isVerified: false,
+    provider: 'Safaricom',
+  });
+  assert.deepEqual(response.integration, {
+    merchantId: 'pay_4bec11e5a382fe7c',
+    apiKey: 'pk_live_d093937d634dcb700b6d34ba6f29c55e',
+    apiSecret: 'sk_live_85faf3a09cb5b38cb84c48b09a67da9f',
+    environment: 'production',
+    isActive: true,
+  });
+  assert.equal('paymentActivationSecretHash' in (response.payment ?? {}), false);
+  assert.equal('paymentActivationSecretExpiresAt' in (response.payment ?? {}), false);
+  assert.equal('verificationAttempts' in (response.payment ?? {}), false);
+});
+
+test('findAllParticipants returns bank details for BANK payments', async () => {
+  const service = new OnbordingsService({
+    findAllParticipants: async () => [{
+      id: 'participant-2',
+      participantType: 'SUPPLIER',
+      businessName: 'Test Supplier',
+      status: 'DRAFT',
+      payment: {
+        type: 'BANK',
+        accountName: 'Test Supplier',
+        bankCode: '07',
+        accountNumber: '1234567890',
+        shortcode: '123456',
+        provider: 'Test Bank',
+        paymentActivationSecretHash: 'hash',
+      },
+      integrations: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }],
+  } as any);
+
+  const [response] = await service.findAllParticipants();
+
+  assert.deepEqual(response.payment, {
+    type: 'BANK',
+    accountName: 'Test Supplier',
+    status: undefined,
+    isVerified: undefined,
+    provider: 'Test Bank',
+    bankCode: '07',
+    accountNumber: '1234567890',
+    shortcode: '123456',
+  });
+  assert.equal('phoneNumber' in (response.payment ?? {}), false);
+  assert.equal('paymentActivationSecretHash' in (response.payment ?? {}), false);
 });
 
 test('updatePayment rejects client-supplied verification flags and bank-only fields for MPESA requests', async () => {

@@ -4,6 +4,7 @@ import { ParticipantStatus } from '@prisma/client';
 import { CreateIntegrationDto } from './dto/create-integration.dto';
 import { CreateOnboardingDto } from './dto/create-onboarding.dto';
 import { OnboardingResponseDto } from './dto/onboarding-response.dto';
+import { PublicOnboardingResponseDto } from './dto/public-onboarding-response.dto';
 import { PaymentMethodDto } from './dto/payment-method.dto';
 import { UpdateOnboardingDto } from './dto/update-onboarding.dto';
 import { OnbordingsRepository } from './onbordings.repository';
@@ -49,9 +50,9 @@ export class OnbordingsService {
     return this.toResponse(this.attachActivationSecret(created, preparedPayment?.paymentActivationSecret), undefined, draftReasonMessage ?? completionMessage);
   }
 
-  async findAllParticipants(): Promise<OnboardingResponseDto[]> {
+  async findAllParticipants(): Promise<PublicOnboardingResponseDto[]> {
     const participants = await this.repository.findAllParticipants();
-    return participants.map((participant) => this.toResponse(participant));
+    return participants.map((participant) => this.toPublicResponse(participant));
   }
 
   async findParticipantById(id: string): Promise<OnboardingResponseDto> {
@@ -325,6 +326,49 @@ export class OnbordingsService {
     };
   }
 
+  private toPublicResponse(participant: any): PublicOnboardingResponseDto {
+    const payment = participant.payment as any;
+    const activeIntegration = participant.integrations?.[0];
+
+    return {
+      id: participant.id,
+      participantType: participant.participantType,
+      businessName: participant.businessName,
+      businessType: participant.businessType,
+      contactName: participant.contactName,
+      email: participant.email,
+      status: participant.status,
+      integration: activeIntegration
+        ? {
+            merchantId: activeIntegration.merchantId,
+            apiKey: activeIntegration.apiKey ?? '',
+            apiSecret: activeIntegration.apiSecret ?? '',
+            environment: activeIntegration.environment,
+            isActive: activeIntegration.isActive,
+          }
+        : null,
+      payment: payment
+        ? {
+            type: payment.type,
+            accountName: payment.accountName,
+            status: payment.status,
+            isVerified: payment.isVerified,
+            provider: payment.provider,
+            ...(payment.type === 'MPESA' ? { phoneNumber: payment.phoneNumber } : {}),
+            ...(payment.type === 'BANK'
+              ? {
+                  bankCode: payment.bankCode,
+                  accountNumber: payment.accountNumber,
+                  shortcode: payment.shortcode,
+                }
+              : {}),
+          }
+        : null,
+      createdAt: participant.createdAt,
+      updatedAt: participant.updatedAt,
+    };
+  }
+
   private isProfileIncomplete(data: CreateOnboardingDto): boolean {
     const requiredFields = [
       data.participantType,
@@ -393,9 +437,26 @@ export class OnbordingsService {
             createdAt: activeIntegration.createdAt,
           }
         : null,
-      payment: participant.payment ?? null,
+      payment: this.toSafePaymentResponse(participant.payment),
       createdAt: participant.createdAt,
       updatedAt: participant.updatedAt,
     };
+  }
+
+  private toSafePaymentResponse(payment: any) {
+    if (!payment) {
+      return null;
+    }
+
+    const {
+      paymentActivationSecretHash,
+      paymentActivationSecretExpiresAt,
+      verificationAttempts,
+      verificationMethod,
+      verifiedAt,
+      ...safePayment
+    } = payment;
+
+    return safePayment;
   }
 }
