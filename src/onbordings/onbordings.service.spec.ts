@@ -1,6 +1,32 @@
 import assert = require('node:assert/strict');
 import test = require('node:test');
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { CreateOnboardingDto } from './dto/create-onboarding.dto';
 import { OnbordingsService } from './onbordings.service';
+
+test('CreateOnboardingDto strips nulls from optional fields and rejects required nulls', async () => {
+  const dto = plainToInstance(CreateOnboardingDto, {
+    participantType: 'RETAILER',
+    businessName: 'Test Merchant',
+    registrationNumber: null,
+    email: null,
+    payment: {
+      type: 'MPESA',
+      accountName: 'Jane Doe',
+      phoneNumber: null,
+      provider: 'Safaricom',
+    },
+  });
+
+  const errors = await validate(dto);
+
+  assert.equal(errors.length, 1);
+  assert.equal(dto.registrationNumber, undefined);
+  assert.equal(dto.email, undefined);
+  assert.equal(dto.payment?.phoneNumber, undefined);
+  assert.equal(errors[0].property, 'payment');
+});
 
 test('updatePayment returns payment status without activation secret internals', async () => {
   const repository = {

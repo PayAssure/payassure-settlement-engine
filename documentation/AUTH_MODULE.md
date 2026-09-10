@@ -1,368 +1,616 @@
-# Auth Module Documentation
+# Authentication API
 
-## Overview
+This document describes every endpoint exposed by `src/auth/auth.controller.ts`.
+The route prefix is `/auth`.
 
-The Auth Module handles all authentication and authorization operations for the Payassure Settlement Engine. It manages user registration, login, token generation, and access control through JWT (JSON Web Token) authentication.
+## Authentication Model
 
-**Location**: `src/auth/`
+There are two related credential types in the platform:
 
-## Features
+- **User credentials**: username or email plus password. A successful login returns a JWT access token and a JWT refresh token.
+- **Business API credentials**: API key and API secret used by settlement integrations. Business authentication is documented separately in `documentation/SETTLEMENT_MODULE_DESIGN.md`; it is not an `/auth` route.
 
-- **User Registration** - Multiple registration flows for different user types
-- **Login** - Authenticate users and generate JWT tokens
-- **Token Management** - Access token and refresh token handling
-- **Role-Based Access Control** - Support for SUPER_ADMIN, ADMIN, and USER roles
-- **JWT Strategy** - Passport.js JWT strategy for route protection
-- **Password Security** - bcrypt hashing for secure password storage
+Protected `/auth` routes require:
 
-## Core Components
-
-### 1. AuthController (`auth.controller.ts`)
-
-Main entry point for authentication endpoints.
-
-**Endpoints**:
-
-#### POST `/auth/register`
-- **Description**: Register a new admin user
-- **Auth Required**: Yes (Bearer Token)
-- **Admin Only**: Yes (SUPER_ADMIN required)
-- **Body**:
-  ```json
-  {
-    "username": "string",
-    "email": "string",
-    "password": "string"
-  }
-  ```
-- **Returns**: `RegisterResponseDto`
-
-#### POST `/auth/register-before-onboarding`
-- **Description**: Create a user account before onboarding is completed
-- **Auth Required**: No
-- **Body**:
-  ```json
-  {
-    "username": "string",
-    "email": "string",
-    "password": "string"
-  }
-  ```
-- **Returns**: `RegisterResponseDto`
-- **Status**: `profileComplete: false` - User must complete onboarding
-
-#### POST `/auth/onboarded-register`
-- **Description**: Register a user after onboarding or mark existing user as onboarded
-- **Auth Required**: No
-- **Body**:
-  ```json
-  {
-    "email": "string"
-  }
-  ```
-- **Returns**: `RegisterResponseDto`
-- **Status**: `profileComplete: true`
-
-#### POST `/auth/login`
-- **Description**: Authenticate user and retrieve tokens
-- **Auth Required**: No
-- **Body**:
-  ```json
-  {
-    "email": "string",
-    "password": "string"
-  }
-  ```
-- **Returns**: 
-  ```json
-  {
-    "accessToken": "string",
-    "refreshToken": "string",
-    "user": {
-      "id": "string",
-      "email": "string",
-      "username": "string",
-      "role": "USER|ADMIN|SUPER_ADMIN"
-    }
-  }
-  ```
-
-#### POST `/auth/refresh-token`
-- **Description**: Refresh an expired access token
-- **Auth Required**: No
-- **Body**:
-  ```json
-  {
-    "refreshToken": "string"
-  }
-  ```
-- **Returns**: `AuthResponseDto` with new tokens
-
-#### GET `/auth/users`
-- **Description**: List all users with optional filtering
-- **Auth Required**: Yes (Bearer Token)
-- **Query Parameters**:
-  - `skip`: number (pagination)
-  - `take`: number (pagination)
-  - `role`: "SUPER_ADMIN" | "ADMIN" | "USER" (optional filter)
-- **Returns**: `GetUsersResponseDto[]`
-
-#### DELETE `/auth/users/:id`
-- **Description**: Deactivate a user account
-- **Auth Required**: Yes (Bearer Token)
-- **Admin Only**: Yes
-- **Returns**: `{ message: string }`
-
-### 2. AuthService (`auth.service.ts`)
-
-Core business logic for authentication operations.
-
-**Key Methods**:
-
-#### `registerAdmin(data: RegisterAdminDto, actor: any): Promise<RegisterResponseDto>`
-- Validates that the requesting user is a SUPER_ADMIN
-- Creates a new ADMIN user in the system
-- Throws `ForbiddenException` if not authorized
-
-#### `registerBeforeOnboarding(data: RegisterDto): Promise<RegisterResponseDto>`
-- Allows users to register before completing onboarding
-- Returns message: "Account created successfully. Your profile is incomplete. Please complete onboarding to finish setup."
-- Sets `profileComplete: false`
-
-#### `registerAfterOnboarding(email: string): Promise<RegisterResponseDto>`
-- Marks an existing incomplete profile as complete
-- Sets `profileComplete: true`
-
-#### `login(email: string, password: string): Promise<AuthResponseDto>`
-- Validates email and password
-- Generates JWT access token (short-lived)
-- Generates refresh token (long-lived)
-- Increments `refreshTokenVersion` for token invalidation
-
-#### `refreshToken(refreshToken: string): Promise<AuthResponseDto>`
-- Validates refresh token
-- Generates new access token
-- Returns updated tokens
-
-#### `private createUser(...): Promise<User>`
-- Helper method to create new users
-- Hashes password using bcrypt
-- Validates username and email uniqueness
-
-### 3. AuthRepository (`auth.repository.ts`)
-
-Data access layer for user operations.
-
-**Methods**:
-- `create(username, email, passwordHash, role)` - Create new user
-- `findByEmail(email)` - Find user by email
-- `findByUsername(username)` - Find user by username
-- `findByEmailOrUsername(username, email)` - Find by either identifier
-- `findById(id)` - Retrieve user by ID
-- `findAll(skip, take, role?)` - List users with pagination and optional role filter
-- `findOnboardedByEmail(email)` - Find onboarded user
-- `updateRefreshTokenVersion(id)` - Invalidate refresh tokens by incrementing version
-- `deactivateUser(id)` - Set user as inactive
-
-### 4. JwtAuthGuard (`jwt-auth.guard.ts`)
-
-Route protection middleware using Passport.js JWT strategy.
-
-**Usage**:
-```typescript
-@UseGuards(JwtAuthGuard)
-@ApiBearerAuth('access-token')
-async protectedRoute(@Request() req: any) {
-  // req.user contains decoded JWT payload
-  const userId = req.user.id;
-  const role = req.user.role;
-}
+```http
+Authorization: Bearer <accessToken>
+Content-Type: application/json
 ```
 
-### 5. JwtStrategy (`jwt.strategy.ts`)
-
-Passport.js strategy implementation for JWT validation.
-
-**Configuration**:
-- Extracts token from Authorization header (Bearer scheme)
-- Validates token signature using JWT_SECRET
-- Returns decoded payload as `request.user`
-
-### 6. Bootstrap (`bootstrap.ts`)
-
-Application initialization module setup.
-
-**Responsibilities**:
-- Creates super admin user on first run if it doesn't exist
-- Initializes default application roles
-- Configures Passport strategies
-
-## Data Transfer Objects (DTOs)
-
-### RegisterAdminDto
-```typescript
-{
-  username: string
-  email: string
-  password: string
-}
-```
-
-### RegisterDto
-```typescript
-{
-  username: string
-  email: string
-  password: string
-}
-```
-
-### LoginDto
-```typescript
-{
-  email: string
-  password: string
-}
-```
-
-### RefreshTokenDto
-```typescript
-{
-  refreshToken: string
-}
-```
-
-### AuthResponseDto
-```typescript
-{
-  accessToken: string
-  refreshToken: string
-  user: {
-    id: string
-    email: string
-    username: string
-    role: UserRole
-  }
-}
-```
-
-### RegisterResponseDto
-```typescript
-{
-  message: string
-  profileComplete: boolean
-  user: {
-    id: string
-    username: string
-    email: string
-    role: UserRole
-  }
-}
-```
-
-### GetUsersResponseDto
-```typescript
-{
-  id: string
-  username: string
-  email: string
-  role: UserRole
-  isActive: boolean
-  createdAt: DateTime
-}
-```
+The access token is signed with `JWT_SECRET` or the development fallback `payassure-dev-secret` and expires after 15 minutes. Refresh tokens expire after 7 days. The server checks `refreshTokenVersion` on every protected request, so logging out or rotating a refresh token invalidates the previous token version.
 
 ## User Roles
 
-| Role | Permissions |
-|------|------------|
-| SUPER_ADMIN | Create admin users, all admin privileges |
-| ADMIN | Manage users, access admin endpoints |
-| USER | Standard user privileges, access onboarding |
+- `SUPER_ADMIN`: may create administrators, list all users, and delete any user.
+- `ADMIN`: administrator account, but not a `SUPER_ADMIN`.
+- `USER`: standard participant account.
 
-## Authentication Flow
+## Common Error Responses
 
-### Registration Flow
-```
-1. User calls POST /auth/register-before-onboarding
-2. AuthService.registerBeforeOnboarding() is invoked
-3. Password is hashed using bcrypt
-4. User is created with role: USER and profileComplete: false
-5. User receives response with message to complete onboarding
-```
+NestJS exceptions use this general shape:
 
-### Login Flow
-```
-1. User calls POST /auth/login with email and password
-2. AuthService validates credentials
-3. AuthService.login() generates JWT tokens
-4. Access Token: Short-lived (15 minutes)
-5. Refresh Token: Long-lived, stored with refreshTokenVersion
-6. User receives both tokens and user object
+```json
+{
+  "statusCode": 401,
+  "message": "Invalid credentials",
+  "error": "Unauthorized"
+}
 ```
 
-### Token Refresh Flow
-```
-1. Client calls POST /auth/refresh-token with refreshToken
-2. AuthService.refreshToken() validates refresh token
-3. Checks refreshTokenVersion hasn't changed (prevents token reuse after logout)
-4. Generates new accessToken
-5. Returns new tokens to client
-```
+Validation failures are formatted by the global validation filter and include the request path:
 
-### Protected Route Access
-```
-1. Client includes Authorization: Bearer <accessToken> header
-2. JwtAuthGuard intercepts request
-3. JwtStrategy validates token signature and expiry
-4. If valid: req.user is populated with decoded payload
-5. Route handler executes with user context
+```json
+{
+  "statusCode": 400,
+  "message": [
+    "email must be an email",
+    "password must be longer than or equal to 6 characters"
+  ],
+  "error": "Bad Request",
+  "path": "/auth/register-before-onboarding"
+}
 ```
 
-## Security Features
+Request validation rules:
 
-- **Password Hashing**: Passwords are hashed using bcrypt before storage
-- **JWT Tokens**: Stateless authentication using signed JWT tokens
-- **Token Versioning**: Refresh token version invalidates old tokens on logout
-- **Bearer Authentication**: Standard Bearer scheme for token transmission
-- **Role-Based Access Control**: Different access levels for different user roles
-- **Endpoint Protection**: Guards prevent unauthorized access to admin endpoints
+- `username`: string.
+- `email`: valid email address.
+- `password`: string with at least 6 characters for registration; login only requires a string.
+- `identifier`: string containing either the user's username or email.
+- `refreshToken`: string.
+- Unknown request-body properties are removed because the application uses a whitelist validation pipe.
 
-## Error Handling
+## Endpoints
 
-| Error | Status | Description |
-|-------|--------|-------------|
-| `ConflictException` | 409 | Username or email already exists |
-| `UnauthorizedException` | 401 | Invalid credentials or missing token |
-| `ForbiddenException` | 403 | Insufficient permissions for operation |
-| `NotFoundException` | 404 | User not found |
+### 1. Register an administrator
 
-## Integration with Other Modules
+`POST /auth/register`
 
-- **Onbordings Module**: Users must register before completing onboarding
-- **Auth Guards**: Used across all modules to protect sensitive endpoints
-- **JWT Strategy**: Shared authentication mechanism across entire application
+Creates an `ADMIN` account. The caller must be authenticated and must have the `SUPER_ADMIN` role.
 
-## Environment Variables Required
+#### Headers
 
-```
-JWT_SECRET=your-secret-key
-JWT_EXPIRY=900 (15 minutes in seconds)
-JWT_REFRESH_EXPIRY=604800 (7 days in seconds)
+```http
+Authorization: Bearer <super_admin_access_token>
+Content-Type: application/json
 ```
 
-## Best Practices
+#### Request body
 
-1. Always include Bearer token for protected endpoints
-2. Store refresh tokens securely (httpOnly cookies recommended)
-3. Implement token rotation on each refresh
-4. Log out by incrementing refresh token version
-5. Validate email confirmation before allowing account access
-6. Implement rate limiting on login attempts
-7. Keep JWT_SECRET secure and rotate periodically
+```json
+{
+  "username": "operations-admin",
+  "email": "admin@example.com",
+  "password": "strong-password"
+}
+```
 
----
+#### Success: `201 Created`
 
-**Module Path**: `src/auth/`  
-**Controller Route**: `/auth`  
-**Key Dependencies**: Passport.js, bcrypt, JWT
+```json
+{
+  "message": "User account created successfully",
+  "profileComplete": true,
+  "user": {
+    "id": "clx123user",
+    "username": "operations-admin",
+    "email": "admin@example.com",
+    "role": "ADMIN"
+  }
+}
+```
+
+#### Errors
+
+- `400 Bad Request`: body validation failed.
+- `401 Unauthorized`: bearer token is missing, malformed, expired, revoked, or otherwise invalid.
+- `403 Forbidden`: authenticated user is not a `SUPER_ADMIN`; message: `Only a super admin can create another admin`.
+- `409 Conflict`: email or username already exists. The message is either `Email already exists` or `Username already exists`.
+
+### 2. Register before onboarding
+
+`POST /auth/register-before-onboarding`
+
+Creates a standard `USER` account before the participant has completed onboarding. The account is active, but the returned profile is incomplete. No bearer token is required.
+
+#### Request body
+
+```json
+{
+  "username": "merchant-user",
+  "email": "merchant@example.com",
+  "password": "strong-password"
+}
+```
+
+#### Success: `201 Created`
+
+```json
+{
+  "message": "Account created successfully. Your profile is incomplete. Please complete onboarding to finish setup.",
+  "profileComplete": false,
+  "user": {
+    "id": "clx123user",
+    "username": "merchant-user",
+    "email": "merchant@example.com",
+    "role": "USER"
+  }
+}
+```
+
+If the email already belongs to an onboarding participant and an account already exists, the endpoint links the participant to that account and returns `201` with this shape instead of failing:
+
+```json
+{
+  "message": "Account already exists. Please complete onboarding to finish your profile.",
+  "profileComplete": false,
+  "user": {
+    "id": "clx123user",
+    "username": "merchant-user",
+    "email": "merchant@example.com",
+    "role": "USER"
+  }
+}
+```
+
+#### Errors
+
+- `400 Bad Request`: body validation failed.
+- `409 Conflict`: `Email already exists` or `Username already exists`.
+
+### 3. Register after onboarding
+
+`POST /auth/onboarded-register`
+
+Creates a standard `USER` account for an existing onboarding participant, or links an existing account to that participant. An onboarding record must be found by the submitted email. No bearer token is required.
+
+#### Request body
+
+```json
+{
+  "username": "merchant-user",
+  "email": "merchant@example.com",
+  "password": "strong-password"
+}
+```
+
+#### Success: `201 Created`
+
+For a new account:
+
+```json
+{
+  "message": "User account created successfully and profile is complete.",
+  "profileComplete": true,
+  "user": {
+    "id": "clx123user",
+    "username": "merchant-user",
+    "email": "merchant@example.com",
+    "role": "USER"
+  }
+}
+```
+
+For an existing account linked to onboarding:
+
+```json
+{
+  "message": "Your profile is now complete.",
+  "profileComplete": true,
+  "user": {
+    "id": "clx123user",
+    "username": "merchant-user",
+    "email": "merchant@example.com",
+    "role": "USER"
+  }
+}
+```
+
+#### Errors
+
+- `400 Bad Request`: body validation failed.
+- `401 Unauthorized`: no onboarding record exists for the submitted email; message: `No onboarding record found for this email address`.
+- `409 Conflict`: email or username already exists in a conflicting account; message: `Email already exists` or `Username already exists`.
+
+### 4. Login
+
+`POST /auth/login`
+
+Authenticates an active user using either the username or email address. No bearer token is required.
+
+#### Request body
+
+```json
+{
+  "identifier": "merchant-user",
+  "password": "strong-password"
+}
+```
+
+`identifier` may instead be an email address.
+
+#### Success: `201 Created`
+
+```json
+{
+  "accessToken": "<jwt-access-token>",
+  "refreshToken": "<jwt-refresh-token>",
+  "profileComplete": true,
+  "message": "Profile complete.",
+  "user": {
+    "id": "clx123user",
+    "username": "merchant-user",
+    "email": "merchant@example.com",
+    "role": "USER"
+  }
+}
+```
+
+When onboarding is incomplete, `profileComplete` is `false` and `message` is `Your profile is incomplete. Please finish onboarding to get API keys access.`
+
+#### Errors
+
+- `400 Bad Request`: `identifier` or `password` is missing or is not a string.
+- `401 Unauthorized`: user does not exist, is inactive, or the password is incorrect; message: `Invalid credentials`.
+
+### 5. Request a password reset
+
+`POST /auth/forgot-password`
+
+Requests a password reset email for an active account. No bearer token is
+required.
+
+#### Request body
+
+```json
+{
+  "email": "merchant@example.com"
+}
+```
+
+#### Success: `201 Created`
+
+The endpoint intentionally returns the same response whether or not the email
+belongs to an account, preventing account-enumeration through this route:
+
+```json
+{
+  "message": "If an account exists for that email, a password reset OTP has been sent."
+}
+```
+
+For an active user, the server generates a cryptographically random token,
+stores only its SHA-256 hash, and sends the six-digit OTP through the configured
+SMTP email service. The OTP expires after one hour. A new request invalidates
+any previous reset OTP for that user.
+
+#### Errors
+
+- `400 Bad Request`: email is missing or is not a valid email address.
+- `500 Internal Server Error`: the email service is unavailable or the reset
+  email could not be sent. The token is removed when delivery fails.
+
+The email contains the six-digit OTP. The OTP is not returned in the HTTP
+response and is never stored in plaintext in the database.
+
+### 6. Reset a password
+
+`POST /auth/reset-password`
+
+Consumes the six-digit OTP received by email and sets a new password. No bearer
+token is required.
+
+#### Request body
+
+```json
+{
+  "otp": "482913",
+  "newPassword": "new-strong-password"
+}
+```
+
+#### Success: `201 Created`
+
+```json
+{
+  "message": "Password reset successfully. Please log in with your new password."
+}
+```
+
+The OTP is single-use. After a successful reset, all existing refresh tokens
+are invalidated by incrementing the user's `refreshTokenVersion`; the user must
+log in again to obtain a new access/refresh-token pair.
+
+#### Errors
+
+- `400 Bad Request`: OTP is missing, is not a string of exactly six digits, or
+  `newPassword` is shorter than 6 characters.
+- `401 Unauthorized`: OTP is invalid, expired, already used, or belongs to an
+  inactive account; message: `Invalid or expired password reset OTP`.
+
+### Password reset email configuration
+
+Password reset delivery uses the same SMTP settings as onboarding emails:
+
+```env
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=mailer@example.com
+SMTP_PASS=your-smtp-password
+SMTP_FROM=PayAssure <mailer@example.com>
+SMTP_SECURE=false
+```
+
+The reset OTP should be treated like a credential. Do not log it or include it
+in analytics. Never store it in plaintext.
+
+### 7. Refresh tokens
+
+`POST /auth/refresh`
+
+Exchanges a valid refresh token for a new access-token and refresh-token pair. The refresh token is rotated: the previous token version is invalid after a successful refresh. No bearer token is required.
+
+#### Request body
+
+```json
+{
+  "refreshToken": "<jwt-refresh-token>"
+}
+```
+
+#### Success: `201 Created`
+
+The response has the same shape as login:
+
+```json
+{
+  "accessToken": "<new-jwt-access-token>",
+  "refreshToken": "<new-jwt-refresh-token>",
+  "profileComplete": true,
+  "message": "Profile complete.",
+  "user": {
+    "id": "clx123user",
+    "username": "merchant-user",
+    "email": "merchant@example.com",
+    "role": "USER"
+  }
+}
+```
+
+#### Errors
+
+- `400 Bad Request`: `refreshToken` is missing or is not a string.
+- `401 Unauthorized`: token is missing, malformed, expired, signed with the wrong secret, belongs to a missing/inactive user, or has an old token version; message: `Invalid refresh token`.
+
+### 8. Logout
+
+`POST /auth/logout`
+
+Invalidates the current user's refresh-token version. Existing access tokens remain subject to normal JWT expiry, but refresh attempts using the old token version fail.
+
+#### Headers
+
+```http
+Authorization: Bearer <access_token>
+```
+
+#### Request body
+
+None.
+
+#### Success: `200 OK`
+
+```json
+{
+  "message": "Logged out successfully"
+}
+```
+
+#### Errors
+
+- `401 Unauthorized`: bearer token is missing, expired, revoked, or invalid.
+
+### 9. List users
+
+`GET /auth/users`
+
+Returns users for administration. Only a `SUPER_ADMIN` may access this endpoint.
+
+#### Headers
+
+```http
+Authorization: Bearer <super_admin_access_token>
+```
+
+#### Query parameters
+
+All parameters are optional:
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `role` | `SUPER_ADMIN \| ADMIN \| USER` | none | Exact role filter. |
+| `isActive` | boolean | none | Filter by active status. |
+| `search` | string | none | Case-insensitive partial match on username or email. |
+| `skip` | integer, minimum 0 | `0` | Number of records to skip. |
+| `take` | integer, minimum 1 | `10` | Number of records to return. |
+| `sortBy` | `username \| email \| role \| createdAt \| updatedAt` | `createdAt` | Sort field. |
+| `sortOrder` | `asc \| desc` | `desc` | Sort direction. |
+
+Example:
+
+`GET /auth/users?role=USER&isActive=true&search=merchant&skip=0&take=10&sortBy=createdAt&sortOrder=desc`
+
+#### Success: `200 OK`
+
+```json
+{
+  "data": [
+    {
+      "id": "clx123user",
+      "username": "merchant-user",
+      "email": "merchant@example.com",
+      "role": "USER",
+      "isActive": true,
+      "createdAt": "2026-09-10T08:30:00.000Z",
+      "updatedAt": "2026-09-10T08:30:00.000Z"
+    }
+  ],
+  "total": 1,
+  "skip": 0,
+  "take": 10,
+  "hasMore": false
+}
+```
+
+#### Errors
+
+- `400 Bad Request`: enum, boolean, integer, minimum, or sort value is invalid.
+- `401 Unauthorized`: bearer token is missing, expired, revoked, or invalid.
+- `403 Forbidden`: authenticated user is not a `SUPER_ADMIN`; message: `Only super admins can view all users`.
+
+### 10. Delete a user
+
+`DELETE /auth/:id`
+
+Deletes a user account. A user may delete their own account. A `SUPER_ADMIN` may delete any account. Other users may not delete another account.
+
+#### Path parameter
+
+- `id`: target user ID.
+
+#### Headers
+
+```http
+Authorization: Bearer <access_token>
+```
+
+#### Request body
+
+None.
+
+#### Success: `200 OK`
+
+```json
+{
+  "message": "User deleted successfully"
+}
+```
+
+#### Errors
+
+- `401 Unauthorized`: bearer token is missing, expired, revoked, or invalid.
+- `401 Unauthorized`: target user does not exist; the current service message is `User not found`.
+- `403 Forbidden`: authenticated user is deleting another user without the `SUPER_ADMIN` role; message: `Only a super admin can delete another user`.
+
+## Token and Authorization Details
+
+### JWT claims
+
+Tokens contain these claims:
+
+```json
+{
+  "sub": "clx123user",
+  "username": "merchant-user",
+  "email": "merchant@example.com",
+  "role": "USER",
+  "version": 0
+}
+```
+
+Clients should treat access and refresh tokens as opaque strings and should not construct or modify JWT claims themselves.
+
+### Token invalidation
+
+- `POST /auth/refresh` increments `refreshTokenVersion` and returns a new pair.
+- `POST /auth/logout` increments `refreshTokenVersion` without issuing a new pair.
+- The JWT strategy also rejects tokens when the user is inactive or the token's version no longer matches the database.
+
+### Security notes
+
+- Passwords are stored as bcrypt hashes and are never returned by these endpoints.
+- Login intentionally returns the same `Invalid credentials` message for a missing user, inactive user, or incorrect password.
+- Store refresh tokens securely and send them only to `/auth/refresh`.
+- Do not log or expose access tokens, refresh tokens, password values, or API secrets in client-visible diagnostics.
+
+## Related Business Authentication
+
+The following route authenticates a business integration rather than a platform
+user. It is implemented by `SettlementController`, so its path is outside the
+`/auth` controller, but it is part of the platform's authentication flows.
+
+### Authenticate a business integration
+
+`POST /settlement/authenticate`
+
+Verifies a business API key and API secret and creates a settlement session.
+Unlike the older settlement design document, the current controller protects
+this endpoint with a platform JWT. Send both credentials below and a valid user
+access token whose email matches the onboarding participant owning the API key.
+
+#### Headers
+
+```http
+Authorization: Bearer <access_token>
+Content-Type: application/json
+```
+
+#### Request body
+
+```json
+{
+  "apiKey": "pk_live_abc123",
+  "apiSecret": "sk_live_xyz789"
+}
+```
+
+#### Success: `200 OK`
+
+```json
+{
+  "success": true,
+  "token": "session_1725900000000_0123456789abcdef",
+  "expiresIn": 3600,
+  "tokenType": "Bearer",
+  "business": {
+    "id": "participant-123",
+    "businessName": "Fresh Store Ltd",
+    "participantType": "RETAILER",
+    "status": "ACTIVE"
+  }
+}
+```
+
+The returned settlement session token is used by settlement operations in the
+`x-settlement-session` header. The exact expiry is controlled by the settlement
+configuration; the documented default is 3600 seconds.
+
+#### Errors
+
+- `400 Bad Request`: `apiKey` or `apiSecret` is missing, empty, or not a
+  string.
+- `401 Unauthorized`: platform JWT is missing/invalid, the token owner does
+  not own the supplied API credentials (`INVALID_TOKEN_FOR_API_KEYS`), or the
+  API secret is incorrect (`INVALID_CREDENTIALS`).
+- `404 Not Found`: no active integration exists for the API key
+  (`BUSINESS_NOT_FOUND`).
+- `403 Forbidden`: the business participant status is not `ACTIVE`
+  (`BUSINESS_NOT_ACTIVE`).
+
+Error example:
+
+```json
+{
+  "statusCode": 401,
+  "message": "Invalid API credentials",
+  "error": "INVALID_CREDENTIALS"
+}
+```
+
+## Source of Truth
+
+- Controller and route declarations: `src/auth/auth.controller.ts`
+- Authentication and authorization behavior: `src/auth/auth.service.ts`
+- Request validation: `src/auth/dto/`
+- JWT verification: `src/auth/jwt.strategy.ts`
+- Global validation error formatting: `src/common/filters/validation-error.filter.ts`

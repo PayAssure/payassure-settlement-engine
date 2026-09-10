@@ -1,6 +1,6 @@
-import { Controller, Post, Get, Param, Body, Headers, UseGuards, BadRequestException, Req, UnauthorizedException, Logger, UsePipes } from '@nestjs/common';
+import { Controller, Post, Get, Param, Body, Headers, Query, UseGuards, BadRequestException, Req, UnauthorizedException, Logger, UsePipes } from '@nestjs/common';
 import * as crypto from 'crypto';
-import { ApiOperation, ApiResponse, ApiTags, ApiBearerAuth, ApiHeader, ApiBody } from '@nestjs/swagger';
+import { ApiOperation, ApiResponse, ApiTags, ApiBearerAuth, ApiHeader, ApiBody, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { SettlementService } from './settlement.service';
 import { AuthenticateDto } from './dto/authenticate.dto';
 import { InitiateSettlementDto } from './dto/initiate-settlement.dto';
@@ -19,6 +19,7 @@ import {
 } from './dto/settlement-response.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { MpesaCallbackTransformPipe } from './pipes/mpesa-callback-transform.pipe';
+import { SettlementHistoryQueryDto } from './dto/settlement-history-query.dto';
 
 @ApiTags('Settlement')
 @Controller('settlement')
@@ -367,6 +368,27 @@ export class SettlementController {
   })
   async getTransaction(@Param('transactionId') transactionId: string) {
     return this.settlementService.getTransaction(transactionId);
+  }
+
+  @Get('merchant/:merchantId')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiParam({ name: 'merchantId', example: 'pay_retailer_001', description: 'Merchant ID from the business integration credentials.' })
+  @ApiQuery({ name: 'from', required: false, type: String, example: '2026-09-01T00:00:00.000Z', description: 'Inclusive createdAt lower bound in ISO 8601 format.' })
+  @ApiQuery({ name: 'to', required: false, type: String, example: '2026-10-01T00:00:00.000Z', description: 'Exclusive createdAt upper bound in ISO 8601 format.' })
+  @ApiOperation({
+    summary: 'Query settlements by merchant ID',
+    description: 'Returns settlements created for the integration identified by merchantId. Optional from/to filters apply to settlement createdAt timestamps.',
+  })
+  @ApiResponse({ status: 200, description: 'Merchant settlements retrieved successfully.' })
+  @ApiResponse({ status: 400, description: 'Invalid date filter or inverted date range.', type: ErrorResponseDto })
+  @ApiResponse({ status: 401, description: 'Missing or invalid user access token.', type: ErrorResponseDto })
+  @ApiResponse({ status: 404, description: 'Merchant integration not found.', type: ErrorResponseDto })
+  async getSettlementsByMerchantId(
+    @Param('merchantId') merchantId: string,
+    @Query() filters: SettlementHistoryQueryDto,
+  ) {
+    return this.settlementService.getSettlementsByMerchantId(merchantId, filters);
   }
 
   /**

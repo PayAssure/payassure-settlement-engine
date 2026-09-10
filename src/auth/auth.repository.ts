@@ -102,6 +102,35 @@ export class AuthRepository implements OnModuleDestroy {
     });
   }
 
+  async updatePassword(userId: string, passwordHash: string) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash },
+    });
+  }
+
+  async deletePasswordResetTokens(userId: string) {
+    return this.prisma.passwordResetToken.deleteMany({ where: { userId } });
+  }
+
+  async createPasswordResetToken(data: { userId: string; tokenHash: string; expiresAt: Date }) {
+    return this.prisma.passwordResetToken.create({ data });
+  }
+
+  async findPasswordResetToken(tokenHash: string) {
+    return this.prisma.passwordResetToken.findUnique({
+      where: { tokenHash },
+      include: { user: true },
+    });
+  }
+
+  async consumePasswordResetToken(id: string) {
+    return this.prisma.passwordResetToken.updateMany({
+      where: { id, usedAt: null, expiresAt: { gt: new Date() } },
+      data: { usedAt: new Date() },
+    });
+  }
+
   async deleteUser(userId: string) {
     return this.prisma.user.delete({ where: { id: userId } });
   }

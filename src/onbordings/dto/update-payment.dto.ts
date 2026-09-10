@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import {  IsObject, ValidateNested } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { IsObject, ValidateNested } from 'class-validator';
 import { PaymentMethodDto } from './payment-method.dto';
 
 export class UpdatePaymentDto {
@@ -15,6 +15,7 @@ export class UpdatePaymentDto {
       provider: 'Safaricom',
     },
   })
+  @Transform(({ value }) => (value === null ? undefined : value))
   @ValidateNested()
   @Type(() => PaymentMethodDto)
   @IsObject()

@@ -57,7 +57,16 @@ async function bootstrap() {
 
   app.useGlobalInterceptors(new RequestBodyLoggingInterceptor());
   app.useGlobalFilters(new ValidationErrorFilter());
-  app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+      transformOptions: {
+        enableImplicitConversion: true,
+      },
+    }),
+  );
   const config = new DocumentBuilder()
     .setTitle('PayAssure Platform API')
     .setDescription(`

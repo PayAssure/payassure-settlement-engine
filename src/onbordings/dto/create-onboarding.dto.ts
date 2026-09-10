@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ParticipantType } from '@prisma/client';
 import { IsEmail, IsEnum, IsOptional, IsString, ValidateNested } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { PaymentMethodDto } from './payment-method.dto';
 
 export class CreateOnboardingDto {
@@ -14,61 +14,73 @@ export class CreateOnboardingDto {
   businessName!: string;
 
   @ApiPropertyOptional({ example: 'REG-1001' })
+  @Transform(({ value }) => (value === null ? undefined : value))
   @IsOptional()
   @IsString()
   registrationNumber?: string;
 
   @ApiPropertyOptional({ example: 'A123456789Z' })
+  @Transform(({ value }) => (value === null ? undefined : value))
   @IsOptional()
   @IsString()
   kraPin?: string;
 
   @ApiPropertyOptional({ example: 'Limited Company' })
+  @Transform(({ value }) => (value === null ? undefined : value))
   @IsOptional()
   @IsString()
   businessType?: string;
 
   @ApiPropertyOptional({ example: 'Retail' })
+  @Transform(({ value }) => (value === null ? undefined : value))
   @IsOptional()
   @IsString()
   industry?: string;
 
   @ApiPropertyOptional({ example: 'Nairobi, Kenya' })
+  @Transform(({ value }) => (value === null ? undefined : value))
   @IsOptional()
   @IsString()
   physicalAddress?: string;
 
   @ApiPropertyOptional({ example: 'Jane Doe' })
+  @Transform(({ value }) => (value === null ? undefined : value))
   @IsOptional()
   @IsString()
   contactName?: string;
 
   @ApiPropertyOptional({ example: 'jane@example.com' })
+  @Transform(({ value }) => (value === null ? undefined : value))
   @IsOptional()
   @IsEmail()
   email?: string;
 
   @ApiPropertyOptional({ example: '+254700000000' })
+  @Transform(({ value }) => (value === null ? undefined : value))
   @IsOptional()
   @IsString()
   phoneNumber?: string;
 
   @ApiPropertyOptional({ example: 'BANK' })
+  @Transform(({ value }) => (value === null ? undefined : value))
   @IsOptional()
   @IsString()
   settlementMethod?: string;
 
   @ApiPropertyOptional({ example: '123456789' })
+  @Transform(({ value }) => (value === null ? undefined : value))
   @IsOptional()
   @IsString()
   settlementAccount?: string;
 
   @ApiPropertyOptional({ example: 'Odoo' })
+  @Transform(({ value }) => (value === null ? undefined : value))
   @IsOptional()
   @IsString()
   posSystem?: string;
 
   @ApiPropertyOptional({ example: 'DAILY' })
+  @Transform(({ value }) => (value === null ? undefined : value))
   @IsOptional()
   @IsString()
   settlementPreference?: string;
@@ -86,6 +98,7 @@ export class CreateOnboardingDto {
       provider: 'Safaricom',
     },
   })
+  @Transform(({ value }) => (value === null ? undefined : value))
   @ValidateNested()
   @Type(() => PaymentMethodDto)
   @IsOptional()

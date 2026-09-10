@@ -211,6 +211,24 @@ export class SettlementRecordRepository {
     return this.prisma.settlement.findMany({ where: { businessId }, include: { transactions: true }, skip, take, orderBy: { createdAt: 'desc' } });
   }
 
+  async findSettlementsByIntegrationId(integrationId: string, from?: Date, to?: Date) {
+    return this.prisma.settlement.findMany({
+      where: {
+        integrationId,
+        ...(from || to
+          ? {
+              createdAt: {
+                ...(from ? { gte: from } : {}),
+                ...(to ? { lt: to } : {}),
+              },
+            }
+          : {}),
+      },
+      include: { transactions: true },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   async findSettlementsBySupplierMerchantId(merchantId: string) {
     try {
       return await this.prisma.settlement.findMany({
