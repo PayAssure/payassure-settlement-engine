@@ -358,13 +358,11 @@ test('covers auth, onboarding, and settlement API flows end to end', async () =>
   assert.equal(paymentResult.payment?.status, 'PENDING_VERIFICATION');
   const activatedPayment = await onboardingController.activatePayment({ user: { email: 'merchant@example.com' } } as any, { paymentActivationSecret: paymentResult.payment?.paymentActivationSecret } as any);
   assert.equal(activatedPayment.payment?.status, 'VERIFIED');
-  const activatedParticipant = await onboardingController.activate(onboardingResult.id);
-  assert.equal(activatedParticipant.status, 'ACTIVE');
   console.log('step 5 passed: onboarding payment activation');
 
   console.log('step 6: settlement authenticate');
   const settlementRepository = new SettlementRepositoryStub();
-  const settlementService = new SettlementService(settlementRepository as any);
+  const settlementService = new SettlementService(settlementRepository as any, {} as any, {} as any);
   (settlementService as any).prisma = {
     integration: {
       findFirst: async () => ({
@@ -422,7 +420,7 @@ test('covers rejected authentication and settlement failure scenarios', async ()
 
   console.log('step 2: reject invalid settlement authentication credentials');
   const settlementRepository = new SettlementRepositoryStub();
-  const settlementService = new SettlementService(settlementRepository as any);
+  const settlementService = new SettlementService(settlementRepository as any, {} as any, {} as any);
   (settlementService as any).prisma = {
     integration: {
       findFirst: async () => ({
@@ -487,7 +485,7 @@ test('covers rejected authentication and settlement failure scenarios', async ()
 
 test('exposes a swagger-driven settlement scenario runner', async () => {
   const settlementRepository = new SettlementRepositoryStub();
-  const settlementService = new SettlementService(settlementRepository as any);
+  const settlementService = new SettlementService(settlementRepository as any, {} as any, {} as any);
   (settlementService as any).prisma = {
     integration: {
       findFirst: async () => ({

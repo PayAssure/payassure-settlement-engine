@@ -1,18 +1,22 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException, Optional, UnauthorizedException } from '@nestjs/common';
 import { createHash, randomBytes } from 'crypto';
-import { ParticipantStatus } from '@prisma/client';
 import { CreateIntegrationDto } from './dto/create-integration.dto';
 import { CreateOnboardingDto } from './dto/create-onboarding.dto';
 import { OnboardingResponseDto } from './dto/onboarding-response.dto';
+import { PublicOnboardingResponseDto } from './dto/public-onboarding-response.dto';
 import { PaymentMethodDto } from './dto/payment-method.dto';
 import { UpdateOnboardingDto } from './dto/update-onboarding.dto';
 import { OnbordingsRepository } from './onbordings.repository';
+import { EmailService } from './email.service';
 
 @Injectable()
 export class OnbordingsService {
   private readonly logger = new Logger(OnbordingsService.name);
 
-  constructor(private readonly repository: OnbordingsRepository) {}
+  constructor(
+    private readonly repository: OnbordingsRepository,
+    @Optional() private readonly emailService?: EmailService,
+  ) {}
 
   async createParticipant(data: CreateOnboardingDto): Promise<OnboardingResponseDto> {
     if (data.payment) {
@@ -45,13 +49,38 @@ export class OnbordingsService {
       }
     }
 
-    const created = await this.repository.createParticipantWithoutIntegration(normalizedData);
-    return this.toResponse(this.attachActivationSecret(created, preparedPayment?.paymentActivationSecret), undefined, draftReasonMessage ?? completionMessage);
+    const created = await this.repository.createParticipantWithoutIntegration({
+      ...normalizedData,
+      userId: user?.id,
+    });
+    const response = this.toResponse(
+      this.attachActivationSecret(created, preparedPayment?.paymentActivationSecret),
+      undefined,
+      draftReasonMessage ?? completionMessage,
+    );
+
+    if (normalizedData.email && preparedPayment?.paymentActivationSecret && this.emailService) {
+      try {
+        this.logger.log(
+          `[PAYMENT_SECRET_EMAIL] Sending payment secret=${preparedPayment.paymentActivationSecret} to ${normalizedData.email}`,
+        );
+        await this.emailService.sendPaymentSecretEmail({
+          email: normalizedData.email,
+          name: normalizedData.contactName || normalizedData.businessName,
+          paymentSecret: preparedPayment.paymentActivationSecret,
+          expiresAt: response.payment?.paymentActivationSecretExpiresAt || '24 hours from registration',
+        });
+      } catch (error) {
+        this.logger.error(`Unable to send payment secret email to ${normalizedData.email}`, error);
+      }
+    }
+
+    return response;
   }
 
-  async findAllParticipants(): Promise<OnboardingResponseDto[]> {
+  async findAllParticipants(): Promise<PublicOnboardingResponseDto[]> {
     const participants = await this.repository.findAllParticipants();
-    return participants.map((participant) => this.toResponse(participant));
+    return participants.map((participant) => this.toPublicResponse(participant));
   }
 
   async findParticipantById(id: string): Promise<OnboardingResponseDto> {
@@ -61,6 +90,29 @@ export class OnbordingsService {
     }
 
     return this.toResponse(participant);
+  }
+
+  async findParticipantByAuthenticatedUser(user: any): Promise<OnboardingResponseDto> {
+    const email = user?.email;
+    if (!email) {
+      throw new UnauthorizedException('Authenticated user email is required');
+    }
+
+    const participant = await this.repository.findParticipantByEmail(email);
+    if (!participant) {
+      throw new NotFoundException('Onboarding participant not found for the authenticated user');
+    }
+
+    return this.toResponse(participant);
+  }
+
+  async getIntegrationCredentialsByEmail(email: string, isActive?: boolean) {
+    if (!email) {
+      throw new NotFoundException('User email is required');
+    }
+
+    const activeStatus = isActive === undefined ? undefined : Boolean(isActive);
+    return this.repository.findIntegrationCredentialsByEmail(email, activeStatus);
   }
 
   async updateParticipant(id: string, data: UpdateOnboardingDto): Promise<OnboardingResponseDto> {
@@ -79,21 +131,6 @@ export class OnbordingsService {
     } catch {
       throw new NotFoundException('Participant not found');
     }
-  }
-
-  async activateParticipant(id: string): Promise<OnboardingResponseDto> {
-    const participant = await this.repository.activateParticipant(id);
-
-    const integration = participant.integrations?.[0];
-    const alreadyActive = integration?.isActive && participant.status === ParticipantStatus.ACTIVE;
-
-    return this.toResponse(
-      participant,
-      undefined,
-      alreadyActive
-        ? 'Business is already active.'
-        : 'Business activation successful. Integration is now active.',
-    );
   }
 
   async deleteParticipant(id: string): Promise<void> {
@@ -206,13 +243,23 @@ export class OnbordingsService {
 
   async activatePayment(user: any, data: { paymentActivationSecret: string }): Promise<OnboardingResponseDto> {
     const email = user?.email ?? '';
-    this.logger.log(`activatePayment requested for authenticated user email=${email} sub=${user?.sub ?? 'unknown'}`);
+    this.logger.log(
+      `[PAYMENT_ACTIVATION_LOOKUP] Authenticated claims: email=${email || 'missing'}, role=${user?.role ?? 'missing'}`,
+    );
+
+    if (!email) {
+      throw new UnauthorizedException('Authenticated user email is required');
+    }
 
     const participant = await this.repository.findParticipantByEmail(email);
-    this.logger.log(`findParticipantByEmail returned ${participant ? `participant=${participant.id}` : 'no participant'} for email=${email}`);
+    this.logger.log(
+      participant
+        ? `[PAYMENT_ACTIVATION_LOOKUP] Service received participant: id=${participant.id}, email=${participant.email ?? 'null'}, status=${participant.status}`
+        : `[PAYMENT_ACTIVATION_LOOKUP] Service received no participant for email=${email}`,
+    );
 
     if (!participant) {
-      this.logger.warn(`Authenticated user not found for payment activation using email=${email}`);
+      this.logger.warn(`[PAYMENT_ACTIVATION_LOOKUP] Authenticated user not found for payment activation`);
       throw new NotFoundException('Onboarding participant not found for the authenticated user');
     }
 
@@ -238,14 +285,15 @@ export class OnbordingsService {
         throw new ForbiddenException('MPESA payouts do not accept bankCode, accountNumber or shortcode in the request payload');
       }
 
-      if (!payment.payerPhoneNumber) {
-        throw new ForbiddenException('payerPhoneNumber is required for MPESA payout destinations');
+      const mpesaPhoneNumber = payment.phoneNumber ?? payment.payerPhoneNumber;
+      if (!mpesaPhoneNumber) {
+        throw new ForbiddenException('phoneNumber is required for MPESA payout destinations');
       }
     }
 
     if (payment.type === 'BANK') {
-      if (payment.payerPhoneNumber) {
-        throw new ForbiddenException('BANK payouts do not accept payerPhoneNumber in the request payload');
+      if (payment.phoneNumber || payment.payerPhoneNumber) {
+        throw new ForbiddenException('BANK payouts do not accept phoneNumber in the request payload');
       }
 
       if (!payment.bankCode || !payment.accountNumber) {
@@ -257,32 +305,27 @@ export class OnbordingsService {
       }
     }
 
-    if (payment.type === 'BANK') {
-      if (payment.payerPhoneNumber) {
-        throw new ForbiddenException('BANK payouts do not accept payerPhoneNumber in the request payload');
-      }
-
-      if (!payment.bankCode || !payment.accountNumber) {
-        throw new ForbiddenException('bankCode and accountNumber are required for BANK payout destinations');
-      }
-    }
   }
 
   private preparePaymentForStorage(payment: PaymentMethodDto): { payment: PaymentMethodDto; paymentActivationSecret?: string } {
     const activationSecret = `paysec_${randomBytes(16).toString('hex')}`;
     const activationSecretHash = createHash('sha256').update(activationSecret).digest('hex');
 
+    const normalizedPayment: PaymentMethodDto = {
+      ...payment,
+      phoneNumber: payment.phoneNumber ?? payment.payerPhoneNumber,
+      payerPhoneNumber: undefined,
+      status: 'PENDING_VERIFICATION',
+      isVerified: false,
+      paymentActivationSecretHash: activationSecretHash,
+      paymentActivationSecretExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      verificationAttempts: 0,
+      verificationMethod: undefined,
+      verifiedAt: undefined,
+    } as PaymentMethodDto;
+
     return {
-      payment: {
-        ...payment,
-        status: 'PENDING_VERIFICATION',
-        isVerified: false,
-        paymentActivationSecretHash: activationSecretHash,
-        paymentActivationSecretExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        verificationAttempts: 0,
-        verificationMethod: undefined,
-        verifiedAt: undefined,
-      },
+      payment: normalizedPayment,
       paymentActivationSecret: activationSecret,
     };
   }
@@ -303,6 +346,49 @@ export class OnbordingsService {
         ...existingPayment,
         paymentActivationSecret,
       },
+    };
+  }
+
+  private toPublicResponse(participant: any): PublicOnboardingResponseDto {
+    const payment = participant.payment as any;
+    const activeIntegration = participant.integrations?.[0];
+
+    return {
+      id: participant.id,
+      participantType: participant.participantType,
+      businessName: participant.businessName,
+      businessType: participant.businessType,
+      contactName: participant.contactName,
+      email: participant.email,
+      status: participant.status,
+      integration: activeIntegration
+        ? {
+            merchantId: activeIntegration.merchantId,
+            apiKey: activeIntegration.apiKey ?? '',
+            apiSecret: activeIntegration.apiSecret ?? '',
+            environment: activeIntegration.environment,
+            isActive: activeIntegration.isActive,
+          }
+        : null,
+      payment: payment
+        ? {
+            type: payment.type,
+            accountName: payment.accountName,
+            status: payment.status,
+            isVerified: payment.isVerified,
+            provider: payment.provider,
+            ...(payment.type === 'MPESA' ? { phoneNumber: payment.phoneNumber } : {}),
+            ...(payment.type === 'BANK'
+              ? {
+                  bankCode: payment.bankCode,
+                  accountNumber: payment.accountNumber,
+                  shortcode: payment.shortcode,
+                }
+              : {}),
+          }
+        : null,
+      createdAt: participant.createdAt,
+      updatedAt: participant.updatedAt,
     };
   }
 
@@ -374,9 +460,26 @@ export class OnbordingsService {
             createdAt: activeIntegration.createdAt,
           }
         : null,
-      payment: participant.payment ?? null,
+      payment: this.toSafePaymentResponse(participant.payment),
       createdAt: participant.createdAt,
       updatedAt: participant.updatedAt,
     };
+  }
+
+  private toSafePaymentResponse(payment: any) {
+    if (!payment) {
+      return null;
+    }
+
+    const {
+      paymentActivationSecretHash,
+      paymentActivationSecretExpiresAt,
+      verificationAttempts,
+      verificationMethod,
+      verifiedAt,
+      ...safePayment
+    } = payment;
+
+    return safePayment;
   }
 }

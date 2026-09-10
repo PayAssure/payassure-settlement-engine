@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException, ForbiddenException, NotFoundException, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, ForbiddenException, Logger, NotFoundException, OnModuleDestroy } from '@nestjs/common';
 import { createHash, randomBytes } from 'crypto';
 import { ParticipantStatus, Prisma, PrismaClient } from '@prisma/client';
 import { CreateIntegrationDto } from './dto/create-integration.dto';
@@ -7,6 +7,7 @@ import { UpdateOnboardingDto } from './dto/update-onboarding.dto';
 
 @Injectable()
 export class OnbordingsRepository implements OnModuleDestroy {
+  private readonly logger = new Logger(OnbordingsRepository.name);
   private prisma = new PrismaClient();
 
   async findUserByEmail(email: string) {
@@ -33,9 +34,65 @@ export class OnbordingsRepository implements OnModuleDestroy {
     });
   }
 
-  async createParticipantWithoutIntegration(data: CreateOnboardingDto) {
+  async findParticipantByUsername(username: string) {
+    if (!username) {
+      return null;
+    }
+
+    const participant = await this.prisma.onboardingParticipant.findFirst({
+      where: { user: { username } },
+      include: { integrations: { orderBy: { createdAt: 'desc' }, take: 1 } },
+    });
+
+    this.logger.log(
+      participant
+        ? `[PAYMENT_ACTIVATION_LOOKUP] Username match found: participantId=${participant.id}, email=${participant.email ?? 'null'}, status=${participant.status}, integrations=${participant.integrations?.length ?? 0}`
+        : `[PAYMENT_ACTIVATION_LOOKUP] No onboarding participant matched username=${username}`,
+    );
+
+    return participant;
+  }
+
+  async findIntegrationCredentialsByEmail(email: string, isActive?: boolean) {
+    if (!email) {
+      throw new NotFoundException('User email is required');
+    }
+
+    const participant = await this.prisma.onboardingParticipant.findFirst({
+      where: {
+        email: { equals: email, mode: 'insensitive' },
+      },
+      include: {
+        integrations: {
+          where: isActive === undefined ? undefined : { isActive },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        },
+      },
+    });
+
+    const integration = participant?.integrations?.[0];
+    if (!participant || !integration) {
+      throw new NotFoundException('Integration credentials not found for the provided email and active status');
+    }
+
+    return {
+      id: integration.id,
+      participantId: participant.id,
+      participantEmail: participant.email,
+      merchantId: integration.merchantId,
+      apiKey: integration.apiKey,
+      apiSecret: integration.apiSecret,
+      environment: integration.environment,
+      isActive: integration.isActive,
+      createdAt: integration.createdAt,
+    };
+  }
+
+  async createParticipantWithoutIntegration(data: CreateOnboardingDto & { userId?: string }) {
     return this.prisma.onboardingParticipant.create({
       data: {
+        userId: data.userId,
         participantType: data.participantType,
         businessName: data.businessName,
         registrationNumber: data.registrationNumber,
@@ -93,7 +150,7 @@ export class OnbordingsRepository implements OnModuleDestroy {
       ...data,
     });
 
-    return this.prisma.onboardingParticipant.update({
+    const participant = await this.prisma.onboardingParticipant.update({
       where: { id },
       data: {
         ...data,
@@ -102,6 +159,13 @@ export class OnbordingsRepository implements OnModuleDestroy {
       },
       include: { integrations: { orderBy: { createdAt: 'desc' }, take: 1 } },
     });
+
+    await this.prisma.integration.updateMany({
+      where: { participantId: id },
+      data: { isActive: nextStatus === ParticipantStatus.DOCUMENTS_SUBMITTED },
+    });
+
+    return this.findParticipantById(participant.id);
   }
 
   async updateWebhook(id: string, webhookUrl: string) {
@@ -126,48 +190,6 @@ export class OnbordingsRepository implements OnModuleDestroy {
     return this.prisma.onboardingParticipant.update({
       where: { id },
       data: { payment: payment as Prisma.InputJsonValue },
-      include: { integrations: { orderBy: { createdAt: 'desc' }, take: 1 } },
-    });
-  }
-
-  async activateParticipant(id: string) {
-    const participant = await this.prisma.onboardingParticipant.findUnique({
-      where: { id },
-      include: { integrations: { orderBy: { createdAt: 'desc' }, take: 1 } },
-    });
-
-    if (!participant) {
-      throw new NotFoundException('Participant not found');
-    }
-
-    const integration = participant.integrations?.[0];
-    if (!integration) {
-      throw new NotFoundException('Integration not found for participant');
-    }
-
-    const isAlreadyActive = integration.isActive && participant.status === ParticipantStatus.ACTIVE;
-    if (isAlreadyActive) {
-      return participant;
-    }
-
-    if (!participant.payment) {
-      throw new ForbiddenException('Participant payment destination must be configured before activation');
-    }
-
-    const payment = participant.payment as any;
-    const paymentIsVerified = payment?.status === 'VERIFIED' || payment?.isVerified === true;
-    if (!paymentIsVerified) {
-      throw new ForbiddenException('Participant payment destination must be verified before activation');
-    }
-
-    await this.prisma.integration.update({
-      where: { id: integration.id },
-      data: { isActive: true },
-    });
-
-    return this.prisma.onboardingParticipant.update({
-      where: { id },
-      data: { status: ParticipantStatus.ACTIVE },
       include: { integrations: { orderBy: { createdAt: 'desc' }, take: 1 } },
     });
   }
@@ -264,7 +286,9 @@ export class OnbordingsRepository implements OnModuleDestroy {
         apiSecretHash: this.hashSecret(apiSecret),
         environment: data.environment ?? 'production',
         webhookUrl: data.webhookUrl,
-        isActive: false,
+        isActive:
+          this.getStatusForProfile(participant as unknown as Partial<CreateOnboardingDto>) ===
+          ParticipantStatus.DOCUMENTS_SUBMITTED,
       },
     });
 

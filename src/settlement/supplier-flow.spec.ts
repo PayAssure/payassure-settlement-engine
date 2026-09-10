@@ -105,7 +105,7 @@ test('track settlement exposes retailer, supplier, and payassure views for the s
     },
   });
 
-  const service = new SettlementService(repository as any);
+  const service = new SettlementService(repository as any, {} as any, {} as any);
   (service as any).prisma = {
     onboardingParticipant: {
       findUnique: async () => ({ id: 'retailer-1', businessName: 'ABC Supermarket' }),
@@ -130,7 +130,7 @@ test('track settlement exposes retailer, supplier, and payassure views for the s
 
 test('supplier authentication and settlement listing only return the authenticated supplier allocations', async () => {
   const repository = new SupplierSettlementRepositoryStub();
-  const service = new SettlementService(repository as any);
+  const service = new SettlementService(repository as any, {} as any, {} as any);
   (service as any).prisma = {
     integration: {
       findFirst: async ({ where }: any) => {

@@ -11,17 +11,20 @@ export class SettlementRecordRepository {
     internalMerchantTransactionReference: string,
     data: InitiateSettlementDto,
   ) {
+    const paymentMethod = {
+      type: data.paymentMethod.type,
+      payerPhoneNumber: String(data.paymentMethod.payerPhoneNumber ?? '').trim() || undefined,
+      provider: data.paymentMethod.provider ?? undefined,
+    };
+
     const paymentPayload = {
       merchantTransactionReference: data.merchantTransactionReference,
+      merchantId: data.merchantId ?? undefined,
       totalAmount: data.totalAmount,
       currency: data.currency,
       settlementMethod: data.settlementMethod,
       description: data.description ?? undefined,
-      paymentMethod: {
-        type: data.paymentMethod.type,
-        payerPhoneNumber: data.paymentMethod.payerPhoneNumber,
-        provider: data.paymentMethod.provider ?? undefined,
-      },
+      paymentMethod,
       callbackUrl: data.callbackUrl ?? undefined,
       transactionDate: data.transactionDate,
       suppliers: data.suppliers.map((supplier) => ({
@@ -53,7 +56,11 @@ export class SettlementRecordRepository {
         reference: payAssureReference,
         merchantTransactionReference: internalMerchantTransactionReference,
         description: data.description ?? undefined,
-        metadata: { originalMerchantReference: data.merchantTransactionReference, ...data.metadata },
+        metadata: {
+          originalMerchantReference: data.merchantTransactionReference,
+          retailerMerchantId: data.merchantId ?? undefined,
+          ...data.metadata,
+        },
         paymentPayload,
         status: SettlementStatus.INITIATED,
       } as Prisma.SettlementCreateInput,
@@ -89,6 +96,18 @@ export class SettlementRecordRepository {
       firstThreeParts,
     ].filter(Boolean);
 
+    const metadataLookupFields = [
+      'payoutReference',
+      'latestPayoutReference',
+      'lastPayoutCallback.reference',
+      'originalMerchantReference',
+      'parentMerchantTransactionReference',
+      'merchantTransactionReference',
+      'callbackIdentifier',
+      'callbackToken',
+      'callbackUrl',
+    ];
+
     const uniqueCandidates = Array.from(new Set(candidates));
 
     for (const candidate of uniqueCandidates) {
@@ -98,13 +117,71 @@ export class SettlementRecordRepository {
             { reference: candidate },
             { merchantTransactionReference: candidate },
             { metadata: { path: ['originalMerchantReference'], equals: candidate } },
+            { metadata: { path: ['parentMerchantTransactionReference'], equals: candidate } },
+            { metadata: { path: ['payoutReference'], equals: candidate } },
+            { metadata: { path: ['latestPayoutReference'], equals: candidate } },
+            { metadata: { path: ['lastPayoutCallback', 'reference'], equals: candidate } },
+            { metadata: { path: ['callbackIdentifier'], equals: candidate } },
+            { metadata: { path: ['callbackToken'], equals: candidate } },
+            { metadata: { path: ['callbackUrl'], equals: candidate } },
             { paymentPayload: { path: ['merchantTransactionReference'], equals: candidate } },
+            ...(metadataLookupFields.includes('merchantTransactionReference') ? [{ metadata: { path: ['merchantTransactionReference'], equals: candidate } }] : []),
           ],
         },
         include: { transactions: true },
       });
 
       if (settlement) {
+        return settlement;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Find settlement by B2B payout callback identifier (UUID from callback URL)
+   * Searches through payoutDispatches metadata for matching callbackIdentifier
+   */
+  async findSettlementByPayoutCallbackIdentifier(callbackIdentifier: string): Promise<(Settlement & { transactions: Transaction[] }) | null> {
+    const normalizedId = String(callbackIdentifier ?? '').trim();
+    if (!normalizedId) {
+      return null;
+    }
+
+    const matchesCallbackId = (value: any): boolean => {
+      if (!value || typeof value !== 'object') {
+        return false;
+      }
+
+      if (Array.isArray(value)) {
+        return value.some((item) => matchesCallbackId(item));
+      }
+
+      if (value.callbackIdentifier === normalizedId || value.callbackToken === normalizedId) {
+        return true;
+      }
+
+      for (const nestedValue of Object.values(value)) {
+        if (matchesCallbackId(nestedValue)) {
+          return true;
+        }
+      }
+
+      return false;
+    };
+
+    const allSettlements = await this.prisma.settlement.findMany({
+      include: { transactions: true },
+      orderBy: { createdAt: 'desc' },
+      take: 1000,
+    });
+
+    for (const settlement of allSettlements) {
+      const metadata = settlement.metadata as any;
+      if (!metadata) continue;
+
+      if (matchesCallbackId(metadata)) {
         return settlement;
       }
     }

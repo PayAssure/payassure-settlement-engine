@@ -36,7 +36,6 @@ export async function authenticateOperation(
     throw new ForbiddenException({ statusCode: 403, message: 'Business account is not active', error: 'BUSINESS_NOT_ACTIVE' });
   }
 
-  logger.log(`Business authentication passed for integrationId=${integration.id}, participantEmail=${integration.participant.email}`);
 
   const token = `session_${Date.now()}_${require('crypto').randomBytes(16).toString('hex')}`;
   const expiresAt = new Date(Date.now() + tokenExpiry * 1000);

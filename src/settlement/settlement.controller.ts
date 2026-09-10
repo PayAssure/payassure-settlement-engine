@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Param, Body, Headers, UseGuards, BadRequestException, Req, UnauthorizedException, Logger } from '@nestjs/common';
+import { Controller, Post, Get, Param, Body, Headers, UseGuards, BadRequestException, Req, UnauthorizedException, Logger, UsePipes } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { ApiOperation, ApiResponse, ApiTags, ApiBearerAuth, ApiHeader, ApiBody } from '@nestjs/swagger';
 import { SettlementService } from './settlement.service';
@@ -18,8 +18,9 @@ import {
   ErrorResponseDto,
 } from './dto/settlement-response.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { MpesaCallbackTransformPipe } from './pipes/mpesa-callback-transform.pipe';
 
-@ApiTags('settlement')
+@ApiTags('Settlement')
 @Controller('settlement')
 export class SettlementController {
   private readonly logger = new Logger(SettlementController.name);
@@ -181,6 +182,7 @@ export class SettlementController {
     @Body() body: InitiateSettlementDto,
     @Headers('x-settlement-session') settlementSessionToken: string,
   ): Promise<SettlementResponseDto> {
+    this.logger.log('[SETTLEMENT_REQUEST_PAYLOAD]', body);
     return this.settlementService.initiateSettlement(settlementSessionToken, body);
   }
 
@@ -192,8 +194,8 @@ export class SettlementController {
     return this.settlementService.handlePaymentCallback(body);
   }
 
-  @Post('internal/settlements/payment-confirmation')
-  @ApiOperation({ summary: 'Confirm that a settlement was paid by the customer', description: 'Accepts a payment confirmation payload from the payment gateway and advances the settlement into ledger allocation and payout processing.' })
+  @Post('payment-confirmation')
+  @ApiOperation({ summary: 'Confirm that a settlement was paid by the customer', description: 'Accepts an internal payment confirmation payload from the merged payment + settlement engine and advances the settlement into ledger allocation and payout processing.' })
   @ApiResponse({ status: 200, description: 'Payment confirmation processed successfully.' })
   @ApiResponse({ status: 404, description: 'Settlement was not found for the supplied identifier.' })
   async confirmSettlementPayment(@Body() body: PaymentConfirmationDto, @Headers() headers: Record<string, string | string[] | undefined>): Promise<any> {
@@ -201,8 +203,6 @@ export class SettlementController {
     const signature = this.getHeaderValue(headers, 'x-payassure-signature') ?? this.getHeaderValue(headers, 'X-PayAssure-Signature');
     const timestamp = this.getHeaderValue(headers, 'x-payassure-timestamp') ?? this.getHeaderValue(headers, 'X-PayAssure-Timestamp');
 
-    this.logger.log(`[CONFIRMATION][REQUEST] incoming settlement confirmation body=${JSON.stringify({ settlementId: body.settlementId, paymentId: body.paymentId, status: body.status, provider: body.provider, paidAmount: body.paidAmount, paidAt: body.paidAt })}`);
-    this.logger.log(`[CONFIRMATION][REQUEST] headers authorization=${authorization ?? 'missing'} signature=${signature ?? 'missing'} timestamp=${timestamp ?? 'missing'}`);
 
     const expectedToken = process.env.PAYMENT_GATEWAY_API_TOKEN || process.env.SETTLEMENT_API_TOKEN || process.env.INTERNAL_GATEWAY_TOKEN;
     const expectedSecret = process.env.PAYMENT_GATEWAY_SIGNATURE_SECRET || process.env.SETTLEMENT_SIGNATURE_SECRET || process.env.PAYASSURE_INTERNAL_SECRET;
@@ -238,9 +238,6 @@ export class SettlementController {
     const bodyString = JSON.stringify(signatureBody);
     const expectedSignature = crypto.createHmac('sha256', expectedSecret).update(bodyString).digest('hex');
 
-    this.logger.log(
-      `[CONFIRMATION][AUTH] signingMethod=crypto.createHmac('sha256', secret).update(bodyString).digest('hex') secretSource=${expectedSecret ? 'configured' : 'missing'} bodyString=${bodyString} algorithm=HMAC-SHA256 computedSignature=${expectedSignature} expectedToken=${expectedToken ?? 'missing'} timestamp=${timestamp} token=${authorization} for ${body.settlementId}`,
-    );
 
     if (expectedSignature !== signature) {
       const authMethod = authorization ? String(authorization).split(' ')[0] : 'missing';
@@ -257,8 +254,13 @@ export class SettlementController {
       throw new UnauthorizedException({ statusCode: 401, message: 'Expired or invalid timestamp', error: 'UNAUTHORIZED' });
     }
 
-    this.logger.log(`[CONFIRMATION][AUTH] authenticated successfully for ${body.settlementId}`);
     return this.settlementService.confirmSettlementPayment(body);
+  }
+
+  @Post('internal/settlements/payment-confirmation')
+  @ApiOperation({ summary: 'Legacy internal payment confirmation route', description: 'Alias kept for compatibility with internal settlement confirmation callers.' })
+  async confirmSettlementPaymentInternal(@Body() body: PaymentConfirmationDto, @Headers() headers: Record<string, string | string[] | undefined>): Promise<any> {
+    return this.confirmSettlementPayment(body, headers);
   }
 
   private getHeaderValue(headers: Record<string, string | string[] | undefined>, key: string): string | undefined {
@@ -278,11 +280,33 @@ export class SettlementController {
   }
 
   @Post('payouts/callback')
+  @UsePipes(new MpesaCallbackTransformPipe())
   @ApiOperation({ summary: 'Receive a B2B payout callback', description: 'Accepts the provider callback for a previously dispatched payout and updates supplier/retailer payout status.' })
   @ApiResponse({ status: 200, description: 'B2B payout callback processed successfully.' })
   @ApiResponse({ status: 404, description: 'Payout reference or settlement not found.' })
-  async b2bPayoutCallback(@Body() body: B2bPayoutCallbackDto): Promise<any> {
-    return this.settlementService.handleB2bPayoutCallback(body);
+  async b2bPayoutCallbackBase(@Body() body: B2bPayoutCallbackDto): Promise<any> {
+    return this.settlementService.handleB2bPayoutCallback(body, undefined);
+  }
+
+  @Post('payouts/callback/:callbackIdentifier')
+  @UsePipes(new MpesaCallbackTransformPipe())
+  @ApiOperation({ summary: 'Receive a B2B payout callback with identifier', description: 'Accepts the provider callback for a previously dispatched payout and updates supplier/retailer payout status.' })
+  @ApiResponse({ status: 200, description: 'B2B payout callback processed successfully.' })
+  @ApiResponse({ status: 404, description: 'Payout reference or settlement not found.' })
+  async b2bPayoutCallbackWithId(@Body() body: B2bPayoutCallbackDto, @Param('callbackIdentifier') callbackIdentifier: string): Promise<any> {
+    const decodedIdentifier = decodeURIComponent(callbackIdentifier);
+    return this.settlementService.handleB2bPayoutCallback(body, decodedIdentifier);
+  }
+
+  @Post('payouts/callback/:callbackIdentifier/callbacks/mpesa')
+  @UsePipes(new MpesaCallbackTransformPipe())
+  @ApiOperation({ summary: 'Receive a B2B payout callback via M-Pesa', description: 'Accepts the provider callback for a previously dispatched payout and updates supplier/retailer payout status.' })
+  @ApiResponse({ status: 200, description: 'B2B payout callback processed successfully.' })
+  @ApiResponse({ status: 404, description: 'Payout reference or settlement not found.' })
+  async b2bPayoutCallbackMpesa(@Body() body: B2bPayoutCallbackDto, @Param('callbackIdentifier') callbackIdentifier: string): Promise<any> {
+    const decodedIdentifier = decodeURIComponent(callbackIdentifier);
+    
+    return this.settlementService.handleB2bPayoutCallback(body, decodedIdentifier);
   }
 
   /**
@@ -507,6 +531,151 @@ export class SettlementController {
   @ApiResponse({ status: 200, schema: { example: { status: 'ok' } } })
   getHealth() {
     return { status: 'ok' };
+  }
+
+  /**
+   * TEST/DEBUG: Manually trigger split and payout for a settlement
+   * Useful for testing when the M-Pesa callback doesn't contain all required data
+   */
+  @Post('split-and-payout/:merchantTransactionReference')
+  @ApiOperation({
+    summary: 'Manually trigger split and payout dispatch (TEST/DEBUG)',
+    description: 'Manually invoke the settlement split and payout dispatch process for a given settlement reference. Useful for testing scenarios.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Split and payout dispatch completed',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Settlement not found',
+  })
+  async triggerSplitAndPayout(@Param('merchantTransactionReference') merchantTransactionReference: string, @Body() body: any): Promise<any> {
+    try {
+      const result = await this.settlementService.splitAndAllocateFunds({
+        merchantTransactionReference,
+        mpesaReceipt: body?.mpesaReceipt ?? undefined,
+        mpesaCheckoutRequestId: body?.mpesaCheckoutRequestId ?? undefined,
+        mpesaMerchantRequestId: body?.mpesaMerchantRequestId ?? undefined,
+        resultCode: body?.resultCode ?? 0,
+        resultDesc: body?.resultDesc ?? 'Manual trigger',
+      });
+
+      return {
+        success: true,
+        message: 'Split and payout dispatch initiated',
+        data: result,
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error('[SETTLEMENT][TEST] Manual split and payout failed', {
+        merchantTransactionReference,
+        error: errorMsg,
+        timestamp: new Date().toISOString(),
+      });
+
+      throw error;
+    }
+  }
+
+  /**
+   * Get retry status for a settlement
+   */
+  @Get('payouts/retry-status/:settlementId')
+  @ApiOperation({
+    summary: 'Get payout retry status for a settlement',
+    description: 'View the status of payout attempts and retries for a specific settlement.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Retry status retrieved successfully',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Settlement not found',
+  })
+  async getRetryStatus(@Param('settlementId') settlementId: string, @Req() req: any): Promise<any> {
+    try {
+      const retryStats = await this.settlementService.getPayoutRetryStatistics(settlementId);
+      return {
+        success: true,
+        settlementId,
+        retryStatistics: retryStats,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error('[RETRY] Failed to get retry status', {
+        settlementId,
+        error: errorMsg,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get all pending payouts due for retry
+   */
+  @Get('payouts/pending-retries')
+  @ApiOperation({
+    summary: 'Get all pending payout retries',
+    description: 'Retrieve all payouts that are currently pending retry across all settlements.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Pending retries retrieved successfully',
+  })
+  async getPendingRetries(@Req() req: any): Promise<any> {
+    try {
+      const pendingRetries = await this.settlementService.getPendingPayoutRetries();
+      return {
+        success: true,
+        count: pendingRetries.length,
+        pendingRetries,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error('[RETRY] Failed to get pending retries', {
+        error: errorMsg,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Manually trigger retry processing (for testing or manual intervention)
+   */
+  @Post('payouts/manual-retry/:settlementId')
+  @ApiOperation({
+    summary: 'Manually trigger retry for a settlement',
+    description: 'Force immediate retry of failed payouts for a specific settlement.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Retry triggered successfully',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Settlement not found',
+  })
+  async manualRetry(@Param('settlementId') settlementId: string, @Body() body: any, @Req() req: any): Promise<any> {
+    try {
+      const result = await this.settlementService.manualRetryPayouts(settlementId);
+      return {
+        success: true,
+        settlementId,
+        retryResult: result,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error('[RETRY] Manual retry failed', {
+        settlementId,
+        error: errorMsg,
+      });
+      throw error;
+    }
   }
 
   /**

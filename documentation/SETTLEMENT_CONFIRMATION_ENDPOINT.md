@@ -161,8 +161,8 @@ A sample payload for initiating a settlement request with a total amount of `2` 
 ```json
 {
   "merchantId": "pay_d68f568ddc7d7b2a",
-  "merchantTransactionReference": "TXN-20260703-0000001",
-  "totalAmount": 2,
+  "merchantTransactionReference": "TXN-20260703-v0s000001",
+  "totalAmount": 12.5,
   "currency": "KES",
   "settlementMethod": "BANK_TRANSFER",
   "description": "Daily settlement batch",
@@ -181,10 +181,9 @@ A sample payload for initiating a settlement request with a total amount of `2` 
     {
       "supplierMerchantId": "pay_d68f568ddc7d7b2a",
       "supplierTotalAmount": 1,
-      "retailerTotalAmount": 1,
-      "platformFee": 0
+      "retailerTotalAmount": 11,
+      "platformFee": 0.5
     }
   ]
 }
-
 ```

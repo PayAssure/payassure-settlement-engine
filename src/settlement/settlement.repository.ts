@@ -29,6 +29,10 @@ export class SettlementRepository implements OnModuleDestroy {
     return this.integrations.findIntegrationById(id);
   }
 
+  async findIntegrationByParticipantId(participantId: string) {
+    return this.integrations.findIntegrationByParticipantId(participantId);
+  }
+
   async findIntegrationByMerchantId(merchantId: string) {
     return this.integrations.findIntegrationByMerchantId(merchantId);
   }
@@ -64,6 +68,10 @@ export class SettlementRepository implements OnModuleDestroy {
 
   async findSettlementByReference(reference: string) {
     return this.settlements.findSettlementByReference(reference);
+  }
+
+  async findSettlementByPayoutCallbackIdentifier(callbackIdentifier: string) {
+    return this.settlements.findSettlementByPayoutCallbackIdentifier(callbackIdentifier);
   }
 
   async findSettlementsByBusinessId(businessId: string, skip = 0, take = 10) {

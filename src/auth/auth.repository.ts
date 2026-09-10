@@ -43,6 +43,13 @@ export class AuthRepository implements OnModuleDestroy {
     });
   }
 
+  async linkParticipantToUser(email: string, userId: string) {
+    return this.prisma.onboardingParticipant.updateMany({
+      where: { email: { equals: email, mode: 'insensitive' }, userId: null },
+      data: { userId },
+    });
+  }
+
   async activateBusinessIfComplete(email: string) {
     const participant = await this.prisma.onboardingParticipant.findFirst({
       where: { email },

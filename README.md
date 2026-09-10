@@ -37,3 +37,16 @@ npm run start:dev
 Open Swagger UI at http://localhost:3000/api and call `GET /settlement/hello`.
 
 Core settlement and reconciliation engine for the PayAssure financial platform.
+
+## Registration email settings
+
+Set these environment variables to send the payment activation secret after onboarding registration:
+
+```env
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your-smtp-user
+SMTP_PASS=your-smtp-password
+SMTP_FROM=PayAssure <no-reply@example.com>
+```

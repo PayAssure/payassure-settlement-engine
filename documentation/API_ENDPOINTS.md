@@ -233,21 +233,7 @@ Base path: /onbordings
   - 401 Unauthorized
   - 404 Not Found: participant not found
 
-### 7) PATCH /onbordings/:id/activate
-- Purpose: Activate a participant onboarding.
-- Required headers:
-  - Authorization: Bearer <jwt>
-- Path parameters:
-  - id: string
-- Request body: none
-- Success response:
-  - Status: 200 OK
-  - Body: activated participant data
-- Error responses:
-  - 401 Unauthorized
-  - 404 Not Found: participant not found or integration missing
-
-### 8) DELETE /onbordings/:id
+### 7) DELETE /onbordings/:id
 - Purpose: Delete an onboarding participant record.
 - Required headers:
   - Authorization: Bearer <jwt>
@@ -261,7 +247,7 @@ Base path: /onbordings
   - 401 Unauthorized
   - 404 Not Found: participant not found
 
-### 9) PATCH /onbordings/:id/webhook
+### 8) PATCH /onbordings/:id/webhook
 - Purpose: Update the webhook URL for a participant integration.
 - Required headers:
   - Authorization: Bearer <jwt>
@@ -276,7 +262,7 @@ Base path: /onbordings
   - 401 Unauthorized
   - 404 Not Found: participant not found
 
-### 10) PATCH /onbordings/:id/payment
+### 9) PATCH /onbordings/:id/payment
 - Purpose: Update the payout destination for a participant.
 - Required headers:
   - Authorization: Bearer <jwt>
@@ -293,11 +279,13 @@ Base path: /onbordings
   - 404 Not Found
 
 ### 11) PATCH /onbordings/payment/activate
-- Purpose: Activate a pending payment destination with a secret for the authenticated user.
+- Purpose: Activate the authenticated user's pending payment destination with a secret.
 - Required headers:
   - Authorization: Bearer <jwt>
+- Path parameters: none
 - Request body:
   - paymentActivationSecret: string
+- Participant lookup: decoded JWT email, the same lookup used by GET /onbordings/me.
 - Success response:
   - Status: 200 OK
   - Body: updated participant data

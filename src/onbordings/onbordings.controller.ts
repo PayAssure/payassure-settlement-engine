@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, Get, Logger, Param, Patch, Post, Request, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Delete, Get, Logger, Param, Patch, Post, Query, Request, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CreateIntegrationDto } from './dto/create-integration.dto';
 import { CreateOnboardingDto } from './dto/create-onboarding.dto';
@@ -9,6 +9,7 @@ import { UpdateOnboardingDto } from './dto/update-onboarding.dto';
 import { ActivatePaymentDto } from './dto/activate-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { UpdateWebhookDto } from './dto/update-webhook.dto';
+import { PublicOnboardingResponseDto } from './dto/public-onboarding-response.dto';
 import { OnbordingsService } from './onbordings.service';
 
 @ApiTags('onbordings')
@@ -27,7 +28,10 @@ export class OnbordingsController {
     description: 'An unexpected error occurred while creating the onboarding record.',
   })
   async create(@Body() body: CreateOnboardingDto): Promise<OnboardingResponseDto> {
-    return this.service.createParticipant(body);
+    this.logger.log('[ONBOARDING_CREATE_REQUEST]', body);
+    const response = await this.service.createParticipant(body);
+    this.logger.log('[ONBOARDING_CREATE_RESPONSE]', response);
+    return response;
   }
 
   @Post('generate-keys')
@@ -40,7 +44,7 @@ export class OnbordingsController {
     type: ErrorResponseDto,
     description: 'Authentication token is missing or invalid.',
   })
-  @ApiResponse({
+  @ApiResponse({ 
     status: 500,
     type: ErrorResponseDto,
     description:
@@ -69,18 +73,73 @@ export class OnbordingsController {
     return this.service.viewApiKeys(req.user);
   }
 
-  @Get()
+  @Get('integration/credentials')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
-  @ApiOperation({ summary: 'List onboarding participants' })
-  @ApiResponse({ status: 200, type: [OnboardingResponseDto] })
+  @ApiOperation({ summary: 'Get a user integration credentials by email and active status' })
+  @ApiQuery({ name: 'email', required: true, type: String, example: 'merchant@example.com' })
+  @ApiQuery({
+    name: 'isActive',
+    required: false,
+    type: Boolean,
+    example: true,
+    description: 'Filter on active integration status',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Integration credentials for the requested user and active status.',
+    schema: {
+      example: {
+        id: 'integration-id',
+        participantId: 'participant-id',
+        participantEmail: 'merchant@example.com',
+        merchantId: 'pay_4bec11e5a382fe7c',
+        apiKey: 'pk_live_d093937d634dcb700b6d34ba6f29c55e',
+        apiSecret: 'sk_live_85faf3a09cb5b38cb84c48b09a67da9f',
+        environment: 'production',
+        isActive: true,
+        createdAt: '2026-06-30T09:03:33.975Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 401, type: ErrorResponseDto, description: 'Authentication token is missing or invalid.' })
+  @ApiResponse({ status: 404, type: ErrorResponseDto, description: 'Integration credentials not found for the provided email and active status.' })
+  async getIntegrationCredentialsByEmail(
+    @Query('email') email: string,
+    @Query('isActive') isActive?: string,
+  ) {
+    const parsedIsActive = isActive === undefined ? undefined : isActive.toLowerCase() === 'true' || isActive === '1';
+    return this.service.getIntegrationCredentialsByEmail(email, parsedIsActive);
+  }
+
+  @Get()
+  @ApiOperation({
+    summary: 'List onboarding participants',
+    description:
+      'Publicly lists onboarding participants, integration credentials, and safe payment status details. Authentication is not required. Payment activation secrets, secret hashes, expiry timestamps, and verification attempts are never returned.',
+  })
+  @ApiResponse({ status: 200, type: [PublicOnboardingResponseDto] })
+  async findAll(): Promise<PublicOnboardingResponseDto[]> {
+    return this.service.findAllParticipants();
+  }
+
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Get the authenticated onboarding participant' })
+  @ApiResponse({ status: 200, type: OnboardingResponseDto })
   @ApiResponse({
     status: 401,
     type: ErrorResponseDto,
     description: 'Authentication token is missing or invalid.',
   })
-  async findAll(): Promise<OnboardingResponseDto[]> {
-    return this.service.findAllParticipants();
+  @ApiResponse({
+    status: 404,
+    type: ErrorResponseDto,
+    description: 'Onboarding participant not found for the authenticated user.',
+  })
+  async findCurrentUser(@Request() req: any): Promise<OnboardingResponseDto> {
+    return this.service.findParticipantByAuthenticatedUser(req.user);
   }
 
   @Get(':id')
@@ -145,25 +204,6 @@ export class OnbordingsController {
     return this.service.updateParticipant(id, body);
   }
 
-  @Patch(':id/activate')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth('access-token')
-  @ApiOperation({ summary: 'Activate a business onboarding participant' })
-  @ApiResponse({ status: 200, type: OnboardingResponseDto })
-  @ApiResponse({
-    status: 401,
-    type: ErrorResponseDto,
-    description: 'Authentication token is missing or invalid.',
-  })
-  @ApiResponse({
-    status: 404,
-    type: ErrorResponseDto,
-    description: 'Participant not found or integration missing.',
-  })
-  async activate(@Param('id') id: string): Promise<OnboardingResponseDto> {
-    return this.service.activateParticipant(id);
-  }
-
   @Delete(':id')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
@@ -206,12 +246,17 @@ export class OnbordingsController {
   @Patch('payment/activate')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
-  @ApiOperation({ summary: 'Activate a pending payout destination using the generated secret' })
+  @ApiOperation({
+    summary: 'Activate the authenticated user payment destination',
+    description:
+      'Uses the authenticated user from the JWT bearer token. No participant ID is required; the onboarding participant is located using the decoded token email, matching GET /onbordings/me.',
+  })
   @ApiResponse({ status: 200, type: OnboardingResponseDto })
   @ApiResponse({ status: 401, type: ErrorResponseDto, description: 'Authentication token is missing or invalid.' })
   @ApiResponse({ status: 403, type: ErrorResponseDto, description: 'The payment activation secret is invalid or expired.' })
   async activatePayment(@Request() req: any, @Body() body: ActivatePaymentDto): Promise<OnboardingResponseDto> {
-    this.logger.log(`activatePayment endpoint invoked for authenticated user email=${req.user?.email ?? 'unknown'} sub=${req.user?.sub ?? 'unknown'}`);
+    this.logger.log(`activatePayment endpoint invoked for authenticated user email=${req.user?.email ?? 'unknown'} username=${req.user?.username ?? 'unknown'}`);
     return this.service.activatePayment(req.user, { paymentActivationSecret: body.paymentActivationSecret });
   }
+
 }
