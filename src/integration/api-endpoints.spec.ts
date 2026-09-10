@@ -358,8 +358,6 @@ test('covers auth, onboarding, and settlement API flows end to end', async () =>
   assert.equal(paymentResult.payment?.status, 'PENDING_VERIFICATION');
   const activatedPayment = await onboardingController.activatePayment({ user: { email: 'merchant@example.com' } } as any, { paymentActivationSecret: paymentResult.payment?.paymentActivationSecret } as any);
   assert.equal(activatedPayment.payment?.status, 'VERIFIED');
-  const activatedParticipant = await onboardingController.activate(onboardingResult.id);
-  assert.equal(activatedParticipant.status, 'ACTIVE');
   console.log('step 5 passed: onboarding payment activation');
 
   console.log('step 6: settlement authenticate');

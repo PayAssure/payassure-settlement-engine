@@ -30,6 +30,7 @@ export class AuthService {
       if (emailExisting) {
         const onboarded = await this.repository.findOnboardedByEmail(data.email);
         if (onboarded) {
+          await this.repository.linkParticipantToUser(data.email, emailExisting.id);
           return {
             message: 'Account already exists. Please complete onboarding to finish your profile.',
             profileComplete: false,
@@ -71,6 +72,7 @@ export class AuthService {
 
     const existingUser = await this.repository.findByEmailOrUsername(data.username, data.email);
     if (existingUser) {
+      await this.repository.linkParticipantToUser(data.email, existingUser.id);
       return {
         message: 'Your profile is now complete.',
         profileComplete: true,
@@ -83,7 +85,7 @@ export class AuthService {
       };
     }
 
-    return this.createUser(
+    const response = await this.createUser(
       data.username,
       data.email,
       data.password,
@@ -91,6 +93,8 @@ export class AuthService {
       'User account created successfully and profile is complete.',
       true,
     );
+    await this.repository.linkParticipantToUser(data.email, response.user.id);
+    return response;
   }
 
   async login(data: LoginDto) {
@@ -104,6 +108,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    await this.repository.linkParticipantToUser(user.email, user.id);
     return this.issueTokens(user);
   }
 

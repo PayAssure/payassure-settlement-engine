@@ -1,6 +1,5 @@
 import { ForbiddenException, Injectable, Logger, NotFoundException, Optional, UnauthorizedException } from '@nestjs/common';
 import { createHash, randomBytes } from 'crypto';
-import { ParticipantStatus } from '@prisma/client';
 import { CreateIntegrationDto } from './dto/create-integration.dto';
 import { CreateOnboardingDto } from './dto/create-onboarding.dto';
 import { OnboardingResponseDto } from './dto/onboarding-response.dto';
@@ -50,7 +49,10 @@ export class OnbordingsService {
       }
     }
 
-    const created = await this.repository.createParticipantWithoutIntegration(normalizedData);
+    const created = await this.repository.createParticipantWithoutIntegration({
+      ...normalizedData,
+      userId: user?.id,
+    });
     const response = this.toResponse(
       this.attachActivationSecret(created, preparedPayment?.paymentActivationSecret),
       undefined,
@@ -129,21 +131,6 @@ export class OnbordingsService {
     } catch {
       throw new NotFoundException('Participant not found');
     }
-  }
-
-  async activateParticipant(id: string): Promise<OnboardingResponseDto> {
-    const participant = await this.repository.activateParticipant(id);
-
-    const integration = participant.integrations?.[0];
-    const alreadyActive = integration?.isActive && participant.status === ParticipantStatus.ACTIVE;
-
-    return this.toResponse(
-      participant,
-      undefined,
-      alreadyActive
-        ? 'Business is already active.'
-        : 'Business activation successful. Integration is now active.',
-    );
   }
 
   async deleteParticipant(id: string): Promise<void> {
@@ -256,13 +243,23 @@ export class OnbordingsService {
 
   async activatePayment(user: any, data: { paymentActivationSecret: string }): Promise<OnboardingResponseDto> {
     const email = user?.email ?? '';
-    this.logger.log(`activatePayment requested for authenticated user email=${email} sub=${user?.sub ?? 'unknown'}`);
+    this.logger.log(
+      `[PAYMENT_ACTIVATION_LOOKUP] Authenticated claims: email=${email || 'missing'}, role=${user?.role ?? 'missing'}`,
+    );
+
+    if (!email) {
+      throw new UnauthorizedException('Authenticated user email is required');
+    }
 
     const participant = await this.repository.findParticipantByEmail(email);
-    this.logger.log(`findParticipantByEmail returned ${participant ? `participant=${participant.id}` : 'no participant'} for email=${email}`);
+    this.logger.log(
+      participant
+        ? `[PAYMENT_ACTIVATION_LOOKUP] Service received participant: id=${participant.id}, email=${participant.email ?? 'null'}, status=${participant.status}`
+        : `[PAYMENT_ACTIVATION_LOOKUP] Service received no participant for email=${email}`,
+    );
 
     if (!participant) {
-      this.logger.warn(`Authenticated user not found for payment activation using email=${email}`);
+      this.logger.warn(`[PAYMENT_ACTIVATION_LOOKUP] Authenticated user not found for payment activation`);
       throw new NotFoundException('Onboarding participant not found for the authenticated user');
     }
 

@@ -191,8 +191,13 @@ test('updatePayment accepts shortcode only for BANK payment destinations', async
 });
 
 test('activatePayment marks a pending payment as verified when the secret is valid', async () => {
+  let lookupEmail: string | undefined;
+  let activatedParticipantId: string | undefined;
+  let activatedSecret: string | undefined;
   const repository = {
-    findParticipantByEmail: async (email: string) => ({
+    findParticipantByEmail: async (email: string) => {
+      lookupEmail = email;
+      return ({
       id: 'participant-1',
       email,
       participantType: 'RETAILER',
@@ -211,8 +216,12 @@ test('activatePayment marks a pending payment as verified when the secret is val
       integrations: [],
       createdAt: new Date(),
       updatedAt: new Date(),
-    }),
-    activatePayment: async (_id: string, _secret: string) => ({
+      });
+    },
+    activatePayment: async (id: string, secret: string) => {
+      activatedParticipantId = id;
+      activatedSecret = secret;
+      return {
       id: 'participant-1',
       participantType: 'RETAILER',
       businessName: 'Test Merchant',
@@ -231,12 +240,16 @@ test('activatePayment marks a pending payment as verified when the secret is val
       integrations: [],
       createdAt: new Date(),
       updatedAt: new Date(),
-    }),
+      };
+    },
   };
 
   const service = new OnbordingsService(repository as any);
-  const response = await service.activatePayment({ email: 'jane@example.com' } as any, { paymentActivationSecret: 'paysec_valid' } as any);
+  const response = await service.activatePayment({ sub: 'user-1', email: 'jane@example.com' } as any, { paymentActivationSecret: 'paysec_valid' } as any);
 
+  assert.equal(lookupEmail, 'jane@example.com');
+  assert.equal(activatedParticipantId, 'participant-1');
+  assert.equal(activatedSecret, 'paysec_valid');
   assert.equal(response.payment?.status, 'VERIFIED');
   assert.equal(response.payment?.isVerified, true);
 });

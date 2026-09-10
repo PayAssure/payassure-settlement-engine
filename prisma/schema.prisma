@@ -113,6 +113,8 @@ model Hello {
 
 model OnboardingParticipant {
   id                    String             @id @default(cuid())
+  userId                String?            @unique
+  user                  User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
   participantType       ParticipantType
   businessName          String
   registrationNumber    String?
@@ -161,6 +163,7 @@ model User {
   refreshTokenVersion Int      @default(0)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
+  onboardingParticipant OnboardingParticipant?
 }
 
 model OnboardingMessage {

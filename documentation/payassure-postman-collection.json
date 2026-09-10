@@ -21,7 +21,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{}",
+              "raw": "{\n  \"paymentActivationSecret\": \"paysec_...\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -589,36 +589,6 @@
               "path": [
                 "onbordings",
                 "{id}"
-              ]
-            }
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "PATCH /onbordings/{id}/activate",
-      "item": [
-        {
-          "name": "Activate a business onboarding participant",
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{jwtToken}}",
-                "description": "Bearer access token"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/onbordings/{id}/activate",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "onbordings",
-                "{id}",
-                "activate"
               ]
             }
           },

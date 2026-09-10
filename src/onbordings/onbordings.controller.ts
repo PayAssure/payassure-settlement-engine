@@ -204,25 +204,6 @@ export class OnbordingsController {
     return this.service.updateParticipant(id, body);
   }
 
-  @Patch(':id/activate')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth('access-token')
-  @ApiOperation({ summary: 'Activate a business onboarding participant' })
-  @ApiResponse({ status: 200, type: OnboardingResponseDto })
-  @ApiResponse({
-    status: 401,
-    type: ErrorResponseDto,
-    description: 'Authentication token is missing or invalid.',
-  })
-  @ApiResponse({
-    status: 404,
-    type: ErrorResponseDto,
-    description: 'Participant not found or integration missing.',
-  })
-  async activate(@Param('id') id: string): Promise<OnboardingResponseDto> {
-    return this.service.activateParticipant(id);
-  }
-
   @Delete(':id')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
@@ -265,12 +246,17 @@ export class OnbordingsController {
   @Patch('payment/activate')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
-  @ApiOperation({ summary: 'Activate a pending payout destination using the generated secret' })
+  @ApiOperation({
+    summary: 'Activate the authenticated user payment destination',
+    description:
+      'Uses the authenticated user from the JWT bearer token. No participant ID is required; the onboarding participant is located using the decoded token email, matching GET /onbordings/me.',
+  })
   @ApiResponse({ status: 200, type: OnboardingResponseDto })
   @ApiResponse({ status: 401, type: ErrorResponseDto, description: 'Authentication token is missing or invalid.' })
   @ApiResponse({ status: 403, type: ErrorResponseDto, description: 'The payment activation secret is invalid or expired.' })
   async activatePayment(@Request() req: any, @Body() body: ActivatePaymentDto): Promise<OnboardingResponseDto> {
-    this.logger.log(`activatePayment endpoint invoked for authenticated user email=${req.user?.email ?? 'unknown'} sub=${req.user?.sub ?? 'unknown'}`);
+    this.logger.log(`activatePayment endpoint invoked for authenticated user email=${req.user?.email ?? 'unknown'} username=${req.user?.username ?? 'unknown'}`);
     return this.service.activatePayment(req.user, { paymentActivationSecret: body.paymentActivationSecret });
   }
+
 }
