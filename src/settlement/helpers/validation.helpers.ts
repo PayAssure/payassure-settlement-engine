@@ -31,25 +31,51 @@ export async function validateSettlementData(
     errors.push({ field: 'merchantTransactionReference', message: 'Merchant transaction reference is required' });
   }
 
-  if (!data.paymentMethod) {
+  const fundingMethods = Array.isArray(data.paymentMethods) && data.paymentMethods.length > 0
+    ? data.paymentMethods
+    : data.paymentMethod ? [{ ...data.paymentMethod, amount: Number(data.paymentMethod.amount ?? data.totalAmount ?? 0) }] : [];
+
+  if (fundingMethods.length === 0) {
     errors.push({ field: 'paymentMethod', message: 'Payment method is required' });
   } else {
-    if (!data.paymentMethod.type) {
-      errors.push({ field: 'paymentMethod.type', message: 'Payment method type is required' });
-    } else {
-      const methodType = data.paymentMethod.type.toUpperCase();
-      if (!['MPESA', 'BANK', 'CASH'].includes(methodType)) {
-        errors.push({ field: 'paymentMethod.type', message: 'Unsupported payment method' });
+    const totalFundingAmount = fundingMethods.reduce((sum, payment) => sum + Number(payment.amount ?? 0), 0);
+    if (!areAmountsEqual(totalFundingAmount, data.totalAmount)) {
+      errors.push({ field: 'paymentMethods', message: `Split funding totals ${totalFundingAmount} do not match the settlement total ${data.totalAmount}` });
+    }
+
+    fundingMethods.forEach((payment, index) => {
+      const methodType = String(payment.type ?? '').trim().toUpperCase();
+      if (!methodType) {
+        errors.push({ field: `paymentMethods[${index}].type`, message: 'Payment method type is required' });
+        return;
       }
 
-      const mpesaPhoneNumber = String(data.paymentMethod.payerPhoneNumber ?? '').trim();
-      // The initiating retailer/customer payer details live on payerPhoneNumber. The supplier/retailer
-      // payout destination is resolved separately from each participant.payment record; it must not be
-      // inferred from the original payer payment payload during routing.
-      if (methodType === 'MPESA' && !mpesaPhoneNumber) {
-        errors.push({ field: 'paymentMethod.payerPhoneNumber', message: 'Payer phone number is required for MPESA' });
+      if (!['MPESA', 'BANK', 'CASH'].includes(methodType)) {
+        errors.push({ field: `paymentMethods[${index}].type`, message: 'Unsupported payment method' });
       }
-    }
+
+      const providerName = String(payment.provider ?? '').trim().toUpperCase();
+      if (providerName && !['MPESA', 'CASH', 'BANK', 'ESCROW'].includes(providerName)) {
+        errors.push({ field: `paymentMethods[${index}].provider`, message: 'Payment provider must be MPESA, CASH, BANK, or ESCROW' });
+      }
+
+      if (methodType === 'MPESA') {
+        if (!providerName) {
+          errors.push({ field: `paymentMethods[${index}].provider`, message: 'Provider is required for MPESA payments' });
+        }
+
+        const mpesaPhoneNumber = String(payment.payerPhoneNumber ?? payment.phoneNumber ?? '').trim();
+        if (!mpesaPhoneNumber) {
+          errors.push({ field: `paymentMethods[${index}].payerPhoneNumber`, message: 'Payer phone number is required for MPESA' });
+        }
+      }
+
+      if (methodType === 'CASH') {
+        if (providerName && providerName !== 'CASH' && providerName !== 'ESCROW') {
+          errors.push({ field: `paymentMethods[${index}].provider`, message: 'Cash payments must use the escrow-backed flow' });
+        }
+      }
+    });
   }
 
   if (!data.transactionDate || Number.isNaN(Date.parse(data.transactionDate))) {
@@ -189,9 +215,15 @@ export async function validateSettlementData(
       invalidSuppliers,
     });
 
+    const primaryMessage = errors.length > 0
+      ? errors.length === 1
+        ? errors[0].message
+        : `Validation failed: ${errors.map((entry) => `${entry.field}: ${entry.message}`).join('; ')}`
+      : 'Validation failed';
+
     throw new BadRequestException({
       statusCode: 400,
-      message: 'Validation failed',
+      message: primaryMessage,
       error: 'VALIDATION_ERROR',
       errors,
     });

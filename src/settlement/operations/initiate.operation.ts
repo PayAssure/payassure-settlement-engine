@@ -1,10 +1,12 @@
-import { BadRequestException, ConflictException, ForbiddenException, InternalServerErrorException, UnauthorizedException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, ConflictException, ForbiddenException, InternalServerErrorException, UnauthorizedException } from '@nestjs/common';
 import { ParticipantStatus, ParticipantType, SettlementStatus } from '@prisma/client';
 import { InitiateSettlementDto } from '../dto/initiate-settlement.dto';
 import { validateAndGetSession } from '../helpers/session.helpers';
 import { validateSettlementData } from '../helpers/validation.helpers';
 import { generateInternalMerchantTransactionReference, generatePayAssureReference } from '../helpers/reference.helpers';
 import { mpesaService } from '../../payment/services/mpesa.service';
+import { b2pochiService } from '../../payment/services/b2pochi.service';
+import { MockBankEscrowProvider } from '../../escrow-intelligence/providers/mock-bank-escrow.provider';
 
 const GATEWAY_REQUEST_TIMEOUT_MS = 15000;
 
@@ -117,6 +119,34 @@ export async function sendStkPushRequestWithRetry(
   };
 }
 
+function normalizePaymentMethods(data: InitiateSettlementDto) {
+  const explicitMethods = Array.isArray(data.paymentMethods) && data.paymentMethods.length > 0
+    ? data.paymentMethods
+    : [];
+
+  if (explicitMethods.length > 0) {
+    return explicitMethods.map((payment) => ({
+      type: payment.type,
+      amount: Number(payment.amount ?? 0),
+      provider: payment.provider,
+      payerPhoneNumber: payment.payerPhoneNumber ?? payment.phoneNumber ?? '',
+      phoneNumber: payment.phoneNumber ?? payment.payerPhoneNumber ?? '',
+    }));
+  }
+
+  if (!data.paymentMethod) {
+    return [];
+  }
+
+  return [{
+    type: data.paymentMethod.type,
+    amount: Number(data.paymentMethod.amount ?? data.totalAmount ?? 0),
+    provider: data.paymentMethod.provider,
+    payerPhoneNumber: data.paymentMethod.payerPhoneNumber ?? data.paymentMethod.phoneNumber ?? '',
+    phoneNumber: data.paymentMethod.phoneNumber ?? data.paymentMethod.payerPhoneNumber ?? '',
+  }];
+}
+
 function toPublicPaymentDetails(payment: any) {
   if (!payment || !payment.type) {
     return undefined;
@@ -145,6 +175,41 @@ function toPublicPaymentDetails(payment: any) {
   }
 
   return base;
+}
+
+export function normalizeSettlementError(error: unknown, fallbackContext?: Record<string, any>) {
+  const message = error instanceof Error ? error.message : String(error ?? 'Unknown settlement error');
+  const isGatewayFailure = /(fetch failed|M-Pesa|B2Pochi|gateway.*failed|ECONN|ENET|timed out|timeout|403|securitycredential)/i.test(message);
+
+  if (isGatewayFailure) {
+    return {
+      statusCode: 502,
+      message,
+      error: 'PAYMENT_PROVIDER_ERROR',
+      provider: 'M-PESA/B2POCHI',
+      details: {
+        code: 'UPSTREAM_GATEWAY_FAILURE',
+        ...fallbackContext,
+        troubleshooting: [
+          'Check the MPESA_ENVIRONMENT and credentials match the active account',
+          'Verify the initiator is authorized for B2Pochi transactions',
+          'Regenerate the security credential if it has expired',
+          'Check IP whitelisting and public callback accessibility',
+          'Confirm the M-Pesa gateway is reachable from this environment',
+        ],
+      },
+    };
+  }
+
+  return {
+    statusCode: 500,
+    message,
+    error: 'INITIATION_FAILED',
+    details: {
+      code: 'SETTLEMENT_INITIATION_FAILED',
+      ...fallbackContext,
+    },
+  };
 }
 
 export async function initiateOperation(
@@ -252,6 +317,487 @@ export async function initiateOperation(
     const primarySettlement = await repository.createSettlement(businessId, integrationId, payAssureReference, internalMerchantTransactionReference, data);
 
     const initiateCustomerPayment = async () => {
+      const settlementFundingMethods = normalizePaymentMethods(data);
+      const providerName = String(data.paymentMethod?.provider ?? data.paymentMethod?.type ?? 'MPESA').trim().toUpperCase();
+
+      if (settlementFundingMethods.length > 0 && settlementFundingMethods.some((method) => ['CASH', 'ESCROW'].includes(String(method.type ?? '').trim().toUpperCase()))) {
+        const escrowCustomerId = retailerMerchantId || businessId;
+        const cashAmount = settlementFundingMethods
+          .filter((method) => String(method.type ?? '').trim().toUpperCase() === 'CASH')
+          .reduce((sum, method) => sum + Number(method.amount ?? 0), 0);
+        const mpesaAmount = settlementFundingMethods
+          .filter((method) => String(method.type ?? '').trim().toUpperCase() === 'MPESA')
+          .reduce((sum, method) => sum + Number(method.amount ?? 0), 0);
+        const retailerOutstandingBalance = Number(data.totalAmount ?? 0) - ((data.suppliers ?? []).reduce((sum, supplier) => sum + Number((Array.isArray(supplier.items) ? supplier.items : []).reduce((itemTotal, item) => itemTotal + Number(item.supplierAmount ?? 0), 0) || Number(supplier.supplierTotalAmount ?? 0)), 0)) - Number((data.suppliers ?? []).reduce((sum, supplier) => sum + Number(supplier.platformFee ?? 0), 0));
+
+        const fundingSummary = {
+          businessId,
+          integrationId,
+          retailerMerchantId,
+          escrowCustomerId,
+          merchantTransactionReference: data.merchantTransactionReference,
+          totalAmount: Number(data.totalAmount ?? 0),
+          fundingMethods: settlementFundingMethods,
+          cashAmount,
+          mpesaAmount,
+          retailerOutstandingBalance,
+          supplierCount: data.suppliers?.length ?? 0,
+          transactionDate: data.transactionDate,
+        };
+
+        logger.warn('[CASH_FLOW][MULTI_FUNDING_SUMMARY]', fundingSummary);
+
+        const escrowBalanceBefore = await new MockBankEscrowProvider().getCustomerEscrowBalance(escrowCustomerId);
+        if (cashAmount > 0 && escrowBalanceBefore.balance < cashAmount) {
+          const insufficientFundsMessage = `Insufficient retailer escrow balance. Available: ${escrowBalanceBefore.balance} KES. Required: ${cashAmount} KES. Deposit funds into the escrow account before retrying the settlement.`;
+          logger.warn('[CASH_FLOW][ESCROW_INSUFFICIENT_FUNDS]', {
+            customerId: escrowCustomerId,
+            currentBalance: escrowBalanceBefore.balance,
+            requiredAmount: cashAmount,
+            message: insufficientFundsMessage,
+          });
+          await repository.updateSettlementStatus(primarySettlement.id, SettlementStatus.FAILED, {
+            metadata: {
+              ...(data.metadata ?? {}),
+              paymentGateway: { provider: 'CASH', status: 'BLOCKED', reason: insufficientFundsMessage },
+            },
+            failedAt: new Date(),
+          });
+          return {
+            success: false,
+            settlement: {
+              settlementId: primarySettlement.id,
+              merchantId: retailerMerchantId,
+              status: SettlementStatus.FAILED,
+              amount: Number(data.totalAmount),
+              retailerAmount: 0,
+              supplierAmount: Number(data.totalAmount),
+              systemAmount: 0,
+              paymentDetails: toPublicPaymentDetails(data.paymentMethod),
+              currency: data.currency,
+              reference: primarySettlement.reference,
+              createdAt: primarySettlement.createdAt,
+              estimatedProcessingTime: 'N/A',
+            },
+            message: insufficientFundsMessage,
+          };
+        }
+
+        if (cashAmount > 0) {
+          const cashRequest = {
+            businessId,
+            integrationId,
+            retailerMerchantId,
+            escrowCustomerId,
+            merchantTransactionReference: data.merchantTransactionReference,
+            totalAmount: Number(data.totalAmount ?? 0),
+            supplierCount: data.suppliers?.length ?? 0,
+            provider: 'ESCROW',
+            paymentMethod: { ...data.paymentMethod, provider: 'ESCROW' },
+            transactionDate: data.transactionDate,
+            suppliers: data.suppliers,
+            cashAmount,
+          };
+
+        logger.warn('[CASH_FLOW][START]', cashRequest);
+        logger.log('[CASH_FLOW][DETAILS]', {
+          paymentMethod: data.paymentMethod,
+          totalAmount: Number(data.totalAmount ?? 0),
+          supplierSummary: (data.suppliers ?? []).map((supplier) => ({
+            supplierMerchantId: supplier.supplierMerchantId,
+            supplierTotalAmount: Number(supplier.supplierTotalAmount ?? 0),
+            retailerTotalAmount: Number(supplier.retailerTotalAmount ?? 0),
+            platformFee: Number(supplier.platformFee ?? 0),
+            itemCount: Array.isArray(supplier.items) ? supplier.items.length : 0,
+          })),
+        });
+
+        const mockBankProvider = new MockBankEscrowProvider({
+          [escrowCustomerId]: {
+            balance: Number(data.totalAmount ?? 0),
+            transactions: [{
+              id: `cash-${Date.now()}`,
+              customerId: escrowCustomerId,
+              date: new Date(data.transactionDate).toISOString().slice(0, 10),
+              type: 'CREDIT',
+              amount: Number(data.totalAmount ?? 0),
+              description: 'Cash collection recorded into retailer escrow',
+            }],
+          },
+        });
+
+        const escrowBalanceBefore = await mockBankProvider.getCustomerEscrowBalance(escrowCustomerId);
+        const supplierAmountTotal = Number((data.suppliers ?? []).reduce((sum, supplier) => sum + Number((Array.isArray(supplier.items) ? supplier.items : []).reduce((itemTotal, item) => itemTotal + Number(item.supplierAmount ?? 0), 0) || Number(supplier.supplierTotalAmount ?? 0)), 0));
+        const platformFeeTotal = Number((data.suppliers ?? []).reduce((sum, supplier) => sum + Number(supplier.platformFee ?? 0), 0));
+        const expectedEscrowBalance = cashAmount > 0 ? cashAmount : Number(data.totalAmount ?? 0);
+        const escrowMatchesExpectation = escrowBalanceBefore.balance === expectedEscrowBalance || escrowBalanceBefore.balance >= expectedEscrowBalance;
+
+        logger.log('[CASH_FLOW][ESCROW_QUERY]', {
+          customerId: escrowCustomerId,
+          queriedBank: 'MockBankEscrowProvider',
+          currentBalance: escrowBalanceBefore.balance,
+          currency: escrowBalanceBefore.currency,
+          expectedEscrowBalance,
+          matchesEscrowExpectation: escrowMatchesExpectation,
+          message: escrowMatchesExpectation
+            ? 'Queried escrow bank and this is inline with the escrow expectation before settlement.'
+            : 'Queried escrow bank and the balance does not align with the expected settlement amount.',
+        });
+
+        if (escrowBalanceBefore.balance < expectedEscrowBalance) {
+          const insufficientFundsMessage = `Insufficient retailer escrow balance. Available: ${escrowBalanceBefore.balance} KES. Required: ${expectedEscrowBalance} KES. Deposit funds into the escrow account before retrying the settlement.`;
+          logger.warn('[CASH_FLOW][ESCROW_INSUFFICIENT_FUNDS]', {
+            customerId: escrowCustomerId,
+            currentBalance: escrowBalanceBefore.balance,
+            requiredAmount: expectedEscrowBalance,
+            message: insufficientFundsMessage,
+          });
+          await repository.updateSettlementStatus(primarySettlement.id, SettlementStatus.FAILED, {
+            metadata: {
+              ...(data.metadata ?? {}),
+              paymentGateway: { provider: 'CASH', status: 'BLOCKED', reason: insufficientFundsMessage },
+            },
+            failedAt: new Date(),
+          });
+          return {
+            success: false,
+            settlement: {
+              settlementId: primarySettlement.id,
+              merchantId: retailerMerchantId,
+              status: SettlementStatus.FAILED,
+              amount: Number(data.totalAmount),
+              retailerAmount: 0,
+              supplierAmount: Number(data.totalAmount),
+              systemAmount: 0,
+              paymentDetails: toPublicPaymentDetails(data.paymentMethod),
+              currency: data.currency,
+              reference: primarySettlement.reference,
+              createdAt: primarySettlement.createdAt,
+              estimatedProcessingTime: 'N/A',
+            },
+            message: insufficientFundsMessage,
+          };
+        }
+
+        logger.log('[CASH_FLOW][ESCROW_SIMULATION_REQUEST]', {
+          customerId: escrowCustomerId,
+          amount: Number(data.totalAmount ?? 0),
+          cashAmount,
+          mpesaAmount,
+          provider: 'ESCROW',
+          scenario: 'cash-collection',
+          supplierAmount: supplierAmountTotal,
+          platformFee: platformFeeTotal,
+          retailerOutstandingBalance,
+          retailerEscrowBalance: expectedEscrowBalance,
+        });
+
+        const cashCollection = await mockBankProvider.simulateCollection({
+          customerId: escrowCustomerId,
+          amount: cashAmount > 0 ? cashAmount : Number(data.totalAmount ?? 0),
+          provider: 'CASH',
+          scenario: 'cash-collection',
+          supplierAmount: supplierAmountTotal,
+          platformFee: platformFeeTotal,
+          retailerEscrowBalance: expectedEscrowBalance,
+        });
+
+        logger.log('[CASH_FLOW][ESCROW_COLLECTION_SUCCESS]', {
+          status: cashCollection.status,
+          message: cashCollection.message,
+          priorBalance: expectedEscrowBalance,
+          expectedNewBalance: cashCollection.actualBalance,
+          collectedAmount: cashCollection.collectedAmount,
+          provider: cashCollection.provider,
+          auditLogId: cashCollection.auditLogId,
+          note: 'Funds were collected from the retailer escrow and the remaining expected balance is now reflected in the bank ledger.',
+        });
+
+        if (cashCollection.status !== 'SUCCESS') {
+          logger.warn(`[CASH_COLLECTION][BLOCKED] ${cashCollection.message}`);
+          logger.warn('[CASH_FLOW][BLOCKED]', {
+            businessId,
+            merchantTransactionReference: data.merchantTransactionReference,
+            reason: cashCollection.message,
+            provider: 'CASH',
+            collectionResult: cashCollection,
+          });
+          await repository.updateSettlementStatus(primarySettlement.id, SettlementStatus.FAILED, {
+            metadata: {
+              ...(data.metadata ?? {}),
+              cashCollection,
+              paymentGateway: { provider: 'CASH', status: 'BLOCKED', reason: cashCollection.message },
+            },
+            failedAt: new Date(),
+          });
+          return {
+            success: false,
+            settlement: {
+              settlementId: primarySettlement.id,
+              merchantId: retailerMerchantId,
+              status: SettlementStatus.FAILED,
+              amount: Number(data.totalAmount),
+              retailerAmount: 0,
+              supplierAmount: Number(data.totalAmount),
+              systemAmount: 0,
+              paymentDetails: toPublicPaymentDetails(data.paymentMethod),
+              currency: data.currency,
+              reference: primarySettlement.reference,
+              createdAt: primarySettlement.createdAt,
+              estimatedProcessingTime: 'N/A',
+            },
+            message: cashCollection.message,
+          };
+        }
+
+        data.metadata = {
+          ...(data.metadata ?? {}),
+          paymentGateway: {
+            provider: 'CASH',
+            status: 'COLLECTED_FROM_ESCROW',
+            collection: cashCollection,
+          },
+        };
+
+        logger.log('[CASH_FLOW][PAYASSURE_DEPOSIT]', {
+          settlementId: primarySettlement.id,
+          merchantTransactionReference: data.merchantTransactionReference,
+          provider: 'CASH',
+          collectedAmount: Number(cashCollection.collectedAmount ?? 0),
+          status: cashCollection.status,
+          message: 'Cash funds have been collected successfully and deposited to PayAssure for settlement orchestration.',
+        });
+
+        const mpesaFundingResults: any[] = [];
+        if (mpesaAmount > 0) {
+          logger.warn('[CASH_FLOW][MPESA_FUNDING_WAITING_FOR_LANDING]', {
+            merchantTransactionReference: data.merchantTransactionReference,
+            amount: mpesaAmount,
+            message: 'Waiting for MPESA funds to land to the PayAssure account before supplier payouts are released.',
+          });
+
+          const mpesaFundingMethod = settlementFundingMethods.find((method) => String(method.type ?? '').trim().toUpperCase() === 'MPESA');
+          const mpesaPayerPhoneNumber = String(
+            mpesaFundingMethod?.payerPhoneNumber ?? mpesaFundingMethod?.phoneNumber ?? data.paymentMethod?.payerPhoneNumber ?? data.paymentMethod?.phoneNumber ?? ''
+          ).trim();
+
+          const mpesaFundingRequest = {
+            merchantTransactionReference: data.merchantTransactionReference,
+            totalAmount: mpesaAmount,
+            currency: data.currency,
+            paymentMethod: {
+              type: 'MPESA',
+              provider: mpesaFundingMethod?.provider ?? 'MPESA',
+              payerPhoneNumber: mpesaPayerPhoneNumber,
+            },
+            payerPhoneNumber: mpesaPayerPhoneNumber,
+            mobileNumber: mpesaPayerPhoneNumber,
+            amount: mpesaAmount,
+            accountReference: getGatewayAccountReference(),
+            transactionDesc: buildTransactionDescription(data),
+            description: `MPESA funding allocation for mixed settlement ${data.merchantTransactionReference}`,
+          };
+
+          const mpesaResult = await sendStkPushRequestWithRetry(
+            async () => sendStkPushRequest({
+              ...mpesaFundingRequest,
+              gatewayPayload: mpesaFundingRequest,
+            }),
+            logger,
+            data.merchantTransactionReference,
+          );
+
+          mpesaFundingResults.push({
+            type: 'MPESA',
+            amount: mpesaAmount,
+            result: mpesaResult,
+            message: 'MPESA funding has landed and is now available for the retailer balance and payout orchestration.',
+          });
+
+          if (!mpesaResult.success) {
+            const refundResult = cashAmount > 0 ? await mockBankProvider.refundCollection({
+              customerId: escrowCustomerId,
+              amount: cashAmount,
+              provider: 'CASH',
+              scenario: 'cash-refund',
+              description: 'Refund escrow funds after MPESA funding failure for mixed settlement',
+            }) : null;
+
+            logger.warn('[CASH_FLOW][MPESA_FUNDING_BLOCKED]', {
+              merchantTransactionReference: data.merchantTransactionReference,
+              amount: mpesaAmount,
+              result: mpesaResult,
+              escrowRefund: refundResult,
+            });
+            return {
+              success: false,
+              settlement: {
+                settlementId: primarySettlement.id,
+                merchantId: retailerMerchantId,
+                status: SettlementStatus.FAILED,
+                amount: Number(data.totalAmount),
+                retailerAmount: 0,
+                supplierAmount: Number(data.totalAmount),
+                systemAmount: 0,
+                paymentDetails: toPublicPaymentDetails(data.paymentMethod),
+                currency: data.currency,
+                reference: primarySettlement.reference,
+                createdAt: primarySettlement.createdAt,
+                estimatedProcessingTime: 'N/A',
+              },
+              message: `Mixed payment settlement is blocked because MPESA funding did not land successfully: ${mpesaResult.error ?? mpesaResult.message ?? 'Unknown MPESA funding error'}`,
+            };
+          }
+        }
+
+        if (cashAmount > 0 && mpesaAmount > 0) {
+          data.metadata = {
+            ...(data.metadata ?? {}),
+            paymentGateway: {
+              provider: 'CASH',
+              status: 'WAITING_FOR_MPESA_CALLBACK',
+              collection: cashCollection,
+              mpesaInitiated: mpesaFundingResults[0] ?? null,
+              message: 'Escrow funds were collected and the MPESA request was initiated. Supplier payouts remain paused until the payment callback confirms both funding legs have landed.',
+            },
+          };
+
+          logger.warn('[CASH_FLOW][AWAITING_MPESA_CALLBACK]', {
+            settlementId: primarySettlement.id,
+            merchantTransactionReference: data.merchantTransactionReference,
+            cashAmount,
+            mpesaAmount,
+            status: 'WAITING_FOR_MPESA_CALLBACK',
+            message: 'Escrow collection succeeded and MPESA funding was initiated. Supplier payouts will only dispatch after the callback confirms funds have landed in the PayAssure account.',
+          });
+
+          await repository.updateSettlementStatus(primarySettlement.id, SettlementStatus.PENDING_PROCESSING, {
+            metadata: {
+              ...(data.metadata ?? {}),
+              paymentGateway: {
+                provider: 'CASH',
+                status: 'WAITING_FOR_MPESA_CALLBACK',
+                collection: cashCollection,
+                mpesaInitiated: mpesaFundingResults[0] ?? null,
+                message: 'Escrow funds were collected and the MPESA request was initiated. Supplier payouts remain paused until payment confirmation is received.',
+              },
+            },
+          });
+
+          return {
+            success: true,
+            settlement: {
+              settlementId: primarySettlement.id,
+              merchantId: retailerMerchantId,
+              status: SettlementStatus.PENDING_PROCESSING,
+              amount: Number(data.totalAmount),
+              retailerAmount: 0,
+              supplierAmount: Number(data.totalAmount),
+              systemAmount: 0,
+              paymentDetails: toPublicPaymentDetails(data.paymentMethod),
+              currency: data.currency,
+              reference: primarySettlement.reference,
+              createdAt: primarySettlement.createdAt,
+              estimatedProcessingTime: 'Awaiting MPESA callback confirmation',
+            },
+            message: 'Cash escrow collection succeeded and MPESA funding was initiated. Supplier payouts are paused until the payment callback confirms the funds have landed in PayAssure.',
+            cashCollection,
+            mpesaInitiated: mpesaFundingResults[0] ?? null,
+          };
+        }
+
+        const supplierPayouts = [] as Array<Record<string, any>>;
+        for (const supplier of data.suppliers) {
+          const supplierItems = Array.isArray(supplier.items) ? supplier.items : [];
+          const supplierAmount = supplierItems.length > 0
+            ? supplierItems.reduce((sum, item) => sum + Number(item.supplierAmount ?? 0), 0)
+            : Number(supplier.supplierTotalAmount ?? 0);
+          const supplierIntegration = await prisma.integration.findFirst({ where: { merchantId: supplier.supplierMerchantId, isActive: true }, include: { participant: true } });
+          const supplierPayment = supplierIntegration?.participant?.payment as any;
+          const supplierPhone = supplierPayment?.phoneNumber ?? supplierPayment?.payerPhoneNumber ?? null;
+
+          logger.log('[CASH_FLOW][SUPPLIER_PAYOUT_PREP]', {
+            supplierMerchantId: supplier.supplierMerchantId,
+            supplierAmount,
+            supplierPhonePresent: Boolean(supplierPhone),
+            itemCount: supplierItems.length,
+            platformFee: Number(supplier.platformFee ?? 0),
+            retailerAmount: Number(supplier.retailerTotalAmount ?? 0),
+          });
+
+          if (supplierPhone) {
+            const payoutRequest = {
+              Amount: String(Math.round(Number(supplierAmount))),
+              PartyB: supplierPhone,
+              Remarks: `Supplier payout for ${supplier.supplierMerchantId}`,
+              callbackUrl: process.env.MPESA_CALLBACK_URL || 'http://localhost:3000/callbacks/mpesa',
+              merchantTransactionReference: data.merchantTransactionReference,
+              supplierMerchantId: supplier.supplierMerchantId,
+            };
+            logger.log('[CASH_FLOW][SUPPLIER_PAYOUT_REQUEST]', payoutRequest);
+            const payoutResult = await b2pochiService.initiateB2Pochi(payoutRequest);
+            logger.log('[CASH_FLOW][SUPPLIER_PAYOUT_RESULT]', {
+              supplierMerchantId: supplier.supplierMerchantId,
+              supplierAmount,
+              payoutResult,
+              message: 'Supplier payout has been dispatched from the collected cash pool.',
+            });
+            supplierPayouts.push({ supplierMerchantId: supplier.supplierMerchantId, supplierAmount, payoutResult });
+          } else {
+            logger.warn('[CASH_FLOW][SUPPLIER_PAYOUT_SKIPPED]', {
+              supplierMerchantId: supplier.supplierMerchantId,
+              reason: 'No supplier phone was found for payout dispatch',
+              supplierAmount,
+            });
+          }
+        }
+
+        logger.log('[CASH_FLOW][FINAL_SUMMARY]', {
+          settlementId: primarySettlement.id,
+          merchantTransactionReference: data.merchantTransactionReference,
+          businessId,
+          manufacturer: 'cash-provider-logging',
+          provider: 'CASH',
+          totalAmount: Number(data.totalAmount ?? 0),
+          payoutCount: supplierPayouts.length,
+          collectionStatus: cashCollection.status,
+          supplierPayouts,
+          message: 'Cash settlement flow completed: escrow checked, funds collected, deposited to PayAssure, and supplier dispatch initiated.',
+        });
+
+        data.metadata = {
+          ...(data.metadata ?? {}),
+          paymentGateway: {
+            provider: 'CASH',
+            status: 'COLLECTED_FROM_ESCROW',
+            collection: cashCollection,
+            supplierPayouts,
+          },
+        };
+
+        return {
+          success: true,
+          settlement: {
+            settlementId: primarySettlement.id,
+            merchantId: retailerMerchantId,
+            status: SettlementStatus.PENDING_PROCESSING,
+            amount: Number(data.totalAmount),
+            retailerAmount: 0,
+            supplierAmount: Number(data.totalAmount),
+            systemAmount: 0,
+            paymentDetails: toPublicPaymentDetails(data.paymentMethod),
+            currency: data.currency,
+            reference: primarySettlement.reference,
+            createdAt: primarySettlement.createdAt,
+            estimatedProcessingTime: 'N/A',
+          },
+          message: 'Cash collection succeeded from retailer escrow and supplier payout requests were dispatched.',
+          cashCollection,
+          supplierPayouts,
+        };
+      }
+      }
+
       if (data.paymentMethod?.type?.toUpperCase() === 'MPESA') {
       const mobileNumber = String(data.paymentMethod.payerPhoneNumber ?? '').trim();
       const amount = Number(data.totalAmount);
@@ -482,7 +1028,29 @@ export async function initiateOperation(
     }
 
     const err = error as Error;
-    logger.error(`Settlement initiation failed: ${err.message ?? 'Unknown error'} | context=${JSON.stringify({ requestBody: data, settlementSessionToken: token })}`, err.stack);
-    throw new InternalServerErrorException({ statusCode: 500, message: 'An error occurred while initiating settlement. Please check logs for details.', error: 'INITIATION_FAILED' });
+    const context = {
+      requestBody: data,
+      settlementSessionToken: token,
+    };
+    const normalized = normalizeSettlementError(err, { provider: 'M-PESA/B2POCHI', context });
+
+    logger.error(`Settlement initiation failed: ${normalized.message} | context=${JSON.stringify(context)}`, err.stack);
+
+    if (normalized.statusCode === 502) {
+      throw new BadGatewayException({
+        statusCode: 502,
+        message: normalized.message,
+        error: normalized.error,
+        provider: normalized.provider,
+        details: normalized.details,
+      });
+    }
+
+    throw new InternalServerErrorException({
+      statusCode: 500,
+      message: normalized.message,
+      error: normalized.error,
+      details: normalized.details,
+    });
   }
 }

@@ -12,6 +12,7 @@ import { SettlementModule } from './settlement/settlement.module';
 import { bootstrapSuperAdmin } from './auth/bootstrap';
 import { HealthModule } from './health/health.module';
 import { PaymentModule } from './payment/payment.module';
+import { EscrowIntelligenceModule } from './escrow-intelligence/escrow-intelligence.module';
 import { ValidationErrorFilter } from './common/filters/validation-error.filter';
 import { RequestBodyLoggingInterceptor } from './common/interceptors/request-body-logging.interceptor';
 
@@ -77,9 +78,12 @@ Included modules:
 - Payment initiation and M-Pesa operations
 - Payment callback processing
 - Settlement creation and confirmation
+- Escrow intelligence with provider-aware reconciliation for MPESA and CASH
+- Mock escrow control panel and scenario testing for development environments
 - Reconciliation and payout tracking
 
 All protected endpoints require a valid JWT access token. Internal payment confirmation requests use the configured application token and signature secret.
+The CASH provider path includes escrow validation, simulated collection from retailer escrow, and supplier payout dispatch. The MPESA provider path keeps the existing STK push settlement flow.
   `)
     .setVersion('1.0.0')
     .addBearerAuth(
@@ -95,9 +99,21 @@ All protected endpoints require a valid JWT access token. Internal payment confi
     .build();
 
   const document = SwaggerModule.createDocument(app, config, {
-    include: [SettlementModule, OnbordingsModule, AuthModule, HealthModule, PaymentModule],
+    include: [SettlementModule, OnbordingsModule, AuthModule, HealthModule, PaymentModule, EscrowIntelligenceModule],
   });
-  SwaggerModule.setup('api', app, document);
+  SwaggerModule.setup('api', app, document, {
+    customSiteTitle: 'PayAssure API',
+    customfavIcon: '',
+    swaggerOptions: {
+      tagsSorter: 'alpha',
+      operationsSorter: 'alpha',
+      persistAuthorization: true,
+    },
+    customCss: `
+      .swagger-ui .topbar { display: none; }
+      .swagger-ui .info .title { font-size: 2.2rem; }
+    `,
+  });
 
   await bootstrapSuperAdmin();
 

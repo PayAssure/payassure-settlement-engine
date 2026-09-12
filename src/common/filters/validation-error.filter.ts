@@ -39,6 +39,7 @@ export class ValidationErrorFilter implements ExceptionFilter {
       statusCode: 400,
       message: exceptionResponse.message || 'Bad Request',
       error: exceptionResponse.error || 'Bad Request',
+      errors: Array.isArray(exceptionResponse.errors) ? exceptionResponse.errors : [],
       path: request.originalUrl,
     });
   }

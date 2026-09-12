@@ -3,25 +3,58 @@ import { IsNumber, IsString, IsNotEmpty, IsOptional, IsArray, ValidateNested, Mi
 import { Type } from 'class-transformer';
 
 export class PaymentMethodDto {
-  @ApiProperty({ example: 'MPESA', description: 'The payment method type used for this transaction.' })
+  @ApiProperty({ example: 'MPESA', description: 'The payment method type used for this transaction. Supported values are MPESA or CASH.' })
   @IsString()
   @IsNotEmpty()
-  type: string = '';
+  type: 'MPESA' | 'CASH' = 'MPESA';
 
-  @ApiProperty({ example: '254712345678', description: 'Phone number for MPESA payout destinations.' })
+  @ApiProperty({ example: '254712345678', description: 'Phone number for MPESA payout destinations. Required when type is MPESA.' })
   @IsString()
   @IsOptional()
   phoneNumber?: string = '';
 
-  @ApiPropertyOptional({ example: '254712345678', description: 'Deprecated alias kept for backwards compatibility with legacy payloads.' })
+  @ApiPropertyOptional({ example: '254712345678', description: 'Deprecated alias kept for backwards compatibility with legacy payloads. Required when type is MPESA.' })
   @IsString()
   @IsOptional()
   payerPhoneNumber?: string = '';
 
-  @ApiPropertyOptional({ example: 'Safaricom', description: 'Optional payment provider or network name.' })
+  @ApiPropertyOptional({ example: 'Safaricom', description: 'Payment collection provider. Required only for MPESA. CASH is treated as an escrow-backed collection.' })
   @IsString()
   @IsOptional()
-  provider?: string = '';
+  provider?: 'MPESA' | 'CASH' | 'ESCROW' = 'MPESA';
+
+  @ApiPropertyOptional({ example: 5000, description: 'Optional amount for the current payment method when the settlement is split across multiple funding sources.' })
+  @IsNumber()
+  @Min(0.0)
+  @IsOptional()
+  amount?: number = 0;
+}
+
+export class PaymentMethodAllocationDto {
+  @ApiProperty({ example: 'CASH', description: 'The payment method type used for this funding allocation. Supported values are CASH, MPESA, and BANK.' })
+  @IsString()
+  @IsNotEmpty()
+  type: 'MPESA' | 'CASH' | 'BANK' = 'CASH';
+
+  @ApiProperty({ example: 5000, description: 'Amount funded through this payment method.' })
+  @IsNumber()
+  @Min(0.01)
+  amount: number = 0;
+
+  @ApiPropertyOptional({ example: 'ESCROW', description: 'Provider used for the payment allocation. CASH uses the escrow-backed flow.' })
+  @IsString()
+  @IsOptional()
+  provider?: 'MPESA' | 'CASH' | 'ESCROW' | 'BANK' = 'CASH';
+
+  @ApiPropertyOptional({ example: '254712345678', description: 'Phone number used when this funding allocation is MPESA.' })
+  @IsString()
+  @IsOptional()
+  payerPhoneNumber?: string = '';
+
+  @ApiPropertyOptional({ example: '254712345678', description: 'Legacy phone number field for backwards compatibility with older MPESA payloads.' })
+  @IsString()
+  @IsOptional()
+  phoneNumber?: string = '';
 }
 
 export class SupplierItemDto {
@@ -180,6 +213,13 @@ export class InitiateSettlementDto {
   @ValidateNested()
   @Type(() => PaymentMethodDto)
   paymentMethod: PaymentMethodDto = new PaymentMethodDto();
+
+  @ApiPropertyOptional({ type: [PaymentMethodAllocationDto], description: 'Optional list of split funding allocations. Use this for mixed CASH + MPESA settlements. The sum of all allocation amounts must equal totalAmount.' })
+  @IsArray()
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => PaymentMethodAllocationDto)
+  paymentMethods?: PaymentMethodAllocationDto[] = [];
 
   @ApiPropertyOptional({ example: 'https://merchant.example.com/api/payassure/callback', description: 'Optional callback URL for settlement status notifications.' })
   @IsUrl({ require_tld: false })

@@ -7,7 +7,9 @@ import { InitiateSettlementDto } from './initiate-settlement.dto';
 import { AuthService } from '../../auth/auth.service';
 import { OnbordingsService } from '../../onbordings/onbordings.service';
 import { SettlementService } from '../settlement.service';
-import { sendStkPushRequestWithRetry } from '../operations/initiate.operation';
+import { normalizeSettlementError, sendStkPushRequestWithRetry } from '../operations/initiate.operation';
+import { validateSettlementData } from '../helpers/validation.helpers';
+import { MockBankEscrowProvider } from '../../escrow-intelligence/providers/mock-bank-escrow.provider';
 
 class StubAuthRepository {
   async findByIdentifier() {
@@ -107,6 +109,85 @@ test('rejects settlement payload without supplier allocations', async () => {
   const errors = await validate(dto);
   assert.ok(errors.length > 0, 'expected DTO validation to fail when suppliers are missing');
   console.log('step 1 passed: empty supplier allocations are rejected');
+});
+
+test('normalizes upstream M-Pesa fetch failures into actionable gateway errors', () => {
+  const normalized = normalizeSettlementError(new Error('fetch failed'));
+  assert.equal(normalized.statusCode, 502);
+  assert.equal(normalized.error, 'PAYMENT_PROVIDER_ERROR');
+  assert.match(normalized.message, /fetch failed/i);
+  if ('details' in normalized && normalized.details && 'troubleshooting' in normalized.details) {
+    assert.ok(Array.isArray(normalized.details.troubleshooting));
+  } else {
+    assert.fail('expected troubleshooting guidance for gateway errors');
+  }
+});
+
+test('rejects cash settlement when retailer escrow balance is insufficient', async () => {
+  const provider = new MockBankEscrowProvider();
+  const result = await provider.simulateCollection({
+    customerId: 'retailer-without-funds',
+    amount: 16500,
+    provider: 'CASH',
+    scenario: 'cash-collection',
+    retailerEscrowBalance: 0,
+  });
+
+  assert.equal(result.status, 'BLOCKED');
+  assert.match(result.message, /insufficient.*escrow|available.*required|deposit funds/i);
+  assert.equal(result.collectedAmount, 0);
+});
+
+test('surfaces the actual settlement amount mismatch in the validation error', async () => {
+  const dto = plainToInstance(InitiateSettlementDto, {
+    merchantTransactionReference: 'TXN-CASH-20260912-0001',
+    totalAmount: 16500,
+    currency: 'KES',
+    settlementMethod: 'CASH_ESCROW',
+    paymentMethod: {
+      type: 'CASH',
+      provider: 'ESCROW',
+    },
+    transactionDate: '2026-09-12T12:00:00+03:00',
+    suppliers: [
+      {
+        supplierMerchantId: 'pay_d68f568ddc7d7b2a',
+        supplierTotalAmount: 12000,
+        retailerTotalAmount: 2000,
+        platformFee: 250,
+        items: [
+          { itemReference: 'ITEM-001', supplierAmount: 7200 },
+          { itemReference: 'ITEM-002', supplierAmount: 4800 },
+        ],
+      },
+      {
+        supplierMerchantId: 'pay_d68f568ddc7d7b2a',
+        supplierTotalAmount: 4500,
+        retailerTotalAmount: 600,
+        platformFee: 50,
+        items: [
+          { itemReference: 'ITEM-003', supplierAmount: 4500 },
+        ],
+      },
+    ],
+  });
+
+  try {
+    await validateSettlementData(dto, {
+      findIntegrationByMerchantId: async () => ({
+        participant: {
+          participantType: 'SUPPLIER',
+          status: 'ACTIVE',
+          payment: { status: 'VERIFIED', isVerified: true },
+        },
+      }),
+    } as any, { warn: () => undefined, error: () => undefined, log: () => undefined } as any, ['KES']);
+    assert.fail('expected settlement validation to reject the mismatched cash allocation total');
+  } catch (error: any) {
+    const response = error.getResponse ? error.getResponse() : error;
+    assert.match(String(response.message ?? ''), /Total amount 16500 does not match sum of supplier allocations/i, 'expected the exact mismatch reason in the error message');
+    assert.ok(Array.isArray(response.errors), 'expected structured validation details');
+  }
 });
 
 test('accepts supplier-based settlement payload with optional metadata', async () => {

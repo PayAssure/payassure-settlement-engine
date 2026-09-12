@@ -18,7 +18,8 @@ This application is organized into the following modules:
 1. **[Auth Module](./AUTH_MODULE.md)** - User authentication, registration, and JWT token management
 2. **[Onbordings Module](./ONBORDINGS_MODULE.md)** - Participant onboarding and integration management
 3. **[Settlement Module](./SETTLEMENT_MODULE.md)** - Settlement-related operations
-4. **[Health Module](./HEALTH_MODULE.md)** - Application health checks
+4. **[Escrow Intelligence Module](./ESCROW_INTELLIGENCE_MODULE.md)** - Expected vs actual escrow reconciliation and settlement blocking
+5. **[Health Module](./HEALTH_MODULE.md)** - Application health checks
 
 ## Additional Documentation
 

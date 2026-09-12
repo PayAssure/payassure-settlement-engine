@@ -141,6 +141,47 @@ Base path: /auth
 
 ---
 
+## Escrow Intelligence endpoints
+
+Base path: /escrow
+
+### 1) GET /escrow/health
+- Purpose: Check that the escrow intelligence service is running.
+- Required headers: none
+- Success response:
+  - Status: 200 OK
+  - Body: service health payload with `ok: true` and `service: "escrow-intelligence"`
+
+### 2) POST /escrow/reconcile
+- Purpose: Compare the expected escrow balance against the bank-reported actual balance for a customer.
+- Required headers: none
+- Request body:
+  - customerId: string
+  - date: optional ISO date string
+- Success response:
+  - Status: 200 OK
+  - Body: reconciliation result with `status`, `expectedBalance`, `actualBalance`, `delta`, `alerts`, and `blockedSettlement`
+- Error responses:
+  - 500 Internal Server Error: bank provider call failed or provider returned invalid data
+
+### 3) GET /escrow/summary/:customerId
+- Purpose: Return the customer daily escrow summary.
+- Required headers: none
+- Path parameters:
+  - customerId: string
+- Query parameters:
+  - date: optional ISO date string
+- Success response:
+  - Status: 200 OK
+  - Body: daily expected and actual totals, delta, net movement, and mismatch flag
+
+### 4) GET /escrow/history
+- Purpose: Return historical escrow reconciliation attempts.
+- Required headers: none
+- Success response:
+  - Status: 200 OK
+  - Body: array of reconciliation records
+
 ## Onboarding endpoints
 
 Base path: /onbordings

@@ -53,6 +53,14 @@ class AuthRepositoryStub {
     }
   }
 
+  async linkParticipantToUser(email: string, userId: string) {
+    const onboarding = this.onboardings.find((participant) => participant.email === email);
+    if (onboarding) {
+      onboarding.userId = userId;
+    }
+    return onboarding ?? null;
+  }
+
   async incrementRefreshTokenVersion(userId: string) {
     const user = this.users.find((entry) => entry.id === userId);
     if (user) {
