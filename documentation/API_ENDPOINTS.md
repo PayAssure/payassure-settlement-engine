@@ -614,6 +614,83 @@ Base path: /supplier
 - Error responses:
   - 401 Unauthorized
 
+### 3) GET /supplier/products/:supplierMerchantId
+- Purpose: Return item-only product data from the mock retailer connections available to a supplier.
+- Required headers: none
+- Path parameters:
+  - supplierMerchantId: supplier integration merchant ID, for example `pay_supplier_cement_001`
+- Request body: none
+- Success response:
+  - Status: 200 OK
+  - Body: supplier merchant ID, connected retailers, and their product items
+- Example:
+  ```json
+  {
+    "success": true,
+    "supplierMerchantId": "pay_supplier_cement_001",
+    "source": "mock-retailer-connection",
+    "count": 4,
+    "retailers": [
+      {
+        "retailerMerchantId": "pay_retailer_001",
+        "retailerName": "Nairobi BuildMart - Westlands",
+        "connected": true,
+        "items": [
+          {
+            "itemId": "ITEM-CEMENT-001",
+            "itemReference": "CEMENT-50KG-001",
+            "itemName": "Bamburi Cement 50kg",
+            "description": "Construction cement",
+            "unitPrice": 850,
+            "currency": "KES",
+            "availableQuantity": 240
+          }
+        ]
+      }
+    ]
+  }
+  ```
+- Error responses:
+  - 404 Not Found: no mock product catalog exists for the supplier
+
+### 4) GET /supplier/products/:supplierMerchantId/retailer/:retailerMerchantId
+- Purpose: Return only the items shared by one connected mock retailer with one supplier.
+- Required headers: none
+- Path parameters:
+  - supplierMerchantId: supplier integration merchant ID
+  - retailerMerchantId: connected retailer integration merchant ID, for example `pay_retailer_001`
+- Request body: none
+- Success response:
+  - Status: 200 OK
+  - Body: retailer identifiers, connection marker, and item-only product data
+- Example:
+  ```json
+  {
+    "success": true,
+    "supplierMerchantId": "pay_supplier_cement_001",
+    "retailerMerchantId": "pay_retailer_001",
+    "retailerName": "Nairobi BuildMart - Westlands",
+    "connected": true,
+    "source": "mock-retailer-connection",
+    "count": 3,
+    "items": [
+      {
+        "itemId": "ITEM-CEMENT-001",
+        "itemReference": "CEMENT-50KG-001",
+        "itemName": "Bamburi Cement 50kg",
+        "description": "Construction cement",
+        "unitPrice": 850,
+        "currency": "KES",
+        "availableQuantity": 240
+      }
+    ]
+  }
+  ```
+- Error responses:
+  - 404 Not Found: no mock supplier-retailer product connection exists
+
+These product endpoints are GET-only. They use mock retailer connection data and do not create or update products, settlements, payment records, or payment statuses.
+
 ---
 
 ## Health endpoint

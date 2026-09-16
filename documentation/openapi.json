@@ -619,6 +619,76 @@
         ]
       }
     },
+    "/supplier/products/{supplierMerchantId}": {
+      "get": {
+        "operationId": "SupplierController_getProductsBySupplier",
+        "summary": "Get products by supplier merchant ID",
+        "description": "Returns item-only product data for the mock retailer connections currently available to the supplier. This is a read-only integration side feature and does not alter settlement or payment data.",
+        "parameters": [
+          {
+            "name": "supplierMerchantId",
+            "required": true,
+            "in": "path",
+            "description": "Supplier merchant ID from the supplier integration credentials.",
+            "schema": {
+              "example": "pay_supplier_cement_001",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Supplier products returned successfully."
+          },
+          "404": {
+            "description": "No mock product catalog found for the supplier."
+          }
+        },
+        "tags": [
+          "supplier"
+        ]
+      }
+    },
+    "/supplier/products/{supplierMerchantId}/retailer/{retailerMerchantId}": {
+      "get": {
+        "operationId": "SupplierController_getSupplierProductsForRetailer",
+        "summary": "Get supplier products for a retailer",
+        "description": "Returns only the items exposed by a connected mock retailer to the requested supplier. No payment status, settlement status, or retailer account data is returned.",
+        "parameters": [
+          {
+            "name": "supplierMerchantId",
+            "required": true,
+            "in": "path",
+            "description": "Supplier merchant ID.",
+            "schema": {
+              "example": "pay_supplier_cement_001",
+              "type": "string"
+            }
+          },
+          {
+            "name": "retailerMerchantId",
+            "required": true,
+            "in": "path",
+            "description": "Connected retailer merchant ID.",
+            "schema": {
+              "example": "pay_retailer_001",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Supplier products for the retailer returned successfully."
+          },
+          "404": {
+            "description": "No product connection found for the supplier and retailer."
+          }
+        },
+        "tags": [
+          "supplier"
+        ]
+      }
+    },
     "/onbordings": {
       "post": {
         "operationId": "OnbordingsController_create",

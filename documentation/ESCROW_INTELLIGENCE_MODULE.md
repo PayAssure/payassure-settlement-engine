@@ -220,3 +220,218 @@ interface BankEscrowProvider {
 - The module is API-only and intentionally does not include a dashboard.
 - This is production-ready for backend integration and can be extended with a real provider adapter as soon as the bank API contract is available.
 - The mock provider is intended for local testing and integration validation before connecting to a live bank.
+
+
+
+
+{
+  "merchantId": "pay_retailer_001",
+  "merchantTransactionReference": "TXN-MIXED-20260916-000001",
+  "totalAmount": 130280,
+  "currency": "KES",
+  "settlementMethod": "CASH_ESCROW",
+  "description": "Large mixed cash and M-Pesa settlement for Nairobi regional sales batch",
+  "paymentMethod": {
+    "type": "MPESA",
+    "payerPhoneNumber": "254791614036",
+    "phoneNumber": "254791614036",
+    "provider": "MPESA",
+    "amount": 0
+  },
+  "paymentMethods": [
+    {
+      "type": "CASH",
+      "amount": 45000,
+      "provider": "ESCROW"
+    },
+    {
+      "type": "MPESA",
+      "amount": 85280,
+      "provider": "MPESA",
+      "payerPhoneNumber": "254791614036",
+      "phoneNumber": "254791614036"
+    }
+  ],
+  "callbackUrl": "https://merchant.example.com/api/payassure/settlement-callback",
+  "transactionDate": "2026-09-16T14:30:00+03:00",
+  "metadata": {
+    "batchId": "BATCH-NAIROBI-20260916-001",
+    "branchId": "NRB-WESTLANDS-001",
+    "branchName": "Westlands Branch",
+    "terminalId": "POS-WL-07",
+    "salesAgent": "agent-042",
+    "region": "NAIROBI",
+    "collectionChannel": "CASH_AND_MPESA",
+    "cashAmount": 45000,
+    "mpesaAmount": 85280,
+    "numberOfSuppliers": 4,
+    "numberOfItems": 12,
+    "notes": "Cash portion is expected to be collected from the retailer escrow account."
+  },
+  "suppliers": [
+    {
+      "supplierMerchantId": "pay_supplier_cement_001",
+      "supplierTotalAmount": 38500,
+      "retailerTotalAmount": 3250,
+      "platformFee": 1100,
+      "items": [
+        {
+          "itemReference": "CEMENT-50KG-001",
+          "itemId": "ITEM-CEMENT-001",
+          "itemName": "Bamburi Cement 50kg",
+          "description": "Construction cement",
+          "supplierAmount": 18000,
+          "retailerAmount": 1500,
+          "platformFee": 500,
+          "quantity": 30,
+          "unitPrice": 600
+        },
+        {
+          "itemReference": "CEMENT-32KG-002",
+          "itemId": "ITEM-CEMENT-002",
+          "itemName": "Bamburi Cement 32.5R 50kg",
+          "description": "General building cement",
+          "supplierAmount": 12000,
+          "retailerAmount": 1000,
+          "platformFee": 350,
+          "quantity": 20,
+          "unitPrice": 600
+        },
+        {
+          "itemReference": "CEMENT-42KG-003",
+          "itemId": "ITEM-CEMENT-003",
+          "itemName": "Ndarugo Cement 50kg",
+          "description": "Premium construction cement",
+          "supplierAmount": 8500,
+          "retailerAmount": 750,
+          "platformFee": 250,
+          "quantity": 15,
+          "unitPrice": 566.67
+        }
+      ]
+    },
+    {
+      "supplierMerchantId": "pay_supplier_steel_002",
+      "supplierTotalAmount": 32500,
+      "retailerTotalAmount": 2700,
+      "platformFee": 900,
+      "items": [
+        {
+          "itemReference": "STEEL-BAR-001",
+          "itemId": "ITEM-STEEL-001",
+          "itemName": "Steel Reinforcement Bars 12mm",
+          "description": "12mm steel reinforcement bars",
+          "supplierAmount": 15000,
+          "retailerAmount": 1200,
+          "platformFee": 400,
+          "quantity": 25,
+          "unitPrice": 664
+        },
+        {
+          "itemReference": "STEEL-BAR-002",
+          "itemId": "ITEM-STEEL-002",
+          "itemName": "Steel Reinforcement Bars 16mm",
+          "description": "16mm steel reinforcement bars",
+          "supplierAmount": 10500,
+          "retailerAmount": 900,
+          "platformFee": 300,
+          "quantity": 15,
+          "unitPrice": 780
+        },
+        {
+          "itemReference": "STEEL-MESH-003",
+          "itemId": "ITEM-STEEL-003",
+          "itemName": "Steel Mesh Sheets",
+          "description": "Heavy-duty steel mesh sheets",
+          "supplierAmount": 7000,
+          "retailerAmount": 600,
+          "platformFee": 200,
+          "quantity": 10,
+          "unitPrice": 780
+        }
+      ]
+    },
+    {
+      "supplierMerchantId": "pay_supplier_electrical_003",
+      "supplierTotalAmount": 26500,
+      "retailerTotalAmount": 2350,
+      "platformFee": 730,
+      "items": [
+        {
+          "itemReference": "ELEC-CABLE-001",
+          "itemId": "ITEM-ELEC-001",
+          "itemName": "Twin and Earth Cable 2.5mm",
+          "description": "Electrical installation cable",
+          "supplierAmount": 11000,
+          "retailerAmount": 1000,
+          "platformFee": 300,
+          "quantity": 10,
+          "unitPrice": 1230
+        },
+        {
+          "itemReference": "ELEC-SWITCH-002",
+          "itemId": "ITEM-ELEC-002",
+          "itemName": "Industrial Light Switches",
+          "description": "Heavy-duty electrical switches",
+          "supplierAmount": 9000,
+          "retailerAmount": 800,
+          "platformFee": 250,
+          "quantity": 30,
+          "unitPrice": 335
+        },
+        {
+          "itemReference": "ELEC-BREAKER-003",
+          "itemId": "ITEM-ELEC-003",
+          "itemName": "Circuit Breakers",
+          "description": "Single-phase circuit breakers",
+          "supplierAmount": 6500,
+          "retailerAmount": 550,
+          "platformFee": 180,
+          "quantity": 10,
+          "unitPrice": 723
+        }
+      ]
+    },
+    {
+      "supplierMerchantId": "pay_supplier_plumbing_004",
+      "supplierTotalAmount": 19500,
+      "retailerTotalAmount": 1700,
+      "platformFee": 550,
+      "items": [
+        {
+          "itemReference": "PLUMB-PVC-001",
+          "itemId": "ITEM-PLUMB-001",
+          "itemName": "PVC Water Pipes",
+          "description": "3/4 inch PVC water pipes",
+          "supplierAmount": 8000,
+          "retailerAmount": 700,
+          "platformFee": 220,
+          "quantity": 20,
+          "unitPrice": 446
+        },
+        {
+          "itemReference": "PLUMB-TAP-002",
+          "itemId": "ITEM-PLUMB-002",
+          "itemName": "Brass Water Taps",
+          "description": "Heavy-duty brass water taps",
+          "supplierAmount": 6500,
+          "retailerAmount": 550,
+          "platformFee": 180,
+          "quantity": 10,
+          "unitPrice": 723
+        },
+        {
+          "itemReference": "PLUMB-FITTING-003",
+          "itemId": "ITEM-PLUMB-003",
+          "itemName": "PVC Pipe Fittings",
+          "description": "Mixed PVC connectors and fittings",
+          "supplierAmount": 5000,
+          "retailerAmount": 450,
+          "platformFee": 150,
+          "quantity": 25,
+          "unitPrice": 216
+        }
+      ]
+    }
+  ]
+}
