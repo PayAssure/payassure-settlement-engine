@@ -377,15 +377,65 @@ Base path: /settlement
 - Request body:
   - merchantId: optional string
   - merchantTransactionReference: string
-  - totalAmount: number
+  - amount: number; must equal the sum of supplierAmount and retailerAmount across items
   - currency: string
-  - settlementMethod: string
-  - description: optional string
-  - paymentMethod: object with type, payerPhoneNumber, provider
-  - callbackUrl: optional string
-  - transactionDate: string (ISO 8601)
-  - metadata: optional object
-  - suppliers: array of supplier allocations
+  - payment.methods: array of `{ type: CASH | MPESA, amount, phoneNumber? }`; method amounts must total amount
+  - items: array of `{ supplierMerchantId, itemReference, supplierAmount, retailerAmount }`
+  - metadata: optional but recommended object for invoice, batch, branch, terminal, and audit context
+- The retailer POS/ERP sends `supplierAmount` and `retailerAmount` because it owns the commercial transaction facts.
+- `merchantTransactionReference` is the only idempotency reference and is unique per retailer.
+- The merchant does not send `platformFee`, provider names, callback URLs, or authoritative transaction timestamps.
+- PayAssure applies the server-configured `PAYASSURE_PLATFORM_FEE_RATE` as a percentage. The fee is deducted equally from the supplier and retailer allocations. For example, KES 200 + KES 200 at `0.8` percent produces a KES 3.20 fee, so both parties receive KES 198.40.
+- PayAssure resolves the merchant callback from onboarding configuration and generates server timestamps.
+- The existing legacy fields remain accepted during migration, but new integrations should use this canonical shape.
+- Example request:
+  ```json
+  {
+    "merchantId": "pay_retailer_001",
+    "merchantTransactionReference": "TXN-MIXED-20260916-000001",
+    "amount": 127000,
+    "currency": "KES",
+    "payment": {
+      "methods": [
+        { "type": "CASH", "amount": 45000 },
+        { "type": "MPESA", "amount": 82000, "phoneNumber": "254791614036" }
+      ]
+    },
+    "items": [
+      {
+        "supplierMerchantId": "pay_supplier_cement_001",
+        "itemReference": "CEMENT-50KG-001",
+        "supplierAmount": 38500,
+        "retailerAmount": 3250
+      },
+      {
+        "supplierMerchantId": "pay_supplier_steel_002",
+        "itemReference": "STEEL-BAR-001",
+        "supplierAmount": 32500,
+        "retailerAmount": 2700
+      },
+      {
+        "supplierMerchantId": "pay_supplier_electrical_003",
+        "itemReference": "ELEC-CABLE-001",
+        "supplierAmount": 26500,
+        "retailerAmount": 2350
+      },
+      {
+        "supplierMerchantId": "pay_supplier_plumbing_004",
+        "itemReference": "PLUMB-PVC-001",
+        "supplierAmount": 19500,
+        "retailerAmount": 1700
+      }
+    ],
+    "metadata": {
+      "batchId": "BATCH-NAIROBI-20260916-001",
+      "branchId": "NRB-WESTLANDS-001",
+      "terminalId": "POS-WL-07",
+      "salesAgentId": "agent-042",
+      "invoiceReference": "INV-WL-20260916-00091"
+    }
+  }
+  ```
 - Success response:
   - Status: 201 Created
   - Body:
@@ -692,6 +742,71 @@ Base path: /supplier
 These product endpoints are GET-only. They use mock retailer connection data and do not create or update products, settlements, payment records, or payment statuses.
 
 ---
+
+## KCB Funds Transfer
+
+Base path: `/kcb`
+
+### POST /kcb/funds-transfer
+- Purpose: Initiate a standalone KCB Funds Transfer API request.
+- Required headers:
+  - `Content-Type: application/json`
+- This is a public PayAssure endpoint and does not require a PayAssure user JWT.
+- This endpoint is isolated from settlement initiation, payment callbacks, M-Pesa payout dispatch, and reconciliation. It calls KCB only when explicitly requested.
+- PayAssure first calls the KCB token endpoint with Basic Authentication, reads the returned `access_token` and `token_type`, then sends `Authorization: <token_type> <access_token>` to the Funds Transfer endpoint. The token is never returned to the client.
+- KCB Funds Transfer is asynchronous. A successful request means KCB accepted the transfer for processing; the final `SUCCESS` or `FAILED` outcome is delivered to the callback URL configured during KCB onboarding.
+- Request body:
+  - beneficiaryDetails: string
+  - companyCode: optional string; defaults to `KCB_COMPANY_CODE`
+  - creditAccountNumber: string
+  - currency: string
+  - debitAccountNumber: optional string; defaults to `KCB_DEBIT_ACCOUNT_NUMBER`
+  - debitAmount: positive number
+  - paymentDetails: string
+  - transactionReference: string
+  - transactionType: string
+  - beneficiaryBankCode: string
+- Example request:
+  ```json
+  {
+    "beneficiaryDetails": "JOHN DOE",
+    "companyCode": "KE0010001",
+    "creditAccountNumber": "1279287799",
+    "currency": "KES",
+    "debitAccountNumber": "1279258233",
+    "debitAmount": 26,
+    "paymentDetails": "UT Fund withdrawal",
+    "transactionReference": "FT1234567890",
+    "transactionType": "IF",
+    "beneficiaryBankCode": "01"
+  }
+  ```
+- Success response: `201 Created` (request accepted for asynchronous processing)
+  ```json
+  {
+    "success": true,
+    "provider": "KCB",
+    "transactionReference": "FT1234567890",
+    "response": {
+      "statusCode": "0",
+      "statusMessage": "Success",
+      "statusDescription": "Request received for processing",
+      "merchantID": "263eb626-3fe7-4662-813e-f6f2962219e1",
+      "retrievalRefNumber": "PCI663RSS"
+    }
+  }
+  ```
+- KCB configuration is server-side only:
+  - `KCB_TOKEN_URL` or `KCB_BASE_URL`
+  - `KCB_FUNDS_TRANSFER_URL` or `KCB_BASE_URL`
+  - `KCB_CONSUMER_KEY`
+  - `KCB_CONSUMER_SECRET`
+  - `KCB_COMPANY_CODE`
+  - `KCB_DEBIT_ACCOUNT_NUMBER`
+- The KCB consumer secret, OAuth token, and bearer token must never be sent by the client or committed to the repository.
+- Error responses:
+  - `400 Bad Request`: invalid transfer body
+  - `503 Service Unavailable`: KCB authentication or transfer request failed
 
 ## Health endpoint
 

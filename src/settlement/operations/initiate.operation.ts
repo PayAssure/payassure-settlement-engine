@@ -147,6 +147,135 @@ function normalizePaymentMethods(data: InitiateSettlementDto) {
   }];
 }
 
+function roundMoney(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+export function normalizeCanonicalSettlement(data: InitiateSettlementDto): InitiateSettlementDto {
+  const isCanonicalRequest = data.amount !== undefined || data.payment !== undefined || data.items !== undefined;
+  if (!isCanonicalRequest) {
+    return data;
+  }
+
+  const canonicalErrors: string[] = [];
+  if (!data.merchantId) canonicalErrors.push('merchantId is required');
+  if (!data.merchantTransactionReference) canonicalErrors.push('merchantTransactionReference is required');
+  if (!data.amount || data.amount <= 0) canonicalErrors.push('amount must be greater than 0');
+  if (!data.currency) canonicalErrors.push('currency is required');
+  if (!data.payment?.methods?.length) canonicalErrors.push('payment.methods is required and must contain at least one method');
+  if (!data.items?.length) canonicalErrors.push('items is required and must contain at least one item');
+
+  if (canonicalErrors.length > 0) {
+    throw new BadRequestException({
+      statusCode: 400,
+      message: 'Canonical settlement payload is incomplete',
+      error: 'CANONICAL_PAYLOAD_REQUIRED',
+      errors: canonicalErrors.map((message) => ({ field: message.split(' ')[0], message })),
+    });
+  }
+
+  const totalAmount = Number(data.amount ?? data.totalAmount ?? 0);
+  const supplierGroups = new Map<string, any>();
+  let commercialTotal = 0;
+
+  for (const item of data.items ?? []) {
+    const supplierAmount = roundMoney(Number(item.supplierAmount ?? 0));
+    const retailerAmount = roundMoney(Number(item.retailerAmount ?? 0));
+    const lineAmount = roundMoney(supplierAmount + retailerAmount);
+    commercialTotal = roundMoney(commercialTotal + lineAmount);
+    const existing = supplierGroups.get(item.supplierMerchantId) ?? {
+      supplierMerchantId: item.supplierMerchantId,
+      supplierTotalAmount: 0,
+      retailerTotalAmount: 0,
+      platformFee: 0,
+      items: [],
+    };
+
+    existing.supplierTotalAmount = roundMoney(existing.supplierTotalAmount + supplierAmount);
+    existing.retailerTotalAmount = roundMoney(existing.retailerTotalAmount + retailerAmount);
+    existing.items.push({
+      itemReference: item.itemReference,
+      supplierAmount,
+      retailerAmount,
+    });
+    supplierGroups.set(item.supplierMerchantId, existing);
+  }
+
+  const fundingTotal = roundMoney((data.payment?.methods ?? []).reduce((sum, method) => sum + Number(method.amount), 0));
+  if (fundingTotal !== totalAmount || commercialTotal !== totalAmount) {
+    throw new BadRequestException({
+      statusCode: 400,
+      message: 'Canonical settlement amounts do not reconcile',
+      error: 'CANONICAL_AMOUNT_MISMATCH',
+      errors: [
+        ...(fundingTotal !== totalAmount ? [{ field: 'payment.methods', message: `Payment methods total ${fundingTotal} does not equal amount ${totalAmount}` }] : []),
+        ...(commercialTotal !== totalAmount ? [{ field: 'items', message: `Supplier and retailer item allocations total ${commercialTotal} does not equal amount ${totalAmount}` }] : []),
+      ],
+    });
+  }
+
+  const configuredFeeRate = Number(process.env.PAYASSURE_PLATFORM_FEE_RATE ?? 0.8);
+  const platformFee = roundMoney(totalAmount * (Number.isFinite(configuredFeeRate) ? configuredFeeRate : 0.8) / 100);
+  const supplierFeeShare = roundMoney(platformFee / 2);
+  const retailerFeeShare = roundMoney(platformFee - supplierFeeShare);
+  const suppliers = Array.from(supplierGroups.values());
+  const supplierCommercialTotal = suppliers.reduce((sum, supplier) => sum + supplier.supplierTotalAmount, 0);
+  const retailerCommercialTotal = suppliers.reduce((sum, supplier) => sum + supplier.retailerTotalAmount, 0);
+
+  for (const supplier of suppliers) {
+    const supplierShare = supplierCommercialTotal > 0
+      ? roundMoney(supplier.supplierTotalAmount / supplierCommercialTotal)
+      : 0;
+    const retailerShare = retailerCommercialTotal > 0
+      ? roundMoney(supplier.retailerTotalAmount / retailerCommercialTotal)
+      : 0;
+    const supplierDeduction = roundMoney(supplierFeeShare * supplierShare);
+    const retailerDeduction = roundMoney(retailerFeeShare * retailerShare);
+    supplier.supplierTotalAmount = roundMoney(supplier.supplierTotalAmount - supplierDeduction);
+    supplier.retailerTotalAmount = roundMoney(supplier.retailerTotalAmount - retailerDeduction);
+    supplier.platformFee = roundMoney(supplierDeduction + retailerDeduction);
+
+    const supplierItemTotal = supplier.items.reduce((sum: number, item: any) => sum + item.supplierAmount, 0);
+    const retailerItemTotal = supplier.items.reduce((sum: number, item: any) => sum + item.retailerAmount, 0);
+    for (const item of supplier.items) {
+      const itemSupplierShare = supplierItemTotal > 0 ? item.supplierAmount / supplierItemTotal : 0;
+      const itemRetailerShare = retailerItemTotal > 0 ? item.retailerAmount / retailerItemTotal : 0;
+      item.supplierAmount = roundMoney(item.supplierAmount - supplierDeduction * itemSupplierShare);
+      item.retailerAmount = roundMoney(item.retailerAmount - retailerDeduction * itemRetailerShare);
+    }
+  }
+
+  const paymentMethods = data.payment?.methods?.map((method) => ({
+    type: method.type,
+    amount: method.amount,
+    provider: (method.type === 'CASH' ? 'ESCROW' : 'MPESA') as 'ESCROW' | 'MPESA',
+    payerPhoneNumber: method.phoneNumber ?? '',
+    phoneNumber: method.phoneNumber ?? '',
+  }));
+
+  return {
+    ...data,
+    totalAmount,
+    settlementMethod: data.settlementMethod || 'CASH_ESCROW',
+    transactionDate: new Date().toISOString(),
+    paymentMethod: paymentMethods?.[0]
+      ? { ...paymentMethods[0], type: paymentMethods[0].type as 'MPESA' | 'CASH' }
+      : data.paymentMethod,
+    paymentMethods,
+    suppliers,
+    metadata: {
+      ...(data.metadata ?? {}),
+      calculatedAllocation: {
+        commercialTotal: roundMoney(commercialTotal),
+        supplierFeeShare,
+        retailerFeeShare,
+        platformFee,
+        platformFeeRate: configuredFeeRate,
+      },
+    },
+  };
+}
+
 function toPublicPaymentDetails(payment: any) {
   if (!payment || !payment.type) {
     return undefined;
@@ -237,6 +366,7 @@ export async function initiateOperation(
   }
 
   try {
+    data = normalizeCanonicalSettlement(data);
     const existingSettlement = await repository.findSettlementByBusinessAndPayloadReference(businessId, data.merchantTransactionReference);
     if (existingSettlement) {
       await repository.touchSession(session.id);

@@ -8,7 +8,7 @@ The route prefix is `/auth`.
 There are two related credential types in the platform:
 
 - **User credentials**: username or email plus password. A successful login returns a JWT access token and a JWT refresh token.
-- **Business API credentials**: API key and API secret used by settlement integrations. Business authentication is documented separately in `documentation/SETTLEMENT_MODULE_DESIGN.md`; it is not an `/auth` route.
+- **Business API credentials**: API key and API secret used by settlement integrations. Business authentication is documented in `documentation/SETTLEMENT_MODULE.md`; it is not an `/auth` route.
 
 Protected `/auth` routes require:
 

@@ -10,6 +10,7 @@ import { SettlementService } from '../settlement.service';
 import { normalizeSettlementError, sendStkPushRequestWithRetry } from '../operations/initiate.operation';
 import { validateSettlementData } from '../helpers/validation.helpers';
 import { MockBankEscrowProvider } from '../../escrow-intelligence/providers/mock-bank-escrow.provider';
+import { normalizeCanonicalSettlement } from '../operations/initiate.operation';
 
 class StubAuthRepository {
   async findByIdentifier() {
@@ -253,6 +254,62 @@ test('accepts a simplified supplier-only settlement payload without item details
   const errors = await validate(dto);
   assert.equal(errors.length, 0, 'expected DTO validation to pass for a simplified supplier summary payload');
   console.log('step 1 passed: simplified supplier summary payload is accepted');
+});
+
+test('accepts the canonical mixed payment payload and calculates allocations server-side', async () => {
+  const previousFeeRate = process.env.PAYASSURE_PLATFORM_FEE_RATE;
+  process.env.PAYASSURE_PLATFORM_FEE_RATE = '0.8';
+
+  const dto = plainToInstance(InitiateSettlementDto, {
+    merchantId: 'pay_retailer_001',
+    merchantTransactionReference: 'TXN-CANONICAL-001',
+    amount: 400,
+    currency: 'KES',
+    payment: {
+      methods: [
+        { type: 'CASH', amount: 160 },
+        { type: 'MPESA', amount: 240, phoneNumber: '254791614036' },
+      ],
+    },
+    items: [
+      { supplierMerchantId: 'SUP-1001', itemReference: 'ITEM-001', supplierAmount: 200, retailerAmount: 200 },
+    ],
+    metadata: { branchId: 'BR-01', invoiceReference: 'INV-001' },
+  });
+
+  const errors = await validate(dto);
+  assert.equal(errors.length, 0, 'expected canonical mixed payment payload to pass DTO validation');
+
+  const normalized = normalizeCanonicalSettlement(dto);
+  assert.equal(normalized.totalAmount, 400);
+  assert.equal(normalized.paymentMethods?.[0].provider, 'ESCROW');
+  assert.equal(normalized.suppliers?.[0].supplierTotalAmount, 198.4);
+  assert.equal(normalized.suppliers?.[0].retailerTotalAmount, 198.4);
+  assert.equal(normalized.suppliers?.[0].platformFee, 3.2);
+  assert.equal(normalized.metadata?.invoiceReference, 'INV-001');
+  assert.equal((normalized as any).idempotencyKey, undefined);
+  assert.equal((normalized as any).orderReference, undefined);
+  assert.equal((normalized as any).references, undefined);
+
+  if (previousFeeRate === undefined) {
+    delete process.env.PAYASSURE_PLATFORM_FEE_RATE;
+  } else {
+    process.env.PAYASSURE_PLATFORM_FEE_RATE = previousFeeRate;
+  }
+});
+
+test('rejects an incomplete canonical payload before initiation', () => {
+  const incomplete = plainToInstance(InitiateSettlementDto, {
+    merchantId: 'pay_retailer_001',
+    merchantTransactionReference: 'TXN-CANONICAL-INCOMPLETE',
+    amount: 400,
+    currency: 'KES',
+  });
+
+  assert.throws(
+    () => normalizeCanonicalSettlement(incomplete),
+    /Canonical settlement payload is incomplete/,
+  );
 });
 
 test('accepts MPESA payerPhoneNumber for collection and ignores empty legacy phoneNumber fields', async () => {

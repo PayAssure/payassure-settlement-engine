@@ -91,34 +91,52 @@ export class SettlementController {
       'Submit settlement payload using both a user access token and a settlement session token. The access token must be sent as a bearer Authorization header and the settlement session token must be sent in the x-settlement-session header.',
   })
   @ApiBody({
-    description: 'Retailer settlement initiation payload submitted to PayAssure.',
+    description: 'Canonical retailer settlement initiation payload. The retailer supplies supplierAmount and retailerAmount; PayAssure calculates and equally deducts the configured platform fee from both allocations. Do not send platformFee, provider, callbackUrl, or transactionDate.',
     schema: {
       example: {
         merchantId: 'pay_d68f568ddc7d7b2a',
-        merchantTransactionReference: 'TXN-20260703-000001',
-        totalAmount: 16500,
+        merchantTransactionReference: 'TXN-MIXED-20260916-000001',
+        amount: 127000,
         currency: 'KES',
-        settlementMethod: 'BANK_TRANSFER',
-        description: 'Daily settlement batch',
-        paymentMethod: {
-          type: 'MPESA',
-          payerPhoneNumber: '254712345678',
-          provider: 'Safaricom',
+        payment: {
+          methods: [
+            { type: 'CASH', amount: 45000 },
+            { type: 'MPESA', amount: 82000, phoneNumber: '254791614036' },
+          ],
         },
-        callbackUrl: 'https://merchant.example.com/api/payassure/callback',
-        transactionDate: '2026-07-03T17:30:15+03:00',
-        metadata: {
-          branchId: 'BR-01',
-          terminalId: 'POS-03',
-        },
-        suppliers: [
+        items: [
           {
-            supplierMerchantId: 'SUP-1001',
-            supplierTotalAmount: 7200,
-            retailerTotalAmount: 900,
-            platformFee: 64.8,
+            supplierMerchantId: 'pay_supplier_cement_001',
+            itemReference: 'CEMENT-50KG-001',
+            supplierAmount: 38500,
+            retailerAmount: 3250,
+          },
+          {
+            supplierMerchantId: 'pay_supplier_steel_002',
+            itemReference: 'STEEL-BAR-001',
+            supplierAmount: 32500,
+            retailerAmount: 2700,
+          },
+          {
+            supplierMerchantId: 'pay_supplier_electrical_003',
+            itemReference: 'ELEC-CABLE-001',
+            supplierAmount: 26500,
+            retailerAmount: 2350,
+          },
+          {
+            supplierMerchantId: 'pay_supplier_plumbing_004',
+            itemReference: 'PLUMB-PVC-001',
+            supplierAmount: 19500,
+            retailerAmount: 1700,
           },
         ],
+        metadata: {
+          batchId: 'BATCH-NAIROBI-20260916-001',
+          branchId: 'NRB-WESTLANDS-001',
+          terminalId: 'POS-WL-07',
+          salesAgentId: 'agent-042',
+            invoiceReference: 'INV-WL-20260916-00091',
+        },
       },
     },
   })

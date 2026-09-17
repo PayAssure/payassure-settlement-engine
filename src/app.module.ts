@@ -5,8 +5,9 @@ import { OnbordingsModule } from './onbordings/onbordings.module';
 import { PaymentModule } from './payment/payment.module';
 import { SettlementModule } from './settlement/settlement.module';
 import { EscrowIntelligenceModule } from './escrow-intelligence/escrow-intelligence.module';
+import { KcbModule } from './kcb/kcb.module';
 
 @Module({
-  imports: [SettlementModule, EscrowIntelligenceModule, OnbordingsModule, AuthModule, HealthModule, PaymentModule],
+  imports: [SettlementModule, EscrowIntelligenceModule, OnbordingsModule, AuthModule, HealthModule, PaymentModule, KcbModule],
 })
 export class AppModule {}

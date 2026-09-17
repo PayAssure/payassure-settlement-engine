@@ -87,36 +87,61 @@
         ],
         "requestBody": {
           "required": true,
-          "description": "Retailer settlement initiation payload submitted to PayAssure.",
+          "description": "Canonical retailer settlement initiation payload. The retailer supplies supplierAmount and retailerAmount; PayAssure calculates and equally deducts the configured platform fee from both allocations. Do not send platformFee, provider, callbackUrl, or transactionDate.",
           "content": {
             "application/json": {
               "schema": {
                 "example": {
-                  "merchantId": "pay_d68f568ddc7d7b2a",
-                  "merchantTransactionReference": "TXN-20260703-000001",
-                  "totalAmount": 16500,
+                  "merchantId": "pay_retailer_001",
+                  "merchantTransactionReference": "TXN-MIXED-20260916-000001",
+                  "amount": 127000,
                   "currency": "KES",
-                  "settlementMethod": "BANK_TRANSFER",
-                  "description": "Daily settlement batch",
-                  "paymentMethod": {
-                    "type": "MPESA",
-                    "payerPhoneNumber": "254712345678",
-                    "provider": "Safaricom"
+                  "payment": {
+                    "methods": [
+                      {
+                        "type": "CASH",
+                        "amount": 45000
+                      },
+                      {
+                        "type": "MPESA",
+                        "amount": 82000,
+                        "phoneNumber": "254791614036"
+                      }
+                    ]
                   },
-                  "callbackUrl": "https://merchant.example.com/api/payassure/callback",
-                  "transactionDate": "2026-07-03T17:30:15+03:00",
-                  "metadata": {
-                    "branchId": "BR-01",
-                    "terminalId": "POS-03"
-                  },
-                  "suppliers": [
+                  "items": [
                     {
-                      "supplierMerchantId": "SUP-1001",
-                      "supplierTotalAmount": 7200,
-                      "retailerTotalAmount": 900,
-                      "platformFee": 64.8
+                      "supplierMerchantId": "pay_supplier_cement_001",
+                      "itemReference": "CEMENT-50KG-001",
+                      "supplierAmount": 38500,
+                      "retailerAmount": 3250
+                    },
+                    {
+                      "supplierMerchantId": "pay_supplier_steel_002",
+                      "itemReference": "STEEL-BAR-001",
+                      "supplierAmount": 32500,
+                      "retailerAmount": 2700
+                    },
+                    {
+                      "supplierMerchantId": "pay_supplier_electrical_003",
+                      "itemReference": "ELEC-CABLE-001",
+                      "supplierAmount": 26500,
+                      "retailerAmount": 2350
+                    },
+                    {
+                      "supplierMerchantId": "pay_supplier_plumbing_004",
+                      "itemReference": "PLUMB-PVC-001",
+                      "supplierAmount": 19500,
+                      "retailerAmount": 1700
                     }
-                  ]
+                  ],
+                  "metadata": {
+                    "batchId": "BATCH-NAIROBI-20260916-001",
+                    "branchId": "NRB-WESTLANDS-001",
+                    "terminalId": "POS-WL-07",
+                    "salesAgentId": "agent-042",
+                    "invoiceReference": "INV-WL-20260916-00091"
+                  }
                 }
               }
             }
@@ -559,6 +584,67 @@
         },
         "tags": [
           "settlement"
+        ]
+      }
+    },
+    "/kcb/funds-transfer": {
+      "post": {
+        "operationId": "KcbController_fundsTransfer",
+        "summary": "Initiate a standalone KCB funds transfer",
+        "description": "Calls KCB OAuth and the KCB Funds Transfer API. PayAssure forwards the OAuth token authorization header internally and never returns it to the client. This asynchronous integration is standalone and is not invoked by settlement initiation, payment callbacks, or payout dispatch.",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "example": {
+                  "beneficiaryDetails": "JOHN DOE",
+                  "companyCode": "KE0010001",
+                  "creditAccountNumber": "1279287799",
+                  "currency": "KES",
+                  "debitAccountNumber": "1279258233",
+                  "debitAmount": 26,
+                  "paymentDetails": "UT Fund withdrawal",
+                  "transactionReference": "FT1234567890",
+                  "transactionType": "IF",
+                  "beneficiaryBankCode": "01"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "KCB transfer accepted for asynchronous processing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "example": {
+                    "success": true,
+                    "provider": "KCB",
+                    "transactionReference": "FT1234567890",
+                    "response": {
+                      "statusCode": "0",
+                      "statusMessage": "Success",
+                      "statusDescription": "Request received for processing",
+                      "merchantID": "263eb626-3fe7-4662-813e-f6f2962219e1",
+                      "retrievalRefNumber": "PCI663RSS"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid transfer request."
+          },
+          "503": {
+            "description": "KCB authentication or transfer request failed."
+          }
+        },
+        "tags": [
+          "KCB Funds Transfer"
         ]
       }
     },

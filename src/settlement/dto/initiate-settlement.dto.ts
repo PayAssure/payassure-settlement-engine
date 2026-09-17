@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNumber, IsString, IsNotEmpty, IsOptional, IsArray, ValidateNested, Min, IsUrl, IsISO8601, ArrayMinSize } from 'class-validator';
+import { IsNumber, IsString, IsNotEmpty, IsOptional, IsArray, ValidateNested, Min, IsUrl, IsISO8601, ArrayMinSize, ValidateIf } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class PaymentMethodDto {
@@ -57,6 +57,55 @@ export class PaymentMethodAllocationDto {
   phoneNumber?: string = '';
 }
 
+export class MerchantPaymentMethodDto {
+  @ApiProperty({ example: 'CASH', description: 'Customer funding method. Supported values are CASH and MPESA.' })
+  @IsString()
+  @IsNotEmpty()
+  type: 'MPESA' | 'CASH' = 'CASH';
+
+  @ApiProperty({ example: 45000, description: 'Amount funded through this payment method.' })
+  @IsNumber()
+  @Min(0.01)
+  amount = 0;
+
+  @ApiPropertyOptional({ example: '254791614036', description: 'Customer phone number. Required for MPESA and ignored for CASH.' })
+  @IsString()
+  @IsOptional()
+  phoneNumber?: string;
+}
+
+export class MerchantPaymentDto {
+  @ApiProperty({ type: [MerchantPaymentMethodDto], description: 'Customer funding methods. Their amounts must sum to amount.' })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => MerchantPaymentMethodDto)
+  methods: MerchantPaymentMethodDto[] = [];
+}
+
+export class MerchantSettlementItemDto {
+  @ApiProperty({ example: 'pay_supplier_cement_001', description: 'Supplier merchant ID that owns the item.' })
+  @IsString()
+  @IsNotEmpty()
+  supplierMerchantId = '';
+
+  @ApiProperty({ example: 'CEMENT-50KG-001', description: 'Retailer catalog item reference.' })
+  @IsString()
+  @IsNotEmpty()
+  itemReference = '';
+
+  @ApiProperty({ example: 18000, description: 'Amount owed to the supplier for this item. Supplied by the retailer POS/ERP.' })
+  @IsNumber()
+  @Min(0.01)
+  supplierAmount = 0;
+
+  @ApiProperty({ example: 1500, description: 'Retailer commercial amount for this item before the PayAssure fee deduction.' })
+  @IsNumber()
+  @Min(0.0)
+  retailerAmount = 0;
+
+}
+
 export class SupplierItemDto {
   @ApiPropertyOptional({ example: 'ITEM-001', description: 'Reference for the supplier item being settled.' })
   @IsString()
@@ -67,11 +116,6 @@ export class SupplierItemDto {
   @IsString()
   @IsOptional()
   itemId?: string = '';
-
-  @ApiPropertyOptional({ example: 'Cement 50kg', description: 'Optional human-readable item name.' })
-  @IsString()
-  @IsOptional()
-  itemName?: string = '';
 
   @ApiPropertyOptional({ example: 3200.0, description: 'Amount allocated to the supplier for this item.' })
   @IsNumber()
@@ -85,28 +129,6 @@ export class SupplierItemDto {
   @IsOptional()
   retailerAmount?: number = 0;
 
-  @ApiPropertyOptional({ example: 28.8, description: 'Optional platform fee for this item.' })
-  @IsNumber()
-  @Min(0.0)
-  @IsOptional()
-  platformFee?: number = 0;
-
-  @ApiPropertyOptional({ example: 5, description: 'Optional quantity for this item.' })
-  @IsNumber()
-  @Min(0.0)
-  @IsOptional()
-  quantity?: number = 0;
-
-  @ApiPropertyOptional({ example: 640, description: 'Optional unit price for this item.' })
-  @IsNumber()
-  @Min(0.0)
-  @IsOptional()
-  unitPrice?: number = 0;
-
-  @ApiPropertyOptional({ example: 'Cement sale', description: 'Optional description for this item.' })
-  @IsString()
-  @IsOptional()
-  description?: string = '';
 }
 
 export class SupplierDto {
@@ -141,43 +163,6 @@ export class SupplierDto {
   items?: SupplierItemDto[] = [];
 }
 
-export class TransactionItemDto {
-  @ApiProperty({ example: 'item_001', description: 'Unique item identifier for this transaction.' })
-  @IsString()
-  @IsNotEmpty()
-  itemId: string = '';
-
-  @ApiProperty({ example: 'pay_sup_001', description: 'Merchant identifier of the supplier that owns this item.' })
-  @IsString()
-  @IsNotEmpty()
-  supplierMerchantId: string = '';
-
-  @ApiProperty({ example: 'SALE', description: 'Type of transaction such as SALE, REFUND, or ADJUSTMENT.' })
-  @IsString()
-  @IsNotEmpty()
-  type: string = '';
-
-  @ApiProperty({ example: 5, description: 'Quantity of the item being settled.' })
-  @IsNumber()
-  @Min(0.01)
-  quantity: number = 0;
-
-  @ApiProperty({ example: 500, description: 'Unit price per item.' })
-  @IsNumber()
-  @Min(0.01)
-  unitPrice: number = 0;
-
-  @ApiProperty({ example: 2500, description: 'Amount for the transaction item.' })
-  @IsNumber()
-  @Min(0.01)
-  amount: number = 0;
-
-  @ApiPropertyOptional({ example: 'Sales for 2026-06-30', description: 'Optional description of the transaction item.' })
-  @IsString()
-  @IsOptional()
-  description?: string = '';
-}
-
 export class InitiateSettlementDto {
   @ApiPropertyOptional({ example: 'pay_d68f568ddc7d7b2a', description: 'Optional merchant identifier for the business initiating the settlement.' })
   @IsString()
@@ -192,7 +177,14 @@ export class InitiateSettlementDto {
   @ApiProperty({ example: 16500.0, description: 'Total amount for the entire settlement request.' })
   @IsNumber()
   @Min(0.01)
+  @ValidateIf((request) => !request.amount)
   totalAmount: number = 0;
+
+  @ApiPropertyOptional({ example: 130280, description: 'Canonical amount alias. New merchant requests should use amount.' })
+  @IsNumber()
+  @Min(0.01)
+  @IsOptional()
+  amount?: number;
 
   @ApiProperty({ example: 'KES', description: 'Currency code for the settlement.' })
   @IsString()
@@ -201,7 +193,9 @@ export class InitiateSettlementDto {
 
   @ApiProperty({ example: 'BANK_TRANSFER', description: 'Settlement method used for payout.' })
   @IsString()
+  @ValidateIf((request) => !request.items)
   @IsNotEmpty()
+  @IsOptional()
   settlementMethod: string = '';
 
   @ApiPropertyOptional({ example: 'Daily settlement batch', description: 'Optional description for the settlement request.' })
@@ -209,9 +203,18 @@ export class InitiateSettlementDto {
   @IsOptional()
   description?: string = '';
 
-  @ApiProperty({ type: PaymentMethodDto, description: 'Payment method details for the settlement.' })
+  @ApiPropertyOptional({ type: MerchantPaymentDto, description: 'Canonical payment section. New merchant requests should use payment.methods.' })
+  @ValidateNested()
+  @Type(() => MerchantPaymentDto)
+  @IsOptional()
+  payment?: MerchantPaymentDto;
+
+  @ApiPropertyOptional({ type: PaymentMethodDto, description: 'Legacy payment method details. Prefer payment.methods.' })
   @ValidateNested()
   @Type(() => PaymentMethodDto)
+  @ValidateIf((request) => !request.payment)
+  @IsNotEmpty()
+  @IsOptional()
   paymentMethod: PaymentMethodDto = new PaymentMethodDto();
 
   @ApiPropertyOptional({ type: [PaymentMethodAllocationDto], description: 'Optional list of split funding allocations. Use this for mixed CASH + MPESA settlements. The sum of all allocation amounts must equal totalAmount.' })
@@ -226,18 +229,32 @@ export class InitiateSettlementDto {
   @IsOptional()
   callbackUrl?: string = undefined;
 
-  @ApiProperty({ example: '2026-07-03T17:30:15+03:00', description: 'ISO timestamp for when the transaction occurred.' })
+  @ApiPropertyOptional({ example: '2026-07-03T17:30:15+03:00', description: 'Legacy client timestamp. PayAssure server timestamps remain authoritative.' })
   @IsISO8601()
-  transactionDate: string = '';
+  @ValidateIf((request) => !request.items)
+  @IsNotEmpty()
+  @IsOptional()
+  transactionDate!: string;
 
   @ApiPropertyOptional({ example: { branchId: 'BR-01', terminalId: 'POS-03' }, description: 'Optional metadata for the transaction.' })
   @IsOptional()
   metadata?: Record<string, any> = {};
 
-  @ApiProperty({ type: [SupplierDto], description: 'Supplier-based allocations representing settlement units.' })
+  @ApiPropertyOptional({ type: [SupplierDto], description: 'Legacy grouped supplier allocations. New requests should send flat items instead.' })
   @IsArray()
+  @ValidateIf((request) => !request.items)
   @ArrayMinSize(1)
+  @IsOptional()
   @ValidateNested({ each: true })
   @Type(() => SupplierDto)
   suppliers: SupplierDto[] = [];
+
+  @ApiPropertyOptional({ type: [MerchantSettlementItemDto], description: 'Canonical flat item list. Supplier, retailer, and platform allocations are calculated by PayAssure.' })
+  @IsArray()
+  @ValidateIf((request) => !request.suppliers || request.suppliers.length === 0)
+  @ArrayMinSize(1)
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => MerchantSettlementItemDto)
+  items?: MerchantSettlementItemDto[];
 }
