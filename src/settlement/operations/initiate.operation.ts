@@ -24,11 +24,17 @@ function aggregateSuppliers(suppliers: InitiateSettlementDto['suppliers']) {
   const grouped = new Map<string, any>();
 
   for (const supplier of suppliers ?? []) {
-    const existing = grouped.get(supplier.supplierMerchantId);
+    const supplierId = String(supplier.supplierMerchantId ?? '').trim();
     const items = Array.isArray(supplier.items) ? supplier.items : [];
+    if (!supplierId) {
+      continue;
+    }
+
+    const existing = grouped.get(supplierId);
     if (!existing) {
-      grouped.set(supplier.supplierMerchantId, {
+      grouped.set(supplierId, {
         ...supplier,
+        supplierMerchantId: supplierId,
         supplierTotalAmount: Number(supplier.supplierTotalAmount ?? 0),
         retailerTotalAmount: Number(supplier.retailerTotalAmount ?? 0),
         platformFee: Number(supplier.platformFee ?? 0),
@@ -44,6 +50,31 @@ function aggregateSuppliers(suppliers: InitiateSettlementDto['suppliers']) {
   }
 
   return Array.from(grouped.values());
+}
+
+export function simulateMpesaLandingCallback(options: {
+  merchantTransactionReference: string;
+  amount: number;
+  payerPhoneNumber?: string;
+  provider?: string;
+  stkPushInitiated?: boolean;
+}) {
+  const amount = Number(options.amount ?? 0);
+  const callbackConfirmed = Boolean(options.stkPushInitiated ?? false);
+
+  return {
+    status: callbackConfirmed ? 'SUCCESS' : 'BLOCKED',
+    merchantTransactionReference: options.merchantTransactionReference,
+    amount,
+    provider: options.provider ?? 'MPESA',
+    payerPhoneNumber: options.payerPhoneNumber ?? '',
+    receiptNumber: `SIM-${options.merchantTransactionReference}-${Date.now()}`,
+    callbackConfirmed,
+    depositedAt: new Date().toISOString(),
+    message: callbackConfirmed
+      ? 'MPESA callback simulated successfully after STK push was initiated; funds are assumed to have landed in PayAssure.'
+      : 'MPESA callback simulation skipped because no STK push was initiated.',
+  };
 }
 
 async function sendStkPushRequest(payload: Record<string, any>) {
@@ -699,17 +730,17 @@ export async function initiateOperation(
         });
 
         const mpesaFundingResults: any[] = [];
+        const mpesaFundingMethod = settlementFundingMethods.find((method) => String(method.type ?? '').trim().toUpperCase() === 'MPESA');
+        const mpesaPayerPhoneNumber = String(
+          mpesaFundingMethod?.payerPhoneNumber ?? mpesaFundingMethod?.phoneNumber ?? data.paymentMethod?.payerPhoneNumber ?? data.paymentMethod?.phoneNumber ?? ''
+        ).trim();
+
         if (mpesaAmount > 0) {
           logger.warn('[CASH_FLOW][MPESA_FUNDING_WAITING_FOR_LANDING]', {
             merchantTransactionReference: data.merchantTransactionReference,
             amount: mpesaAmount,
             message: 'Waiting for MPESA funds to land to the PayAssure account before supplier payouts are released.',
           });
-
-          const mpesaFundingMethod = settlementFundingMethods.find((method) => String(method.type ?? '').trim().toUpperCase() === 'MPESA');
-          const mpesaPayerPhoneNumber = String(
-            mpesaFundingMethod?.payerPhoneNumber ?? mpesaFundingMethod?.phoneNumber ?? data.paymentMethod?.payerPhoneNumber ?? data.paymentMethod?.phoneNumber ?? ''
-          ).trim();
 
           const mpesaFundingRequest = {
             merchantTransactionReference: data.merchantTransactionReference,
@@ -780,18 +811,93 @@ export async function initiateOperation(
           }
         }
 
-        if (cashAmount > 0 && mpesaAmount > 0) {
+        const supplierPaymentLog = (data.suppliers ?? []).map((supplier) => {
+          const supplierItems = Array.isArray(supplier.items) ? supplier.items : [];
+          const supplierAmount = supplierItems.length > 0
+            ? supplierItems.reduce((sum, item) => sum + Number(item.supplierAmount ?? 0), 0)
+            : Number(supplier.supplierTotalAmount ?? 0);
+          const retailerAmount = Number(supplier.retailerTotalAmount ?? 0);
+          const platformFee = Number(supplier.platformFee ?? 0);
+          return {
+            supplierMerchantId: supplier.supplierMerchantId,
+            supplierAmount,
+            retailerAmount,
+            platformFee,
+            itemCount: supplierItems.length,
+            items: supplierItems.map((item) => ({
+              itemReference: item.itemReference ?? item.itemId,
+              supplierAmount: Number(item.supplierAmount ?? 0),
+              retailerAmount: Number(item.retailerAmount ?? 0),
+            })),
+          };
+        });
+
+        const retailerAmountTotal = Number((data.suppliers ?? []).reduce((sum, supplier) => sum + Number(supplier.retailerTotalAmount ?? 0), 0));
+        const retailerIntegration = await prisma.integration.findFirst({ where: { merchantId: retailerMerchantId, isActive: true }, include: { participant: true } });
+        const retailerPayment = retailerIntegration?.participant?.payment as any;
+        const retailerPhone = retailerPayment?.phoneNumber ?? retailerPayment?.payerPhoneNumber ?? null;
+
+        logger.log('[CASH_FLOW][SUPPLIER_AND_RETAILER_PAYMENT_DETAILS]', {
+          merchantTransactionReference: data.merchantTransactionReference,
+          retailerPaymentDetails: {
+            retailerMerchantId,
+            retailerAmount: retailerAmountTotal,
+            type: retailerPayment?.type ?? data.paymentMethod?.type ?? 'CASH',
+            provider: retailerPayment?.provider ?? data.paymentMethod?.provider ?? 'ESCROW',
+            phoneNumber: retailerPhone ?? data.paymentMethod?.phoneNumber ?? data.paymentMethod?.payerPhoneNumber ?? '',
+            payerPhoneNumber: retailerPhone ?? data.paymentMethod?.payerPhoneNumber ?? data.paymentMethod?.phoneNumber ?? '',
+          },
+          supplierPaymentDetails: supplierPaymentLog,
+        });
+
+        if (mpesaAmount > 0 && mpesaFundingResults[0]?.result?.success) {
+          const simulatedMpesaCallback = simulateMpesaLandingCallback({
+            merchantTransactionReference: data.merchantTransactionReference,
+            amount: mpesaAmount,
+            payerPhoneNumber: mpesaPayerPhoneNumber,
+            provider: mpesaFundingMethod?.provider ?? 'MPESA',
+            stkPushInitiated: true,
+          });
+
           data.metadata = {
             ...(data.metadata ?? {}),
             paymentGateway: {
               provider: 'CASH',
-              status: 'WAITING_FOR_MPESA_CALLBACK',
+              status: 'MPESA_CALLBACK_SIMULATED',
               collection: cashCollection,
               mpesaInitiated: mpesaFundingResults[0] ?? null,
-              message: 'Escrow funds were collected and the MPESA request was initiated. Supplier payouts remain paused until the payment callback confirms both funding legs have landed.',
+              mpesaCallback: simulatedMpesaCallback,
+              message: 'STK push was initiated successfully, and the MPESA callback is simulated as landed so payouts can proceed.',
             },
           };
 
+          logger.warn('[CASH_FLOW][MPESA_CALLBACK_SIMULATED]', {
+            settlementId: primarySettlement.id,
+            merchantTransactionReference: data.merchantTransactionReference,
+            cashAmount,
+            mpesaAmount,
+            status: simulatedMpesaCallback.status,
+            callbackConfirmed: simulatedMpesaCallback.callbackConfirmed,
+            receiptNumber: simulatedMpesaCallback.receiptNumber,
+            message: simulatedMpesaCallback.message,
+          });
+
+          await repository.updateSettlementStatus(primarySettlement.id, SettlementStatus.PENDING_PROCESSING, {
+            metadata: {
+              ...(data.metadata ?? {}),
+              paymentGateway: {
+                provider: 'CASH',
+                status: 'MPESA_CALLBACK_SIMULATED',
+                collection: cashCollection,
+                mpesaInitiated: mpesaFundingResults[0] ?? null,
+                mpesaCallback: simulatedMpesaCallback,
+                message: 'MPESA funds were simulated as landed after STK initiation, so supplier payouts can continue.',
+              },
+            },
+          });
+        }
+
+        if (cashAmount > 0 && mpesaAmount > 0 && !(mpesaFundingResults[0]?.result?.success ?? false)) {
           logger.warn('[CASH_FLOW][AWAITING_MPESA_CALLBACK]', {
             settlementId: primarySettlement.id,
             merchantTransactionReference: data.merchantTransactionReference,
@@ -834,6 +940,40 @@ export async function initiateOperation(
             cashCollection,
             mpesaInitiated: mpesaFundingResults[0] ?? null,
           };
+        }
+
+        const retailerPayouts = [] as Array<Record<string, any>>;
+        logger.log('[CASH_FLOW][RETAILER_PAYOUT_PREP]', {
+          retailerMerchantId,
+          retailerAmount: retailerAmountTotal,
+          retailerPhonePresent: Boolean(retailerPhone),
+          itemCount: (data.suppliers ?? []).length,
+        });
+
+        if (retailerPhone) {
+          const retailerPayoutRequest = {
+            Amount: String(Math.round(Number(retailerAmountTotal))),
+            PartyB: retailerPhone,
+            Remarks: `Retailer payout for ${retailerMerchantId}`,
+            callbackUrl: process.env.MPESA_CALLBACK_URL || 'http://localhost:3000/callbacks/mpesa',
+            merchantTransactionReference: data.merchantTransactionReference,
+            retailerMerchantId,
+          };
+          logger.log('[CASH_FLOW][RETAILER_PAYOUT_REQUEST]', retailerPayoutRequest);
+          const retailerPayoutResult = await b2pochiService.initiateB2Pochi(retailerPayoutRequest);
+          logger.log('[CASH_FLOW][RETAILER_PAYOUT_RESULT]', {
+            retailerMerchantId,
+            retailerAmount: retailerAmountTotal,
+            payoutResult: retailerPayoutResult,
+            message: 'Retailer payout has been dispatched from the collected cash pool before supplier disbursement.',
+          });
+          retailerPayouts.push({ retailerMerchantId, retailerAmount: retailerAmountTotal, payoutResult: retailerPayoutResult });
+        } else {
+          logger.warn('[CASH_FLOW][RETAILER_PAYOUT_SKIPPED]', {
+            retailerMerchantId,
+            reason: 'No retailer phone was found for payout dispatch',
+            retailerAmount: retailerAmountTotal,
+          });
         }
 
         const supplierPayouts = [] as Array<Record<string, any>>;
@@ -889,10 +1029,11 @@ export async function initiateOperation(
           manufacturer: 'cash-provider-logging',
           provider: 'CASH',
           totalAmount: Number(data.totalAmount ?? 0),
-          payoutCount: supplierPayouts.length,
+          payoutCount: retailerPayouts.length + supplierPayouts.length,
           collectionStatus: cashCollection.status,
+          retailerPayouts,
           supplierPayouts,
-          message: 'Cash settlement flow completed: escrow checked, funds collected, deposited to PayAssure, and supplier dispatch initiated.',
+          message: 'Cash settlement flow completed: escrow checked, funds collected, deposited to PayAssure, retailer payout dispatched, and supplier dispatch initiated.',
         });
 
         data.metadata = {
@@ -912,17 +1053,18 @@ export async function initiateOperation(
             merchantId: retailerMerchantId,
             status: SettlementStatus.PENDING_PROCESSING,
             amount: Number(data.totalAmount),
-            retailerAmount: 0,
-            supplierAmount: Number(data.totalAmount),
-            systemAmount: 0,
+            retailerAmount: retailerAmountTotal,
+            supplierAmount: Number(data.totalAmount) - retailerAmountTotal,
+            systemAmount: Number((data.suppliers ?? []).reduce((sum, supplier) => sum + Number(supplier.platformFee ?? 0), 0)),
             paymentDetails: toPublicPaymentDetails(data.paymentMethod),
             currency: data.currency,
             reference: primarySettlement.reference,
             createdAt: primarySettlement.createdAt,
             estimatedProcessingTime: 'N/A',
           },
-          message: 'Cash collection succeeded from retailer escrow and supplier payout requests were dispatched.',
+          message: 'Cash collection succeeded from retailer escrow, retailer payout was dispatched, and supplier payout requests were dispatched.',
           cashCollection,
+          retailerPayouts,
           supplierPayouts,
         };
       }

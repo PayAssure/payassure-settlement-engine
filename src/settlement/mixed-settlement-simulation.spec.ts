@@ -5,6 +5,7 @@ import { validate } from 'class-validator';
 import { InitiateSettlementDto } from './dto/initiate-settlement.dto';
 import { validateSettlementData } from './helpers/validation.helpers';
 import { MockBankEscrowProvider } from '../escrow-intelligence/providers/mock-bank-escrow.provider';
+import { normalizeCanonicalSettlement, simulateMpesaLandingCallback } from './operations/initiate.operation';
 
 const supplierGroupA = {
   supplierMerchantId: 'pay_d68f568ddc7d7b2a',
@@ -26,6 +27,50 @@ const supplierGroupB = {
 };
 
 const baseSupplierList = [supplierGroupA, supplierGroupB];
+
+test('normalize canonical settlement groups repeated supplier products into one supplier entry and simulates MPESA callback only after STK push', () => {
+  const dto = plainToInstance(InitiateSettlementDto, {
+    merchantId: 'pay_retailer_001',
+    merchantTransactionReference: 'TXN-SIM-20260918-0002',
+    amount: 127000,
+    currency: 'KES',
+    payment: {
+      methods: [
+        { type: 'CASH', amount: 45000 },
+        { type: 'MPESA', amount: 82000, phoneNumber: '254791614036' },
+      ],
+    },
+    items: [
+      { supplierMerchantId: 'pay_d68f568ddc7d7b2a', itemReference: 'CEMENT-50KG-001', supplierAmount: 38500, retailerAmount: 3250 },
+      { supplierMerchantId: 'pay_d68f568ddc7d7b2a', itemReference: 'STEEL-BAR-001', supplierAmount: 32500, retailerAmount: 2700 },
+      { supplierMerchantId: 'pay_cc054dace2163d92', itemReference: 'ELEC-CABLE-001', supplierAmount: 26500, retailerAmount: 2350 },
+      { supplierMerchantId: 'pay_cc054dace2163d92', itemReference: 'PLUMB-PVC-001', supplierAmount: 19500, retailerAmount: 1700 },
+    ],
+  });
+
+  const normalized = normalizeCanonicalSettlement(dto);
+  assert.ok(Array.isArray(normalized.suppliers) && normalized.suppliers.length === 2, 'each supplier should be aggregated into a single supplier group');
+  const firstSupplier = normalized.suppliers?.[0];
+  assert.ok(firstSupplier, 'first supplier should exist after normalization');
+  assert.equal(firstSupplier.supplierMerchantId, 'pay_d68f568ddc7d7b2a');
+  assert.equal(firstSupplier.items?.length ?? 0, 2, 'all items for the same supplier should remain together under one grouped supplier');
+  assert.equal(firstSupplier.supplierTotalAmount, 70690.12, 'supplier totals should be combined and summed');
+  const retailerTotal = Number((normalized.suppliers ?? []).reduce((sum, supplier) => sum + Number(supplier.retailerTotalAmount ?? 0), 0));
+  assert.equal(retailerTotal, 9486.92, 'retailer totals should be combined and dispatched as one retailer payout');
+
+  const simulatedCallback = simulateMpesaLandingCallback({
+    merchantTransactionReference: 'TXN-SIM-20260918-0002',
+    amount: 82000,
+    payerPhoneNumber: '254791614036',
+    provider: 'MPESA',
+    stkPushInitiated: true,
+  });
+
+  assert.equal(simulatedCallback.status, 'SUCCESS');
+  assert.equal(simulatedCallback.callbackConfirmed, true);
+  assert.equal(simulatedCallback.amount, 82000);
+  assert.match(simulatedCallback.message, /STK push was initiated/i);
+});
 
 function buildDto(overrides: Partial<Record<string, any>> = {}) {
   return plainToInstance(InitiateSettlementDto, {

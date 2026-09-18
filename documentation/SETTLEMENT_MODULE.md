@@ -90,7 +90,7 @@ The retailer POS/ERP owns the commercial facts. It sends the supplier and retail
 
 ```json
 {
-  "merchantId": "pay_retailer_001",
+  "merchantId": "pay_d68f568ddc7d7b2a",
   "merchantTransactionReference": "TXN-MIXED-20260916-000001",
   "amount": 127000,
   "currency": "KES",
@@ -109,25 +109,25 @@ The retailer POS/ERP owns the commercial facts. It sends the supplier and retail
   },
   "items": [
     {
-      "supplierMerchantId": "pay_supplier_cement_001",
+      "supplierMerchantId": "pay_d68f568ddc7d7b2a",
       "itemReference": "CEMENT-50KG-001",
       "supplierAmount": 38500,
       "retailerAmount": 3250
     },
     {
-      "supplierMerchantId": "pay_supplier_steel_002",
+      "supplierMerchantId": "pay_d68f568ddc7d7b2a",
       "itemReference": "STEEL-BAR-001",
       "supplierAmount": 32500,
       "retailerAmount": 2700
     },
     {
-      "supplierMerchantId": "pay_supplier_electrical_003",
+      "supplierMerchantId": "pay_cc054dace2163d92",
       "itemReference": "ELEC-CABLE-001",
       "supplierAmount": 26500,
       "retailerAmount": 2350
     },
     {
-      "supplierMerchantId": "pay_supplier_plumbing_004",
+      "supplierMerchantId": "pay_cc054dace2163d92",
       "itemReference": "PLUMB-PVC-001",
       "supplierAmount": 19500,
       "retailerAmount": 1700
