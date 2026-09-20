@@ -479,7 +479,6 @@ export async function initiateOperation(
 
     const initiateCustomerPayment = async () => {
       const settlementFundingMethods = normalizePaymentMethods(data);
-      const providerName = String(data.paymentMethod?.provider ?? data.paymentMethod?.type ?? 'MPESA').trim().toUpperCase();
 
       if (settlementFundingMethods.length > 0 && settlementFundingMethods.some((method) => ['CASH', 'ESCROW'].includes(String(method.type ?? '').trim().toUpperCase()))) {
         const escrowCustomerId = retailerMerchantId || businessId;

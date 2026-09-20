@@ -154,8 +154,6 @@ test('mixed settlement simulation matrix logs each step and keeps going past per
   const mismatchCustomerId = `pay_escrow_mismatch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const duplicateCustomerId = `pay_escrow_duplicate_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const reversalCustomerId = `pay_escrow_reversal_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const pureCashCustomerId = `pay_escrow_pure_cash_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
   const successEscrowProvider = new MockBankEscrowProvider({ [successCustomerId]: { balance: 5000, transactions: [] } });
   const insufficientEscrowProvider = new MockBankEscrowProvider({ [insufficientCustomerId]: { balance: 2000, transactions: [] } });
   const refundEscrowProvider = new MockBankEscrowProvider({ [refundCustomerId]: { balance: 5000, transactions: [] } });

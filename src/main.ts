@@ -81,7 +81,6 @@ Included modules:
 - Payment callback processing
 - Settlement creation and confirmation
 - Escrow intelligence with provider-aware reconciliation for MPESA and CASH
-- Mock escrow control panel and scenario testing for development environments
 - Reconciliation and payout tracking
 
 All protected endpoints require a valid JWT access token. Internal payment confirmation requests use the configured application token and signature secret.

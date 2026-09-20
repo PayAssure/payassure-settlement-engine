@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiExcludeEndpoint, ApiTags } from '@nestjs/swagger';
 import { EscrowIntelligenceService } from './escrow-intelligence.service';
 import { MockBankEscrowProvider } from './providers/mock-bank-escrow.provider';
 
@@ -31,6 +31,7 @@ export class EscrowIntelligenceController {
     return this.escrowIntelligenceService.getReconciliationHistory();
   }
 
+  @ApiExcludeEndpoint()
   @Get('mock/control-panel')
   mockControlPanel() {
     if (process.env.NODE_ENV === 'production') {
@@ -45,6 +46,7 @@ export class EscrowIntelligenceController {
     };
   }
 
+  @ApiExcludeEndpoint()
   @Post('mock/control-panel')
   setMockFailureMode(@Body() body: { mode?: 'none' | 'provider-down' | 'mismatch' | 'duplicate' | 'reversal' }) {
     if (process.env.NODE_ENV === 'production') {
@@ -59,6 +61,7 @@ export class EscrowIntelligenceController {
     };
   }
 
+  @ApiExcludeEndpoint()
   @Post('mock/account')
   async seedMockAccount(@Body() body: {
     customerId?: string;
@@ -96,6 +99,7 @@ export class EscrowIntelligenceController {
     };
   }
 
+  @ApiExcludeEndpoint()
   @Get('mock/account/:customerId')
   getMockAccount(@Param('customerId') customerId: string) {
     if (process.env.NODE_ENV === 'production') {
@@ -105,6 +109,7 @@ export class EscrowIntelligenceController {
     return this.mockBankEscrowProvider.getCustomerEscrowBalance(customerId);
   }
 
+  @ApiExcludeEndpoint()
   @Post('mock/scenario')
   async mockScenario(@Body() body: {
     customerId: string;

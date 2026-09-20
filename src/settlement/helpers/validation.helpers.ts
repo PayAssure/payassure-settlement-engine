@@ -179,16 +179,6 @@ export async function validateSettlementData(
     }
   }
 
-  const invalidSupplierIndexes = new Set(invalidSuppliers.map((supplier) => supplier.index));
-  const validComputedTotal = (data.suppliers ?? []).reduce((total, supplier, index) => {
-    if (invalidSupplierIndexes.has(index)) return total;
-    const items = Array.isArray(supplier.items) ? supplier.items : [];
-    const supplierAmount = items.length > 0
-      ? items.reduce((sum, item) => sum + Number(item.supplierAmount ?? 0), 0)
-      : Number(supplier.supplierTotalAmount ?? 0);
-    return total + supplierAmount + Number(supplier.retailerTotalAmount ?? 0) + Number(supplier.platformFee ?? 0);
-  }, 0);
-
   if (invalidSuppliers.length > 0 && (data.suppliers ?? []).length === 1) {
     errors.push(...invalidSuppliers[0].errors);
   }

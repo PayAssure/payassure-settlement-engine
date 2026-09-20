@@ -1,6 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 
-function buildTimeline(status: string, createdAt: Date) {
+function buildTimeline(createdAt: Date) {
   return [
     { status: 'INITIATED', timestamp: createdAt.toISOString() },
     { status: 'ALLOCATED', timestamp: createdAt.toISOString() },
@@ -44,7 +44,7 @@ export async function trackOperation(prisma: any, repository: any, settlementId:
     createdAt: settlement.createdAt,
     processedAt: settlement.processedAt ?? undefined,
     estimatedCompletionTime: new Date(settlement.createdAt.getTime() + 48 * 60 * 60 * 1000),
-    timeline: buildTimeline(settlement.status, settlement.createdAt),
+    timeline: buildTimeline(settlement.createdAt),
     allocationPlan,
     ledgerTrace: persistedTrace,
   };

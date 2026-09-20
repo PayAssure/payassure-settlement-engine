@@ -1,6 +1,5 @@
-import { Body, Controller, Get, Post, Query, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, Post } from '@nestjs/common';
 import { ApiOperation, ApiTags, ApiResponse } from '@nestjs/swagger';
-import { Request, Response } from 'express';
 import { mpesaService } from '../services/mpesa.service';
 import { b2pochiService } from '../services/b2pochi.service';
 import { b2cService } from '../services/b2c.service';
@@ -56,14 +55,4 @@ export class MpesaController {
     return b2cService.initiateB2C(body as Record<string, any>);
   }
 
-  @Post('callbacks/mpesa')
-  @ApiOperation({ summary: 'Receive an M-Pesa callback notification' })
-  async callback(@Req() req: Request, @Res() res: Response) {
-    res.json({ ok: true, received: req.body, source: 'internal-payment-module' });
-  }
-
-  @Get('callbacks/mpesa')
-  async callbackGet(@Query() query: any, @Res() res: Response) {
-    res.json({ ok: true, query, source: 'internal-payment-module' });
-  }
 }

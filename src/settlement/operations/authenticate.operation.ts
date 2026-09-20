@@ -8,7 +8,6 @@ export async function authenticateOperation(
   repository: any,
   data: AuthenticateDto,
   user: any,
-  logger: any,
   tokenExpiry: number,
 ) {
   const integration = await prisma.integration.findFirst({

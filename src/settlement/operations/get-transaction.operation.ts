@@ -1,4 +1,3 @@
-import { NotFoundException } from '@nestjs/common';
 
 export async function getTransactionOperation(repository: any, transactionId: string) {
   const transaction = await repository.findTransactionById(transactionId);

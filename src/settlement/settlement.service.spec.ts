@@ -6,8 +6,6 @@ import { paymentRecordService } from '../payment/services/payment-record.service
 import { prisma } from '../payment/config/mpesa.env';
 import { b2bService } from '../payment/services/b2b.service';
 import { b2cService } from '../payment/services/b2c.service';
-import { B2BPayoutIdempotencyService } from './services/b2b-payout-idempotency.service';
-import { B2BPayoutRetryService } from './services/b2b-payout-retry.service';
 
 // Mock implementations for new services
 const mockIdempotencyService = {
@@ -21,7 +19,6 @@ const mockIdempotencyService = {
     lastAttemptAt: new Date(),
   }),
   updatePayoutAttemptStatus: async () => {},
-  markCallbackReceived: async () => {},
   getSettlementPayouts: async () => [],
   getPendingRetries: async () => [],
   getPayoutAttempt: async () => null,
@@ -149,8 +146,6 @@ test('dispatchB2bPayouts routes a retailer MPESA payout through B2C based on the
 
   const service = new SettlementService(repository as any, mockIdempotencyService, mockRetryService);
   (service as any).logger = { log: () => {}, warn: () => {}, error: () => {} };
-  (service as any).getB2bGatewayBaseUrl = async () => 'https://gateway.example.com';
-  (service as any).getB2bGatewayApiToken = () => 'token';
 
   try {
     const result = await service.dispatchB2bPayouts({
@@ -198,8 +193,6 @@ test('dispatchB2bPayouts preserves the payout callback identifier path instead o
 
   const service = new SettlementService(repository as any, mockIdempotencyService, mockRetryService);
   (service as any).logger = { log: () => {}, warn: () => {}, error: () => {} };
-  (service as any).getB2bGatewayBaseUrl = async () => 'https://gateway.example.com';
-  (service as any).getB2bGatewayApiToken = () => 'token';
 
   const originalInitiateB2B = b2bService.initiateB2B.bind(b2bService);
   (b2bService as any).initiateB2B = async (request: any) => {
@@ -271,8 +264,6 @@ test('dispatchB2bPayouts prefers the authenticated retailer integration over sta
 
   const service = new SettlementService(repository as any, mockIdempotencyService, mockRetryService);
   (service as any).logger = { log: () => {}, warn: () => {}, error: () => {} };
-  (service as any).getB2bGatewayBaseUrl = async () => 'https://gateway.example.com';
-  (service as any).getB2bGatewayApiToken = () => 'token';
   (service as any).prisma = {
     integration: {
       findFirst: async ({ where }: any) => {
@@ -341,8 +332,6 @@ test('dispatchB2bPayouts routes MPESA payouts through B2C and BANK payouts throu
 
   const service = new SettlementService(repository as any, mockIdempotencyService, mockRetryService);
   (service as any).logger = { log: () => {}, warn: () => {}, error: () => {} };
-  (service as any).getB2bGatewayBaseUrl = async () => 'https://gateway.example.com';
-  (service as any).getB2bGatewayApiToken = () => 'token';
 
   const originalB2B = b2bService.initiateB2B.bind(b2bService);
   const originalB2C = b2cService.initiateB2C.bind(b2cService);
@@ -431,8 +420,6 @@ test('dispatchB2bPayouts ignores customer payer MPESA and uses supplier bank pay
 
   const service = new SettlementService(repository as any, mockIdempotencyService, mockRetryService);
   (service as any).logger = { log: () => {}, warn: () => {}, error: () => {} };
-  (service as any).getB2bGatewayBaseUrl = async () => 'https://gateway.example.com';
-  (service as any).getB2bGatewayApiToken = () => 'token';
 
   const originalB2B = b2bService.initiateB2B.bind(b2bService);
   const originalB2C = b2cService.initiateB2C.bind(b2cService);
@@ -515,8 +502,6 @@ test('dispatchB2bPayouts prefers the child settlement when it already has a succ
 
   const service = new SettlementService(repository as any, mockIdempotencyService, mockRetryService);
   (service as any).logger = { log: () => {}, warn: () => {}, error: () => {} };
-  (service as any).getB2bGatewayBaseUrl = async () => 'https://gateway.example.com';
-  (service as any).getB2bGatewayApiToken = () => 'token';
   (service as any).sendB2bGatewayPayoutRequest = async () => ({
     success: true,
     statusCode: 200,
@@ -536,7 +521,6 @@ test('dispatchB2bPayouts prefers the child settlement when it already has a succ
 });
 
 test('splitAndAllocateFunds persists payment callback metadata before B2B payout dispatch', async () => {
-  let updatedStatus: any = null;
   let updatedMetadata: any = null;
 
   const repository = {
@@ -561,7 +545,6 @@ test('splitAndAllocateFunds persists payment callback metadata before B2B payout
       },
     }),
     updateSettlementStatus: async (_id: string, status: string, updates: any) => {
-      updatedStatus = status;
       updatedMetadata = updates.metadata;
       return { id: 'settlement-split-1', status, ...updates };
     },

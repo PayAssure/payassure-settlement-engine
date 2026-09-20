@@ -1,6 +1,5 @@
 import assert = require('node:assert/strict');
 import test = require('node:test');
-import * as bcrypt from 'bcrypt';
 import { AuthController } from '../auth/auth.controller';
 import { AuthService } from '../auth/auth.service';
 import { OnbordingsController } from '../onbordings/onbordings.controller';
@@ -11,10 +10,6 @@ import { SettlementService } from '../settlement/settlement.service';
 class AuthRepositoryStub {
   private users: Array<any> = [];
   private onboardings: Array<any> = [];
-
-  private hashCredential(secret: string) {
-    return require('crypto').createHash('sha256').update(secret).digest('hex');
-  }
 
   async createUser(data: any) {
     const user = { id: `user-${this.users.length + 1}`, ...data, role: data.role ?? 'USER', isActive: true, refreshTokenVersion: 0, createdAt: new Date(), updatedAt: new Date() };

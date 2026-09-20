@@ -1,6 +1,6 @@
-import { Controller, Post, Get, Param, Body, Headers, Query, UseGuards, BadRequestException, Req, UnauthorizedException, Logger, UsePipes } from '@nestjs/common';
+import { Controller, Post, Get, Param, Body, Headers, Query, UseGuards, Req, UnauthorizedException, Logger, UsePipes } from '@nestjs/common';
 import * as crypto from 'crypto';
-import { ApiOperation, ApiResponse, ApiTags, ApiBearerAuth, ApiHeader, ApiBody, ApiParam, ApiQuery } from '@nestjs/swagger';
+import { ApiExcludeEndpoint, ApiOperation, ApiResponse, ApiTags, ApiBearerAuth, ApiHeader, ApiBody, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { SettlementService } from './settlement.service';
 import { AuthenticateDto } from './dto/authenticate.dto';
 import { InitiateSettlementDto } from './dto/initiate-settlement.dto';
@@ -443,6 +443,7 @@ export class SettlementController {
    * Health Check Endpoint
    * Verify settlement service is running
    */
+  @ApiExcludeEndpoint()
   @Post('scenarios/run')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
@@ -566,6 +567,7 @@ export class SettlementController {
     return { status: 'failed', scenario, message: 'Unsupported scenario requested.' };
   }
 
+  @ApiExcludeEndpoint()
   @Get('health')
   @ApiOperation({ summary: 'Get settlement module health status' })
   @ApiResponse({ status: 200, schema: { example: { status: 'ok' } } })
@@ -634,7 +636,7 @@ export class SettlementController {
     status: 404,
     description: 'Settlement not found',
   })
-  async getRetryStatus(@Param('settlementId') settlementId: string, @Req() req: any): Promise<any> {
+  async getRetryStatus(@Param('settlementId') settlementId: string): Promise<any> {
     try {
       const retryStats = await this.settlementService.getPayoutRetryStatistics(settlementId);
       return {
@@ -665,7 +667,7 @@ export class SettlementController {
     status: 200,
     description: 'Pending retries retrieved successfully',
   })
-  async getPendingRetries(@Req() req: any): Promise<any> {
+  async getPendingRetries(): Promise<any> {
     try {
       const pendingRetries = await this.settlementService.getPendingPayoutRetries();
       return {
@@ -699,7 +701,7 @@ export class SettlementController {
     status: 404,
     description: 'Settlement not found',
   })
-  async manualRetry(@Param('settlementId') settlementId: string, @Body() body: any, @Req() req: any): Promise<any> {
+  async manualRetry(@Param('settlementId') settlementId: string): Promise<any> {
     try {
       const result = await this.settlementService.manualRetryPayouts(settlementId);
       return {
@@ -718,19 +720,4 @@ export class SettlementController {
     }
   }
 
-  /**
-   * Helper: Extract Bearer token from Authorization header
-   */
-  private extractBearerToken(authHeader: string): string {
-    if (!authHeader) {
-      throw new BadRequestException('Authorization header missing');
-    }
-
-    const parts = authHeader.split(' ');
-    if (parts.length !== 2 || parts[0].toLowerCase() !== 'bearer') {
-      throw new BadRequestException('Invalid authorization header format');
-    }
-
-    return parts[1];
-  }
 }

@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaClient, B2BPayoutStatus, ParticipantType, Prisma } from '@prisma/client';
 import * as crypto from 'crypto';
 

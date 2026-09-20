@@ -1,7 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ParticipantStatus, ParticipantType, PrismaClient, SettlementStatus } from '@prisma/client';
-import { request as httpsRequest } from 'https';
-import { request as httpRequest } from 'http';
 import { SettlementRepository } from './settlement.repository';
 import { AuthenticateDto } from './dto/authenticate.dto';
 import { InitiateSettlementDto } from './dto/initiate-settlement.dto';
@@ -12,7 +10,6 @@ import PaymentConfirmationDto from './dto/payment-confirmation.dto';
 import {
   AuthenticateResponseDto,
   SettlementResponseDto,
-  TrackSettlementResponseDto,
   ReconcileResponseDto,
 } from './dto/settlement-response.dto';
 import { authenticateOperation } from './operations/authenticate.operation';
@@ -64,7 +61,7 @@ export class SettlementService {
    * Validates credentials and generates one-time token
    */
   async authenticate(data: AuthenticateDto, user: any): Promise<AuthenticateResponseDto> {
-    return authenticateOperation(this.prisma, this.repository, data, user, this.logger, this.TOKEN_EXPIRY);
+    return authenticateOperation(this.prisma, this.repository, data, user, this.TOKEN_EXPIRY);
   }
 
   async authenticateSupplier(data: AuthenticateDto, user: any): Promise<any> {
@@ -206,14 +203,7 @@ export class SettlementService {
       ? (settlement.paymentPayload as Record<string, any>).paymentMethod
       : null) as Record<string, any> | null;
 
-    const metadata = (settlement?.metadata && typeof settlement.metadata === 'object' && !Array.isArray(settlement.metadata))
-      ? (settlement.metadata as Record<string, any>)
-      : {};
-    const paymentPayload = (settlement?.paymentPayload && typeof settlement.paymentPayload === 'object' && !Array.isArray(settlement.paymentPayload))
-      ? (settlement.paymentPayload as Record<string, any>)
-      : {};
-
-    const supplierMerchantId = supplierAllocations[0]?.merchantId ?? this.resolveSupplierMerchantId(settlement, 'SUPPLIER');
+    const supplierMerchantId = supplierAllocations[0]?.merchantId ?? this.resolveSupplierMerchantId(settlement);
     const retailerMerchantId = await this.resolveRetailerMerchantId(settlement);
 
     const supplierRecipient = supplierMerchantId ? await this.resolveB2bRecipient(settlement, 'SUPPLIER', supplierMerchantId) : null;
@@ -298,11 +288,6 @@ export class SettlementService {
     };
   }
 
-  private async getB2bGatewayBaseUrl(): Promise<string | null> {
-    const baseUrl = process.env.B2B_GATEWAY_BASE_URL || process.env.GATEWAY_BASE_URL;
-    return baseUrl ? baseUrl.replace(/\/+$/, '') : null;
-  }
-
   private getB2bPayoutCallbackUrl(callbackIdentifier?: string): string | null {
     const callbackBase = process.env.B2B_PAYOUT_CALLBACK_URL || process.env.PAYMENT_GATEWAY_CALLBACK_URL || process.env.MPESA_CALLBACK_URL;
     if (!callbackBase) {
@@ -316,10 +301,6 @@ export class SettlementService {
     const callbackUrl = `${baseWithoutPayments}${callbackSuffix}`;
 
     return normalizedBase.endsWith(callbackSuffix) ? normalizedBase : callbackUrl;
-  }
-
-  private getB2bGatewayApiToken(): string | null {
-    return process.env.B2B_GATEWAY_API_TOKEN || process.env.PAYMENT_GATEWAY_API_TOKEN || process.env.SETTLEMENT_API_TOKEN || null;
   }
 
   private async resolvePayoutValidationSettlement(settlement: any): Promise<any> {
@@ -464,7 +445,7 @@ export class SettlementService {
     return callbackConfirmed || confirmationConfirmed || splitStatus || processingState;
   }
 
-  private resolveSupplierMerchantId(settlement: any, party: 'SUPPLIER' | 'RETAILER', supplierMerchantId?: string): string | null {
+  private resolveSupplierMerchantId(settlement: any, supplierMerchantId?: string): string | null {
     if (supplierMerchantId) {
       return String(supplierMerchantId);
     }
@@ -542,7 +523,7 @@ export class SettlementService {
       };
     }
 
-    const supplierId = this.resolveSupplierMerchantId(settlement, party, supplierMerchantId);
+    const supplierId = this.resolveSupplierMerchantId(settlement, supplierMerchantId);
     if (!supplierId) {
       throw new BadRequestException({ statusCode: 400, message: 'Supplier merchant ID is required for supplier payouts', error: 'SUPPLIER_MERCHANT_ID_REQUIRED' });
     }
@@ -612,7 +593,7 @@ export class SettlementService {
 
     const workingSettlement = validationSettlement ?? settlement;
     const party = (String(data.party || (existingMetadata?.supplierMerchantId ? 'SUPPLIER' : 'RETAILER')).toUpperCase() as 'SUPPLIER' | 'RETAILER');
-    const resolvedSupplierMerchantId = this.resolveSupplierMerchantId(workingSettlement, party, data.supplierMerchantId);
+    const resolvedSupplierMerchantId = this.resolveSupplierMerchantId(workingSettlement, data.supplierMerchantId);
     const resolvedRetailerMerchantId = await this.resolveRetailerMerchantId(workingSettlement);
     const resolvedPartyMerchantId = party === 'RETAILER' ? resolvedRetailerMerchantId : resolvedSupplierMerchantId;
     const recipient = await this.resolveB2bRecipient(workingSettlement, party, resolvedSupplierMerchantId ?? undefined);
@@ -913,7 +894,7 @@ export class SettlementService {
       merchantTransactionReference: data.merchantTransactionReference,
       settlementReference: settlement.reference,
       party,
-      supplierMerchantId: this.resolveSupplierMerchantId(settlement, party, data.supplierMerchantId) ?? null,
+      supplierMerchantId: this.resolveSupplierMerchantId(settlement, data.supplierMerchantId) ?? null,
       status,
       providerReference: data.providerReference ?? null,
       amount: data.amount ?? null,
@@ -1008,14 +989,7 @@ export class SettlementService {
       ? (settlement.paymentPayload as Record<string, any>).paymentMethod
       : null) as Record<string, any> | null;
 
-    const metadata = (settlement?.metadata && typeof settlement.metadata === 'object' && !Array.isArray(settlement.metadata))
-      ? (settlement.metadata as Record<string, any>)
-      : {};
-    const paymentPayload = (settlement?.paymentPayload && typeof settlement.paymentPayload === 'object' && !Array.isArray(settlement.paymentPayload))
-      ? (settlement.paymentPayload as Record<string, any>)
-      : {};
-
-    const supplierMerchantId = supplierAllocations[0]?.merchantId ?? this.resolveSupplierMerchantId(settlement, 'SUPPLIER');
+    const supplierMerchantId = supplierAllocations[0]?.merchantId ?? this.resolveSupplierMerchantId(settlement);
     const retailerMerchantId = await this.resolveRetailerMerchantId(settlement);
 
     const supplierRecipient = supplierMerchantId ? await this.resolveB2bRecipient(settlement, 'SUPPLIER', supplierMerchantId) : null;
@@ -1309,13 +1283,6 @@ export class SettlementService {
       receivedAt: timestamp,
     };
 
-    const settlementMetadata = (settlement.metadata && typeof settlement.metadata === 'object' && !Array.isArray(settlement.metadata))
-      ? (settlement.metadata as Record<string, any>)
-      : {};
-    const settlementPaymentPayload = (settlement.paymentPayload && typeof settlement.paymentPayload === 'object' && !Array.isArray(settlement.paymentPayload))
-      ? (settlement.paymentPayload as Record<string, any>)
-      : {};
-
     const resolvedRetailerMerchantId = await this.resolveRetailerMerchantId(settlement);
 
     const splitRecord = {
@@ -1415,7 +1382,6 @@ export class SettlementService {
       }
     }
 
-    const payoutCount = supplierAllocations.filter((supplier) => supplier.amount > 0).length + (retailerAmount > 0 ? 1 : 0);
     const successfulPayoutCount = dispatchResults.suppliers.length + (dispatchResults.retailer ? 1 : 0);
     const failedPayoutCount = dispatchResults.errors.length;
     const payoutStatus = successfulPayoutCount === 0 && failedPayoutCount > 0
