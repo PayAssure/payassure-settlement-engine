@@ -16,8 +16,9 @@ test('B2Pochi payout request is built with the documented Safaricom fields', asy
     assert.equal(payload.PartyB, 254705912645);
     assert.equal(typeof payload.PartyB, 'number');
     assert.equal(payload.Remarks, 'remarked');
-    assert.equal(payload.ResultURL, 'https://mydomain.com/b2c/result');
-    assert.equal(payload.QueueTimeOutURL, 'https://mydomain.com/b2c/timedout');
+    const configuredCallbackUrl = `${String(process.env.MPESA_CALLBACK_URL).replace(/\/+$/, '')}/callbacks/mpesa`;
+    assert.equal(payload.ResultURL, configuredCallbackUrl);
+    assert.equal(payload.QueueTimeOutURL, configuredCallbackUrl);
     assert.equal(payload.Occassion, 'ChristmasPay');
 
     return {
@@ -35,8 +36,6 @@ test('B2Pochi payout request is built with the documented Safaricom fields', asy
     PartyA: '600997',
     PartyB: 254705912645,
     Remarks: 'remarked',
-    QueueTimeOutURL: 'https://mydomain.com/b2c/timedout',
-    ResultURL: 'https://mydomain.com/b2c/result',
     Occassion: 'ChristmasPay',
   });
 

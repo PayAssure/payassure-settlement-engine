@@ -1,22 +1,7 @@
-import { getMpesaEnv } from '../config/mpesa.env';
+import { getMpesaCallbackUrl, getMpesaEnv } from '../config/mpesa.env';
 import { generateSecurityCredential } from '../lib/mpesa-security-credential';
 import { mpesaService } from './mpesa.service';
 import type { B2BRequest, MpesaEnv } from '../types/mpesa';
-
-function resolveCallbackUrl(requestCallbackUrl?: string, envCallbackUrl?: string, endpoint = '/callbacks/mpesa'): string {
-  const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  const base = (requestCallbackUrl ?? envCallbackUrl ?? 'https://example.com').replace(/\/+$/, '');
-
-  if (base.includes('/callbacks/mpesa')) {
-    return base;
-  }
-
-  if (base.includes('/settlement/payouts/callback')) {
-    return `${base}${normalizedEndpoint}`;
-  }
-
-  return `${base}${normalizedEndpoint}`;
-}
 
 function resolveAccountReference(requestAccountReference?: string, fallback = 'B2B Payment'): string {
   return requestAccountReference || fallback;
@@ -44,8 +29,8 @@ class B2BService {
       PartyB: request.recipientShortCode || request.recieverPartyPublicID || env.MPESA_SHORTCODE || '174379',
       AccountReference: resolveAccountReference(request.accountReference, 'B2B Payment'),
       Remarks: resolveDescription(request.description, 'B2B Transfer'),
-      QueueTimeOutURL: resolveCallbackUrl(request.callbackUrl, env.MPESA_CALLBACK_URL, '/callbacks/mpesa'),
-      ResultURL: resolveCallbackUrl(request.callbackUrl, env.MPESA_CALLBACK_URL, '/callbacks/mpesa'),
+      QueueTimeOutURL: getMpesaCallbackUrl(),
+      ResultURL: getMpesaCallbackUrl(),
     };
 
     console.log('[B2B][GATEWAY][EXACT_PAYLOAD]', JSON.stringify({

@@ -41,22 +41,6 @@ export default class DispatchB2PochiPayoutDto {
   @IsNotEmpty()
   Remarks: string = '';
 
-  @ApiProperty({
-    example: 'https://mydomain.com/b2c/timedout',
-    description: 'URL M-Pesa calls when the payment request times out while awaiting processing.',
-  })
-  @IsString()
-  @IsNotEmpty()
-  QueueTimeOutURL: string = '';
-
-  @ApiProperty({
-    example: 'https://mydomain.com/b2c/result',
-    description: 'URL M-Pesa calls after processing the payment request.',
-  })
-  @IsString()
-  @IsNotEmpty()
-  ResultURL: string = '';
-
   @ApiPropertyOptional({
     example: 'ChristmasPay',
     description: 'Optional occasion field for extra transaction metadata.',

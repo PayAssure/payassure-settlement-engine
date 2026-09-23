@@ -283,11 +283,20 @@ export function normalizeCanonicalSettlement(data: InitiateSettlementDto): Initi
     payerPhoneNumber: method.phoneNumber ?? '',
     phoneNumber: method.phoneNumber ?? '',
   }));
+  const normalizedPaymentMethods = paymentMethods ?? [];
+
+  const settlementMethod = data.settlementMethod || (
+    normalizedPaymentMethods.length > 0 && normalizedPaymentMethods.every((method) => method.type === 'MPESA')
+      ? 'MPESA'
+      : normalizedPaymentMethods.some((method) => method.type === 'MPESA')
+        ? 'MIXED'
+        : 'CASH_ESCROW'
+  );
 
   return {
     ...data,
     totalAmount,
-    settlementMethod: data.settlementMethod || 'CASH_ESCROW',
+    settlementMethod,
     transactionDate: new Date().toISOString(),
     paymentMethod: paymentMethods?.[0]
       ? { ...paymentMethods[0], type: paymentMethods[0].type as 'MPESA' | 'CASH' }

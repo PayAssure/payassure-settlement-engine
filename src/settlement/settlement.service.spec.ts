@@ -184,6 +184,7 @@ test('dispatchB2bPayouts preserves the payout callback identifier path instead o
           type: 'BANK',
           provider: 'Safaricom',
           shortcode: '600000',
+          accountNumber: '0020186595955',
           accountName: 'Jane Retailer',
         },
       },
@@ -251,6 +252,7 @@ test('dispatchB2bPayouts prefers the authenticated retailer integration over sta
             type: 'BANK',
             provider: 'Safaricom',
             shortcode: '600000',
+            accountNumber: '0020186595955',
             accountName: 'Jane Retailer',
           },
         },
@@ -396,6 +398,7 @@ test('dispatchB2bPayouts ignores customer payer MPESA and uses supplier bank pay
               type: 'BANK',
               provider: 'Safaricom',
               shortcode: '600000',
+              accountNumber: '0020186595955',
               accountName: 'Retailer Merchant',
             },
           },
@@ -408,6 +411,7 @@ test('dispatchB2bPayouts ignores customer payer MPESA and uses supplier bank pay
               type: 'BANK',
               provider: 'Safaricom',
               shortcode: '600000',
+              accountNumber: '0020186595955',
               accountName: 'Supplier Merchant',
             },
           },
@@ -430,7 +434,7 @@ test('dispatchB2bPayouts ignores customer payer MPESA and uses supplier bank pay
   (b2bService as any).initiateB2B = async (request: any) => {
     b2BCalled = true;
     assert.equal(request.recipientShortCode, '600000');
-    assert.equal(request.accountReference, 'Retailer Merchant');
+    assert.equal(request.accountReference, '0020186595955');
     return { success: true, statusCode: 200, responseCode: '0', responseDescription: 'Accepted', response: { accepted: true } };
   };
   (b2cService as any).initiateB2C = async () => {
@@ -493,6 +497,7 @@ test('dispatchB2bPayouts prefers the child settlement when it already has a succ
           type: 'BANK',
           provider: 'Safaricom',
           shortcode: '600000',
+          accountNumber: '0020186595955',
           accountName: 'Retailer Merchant',
         },
       },
@@ -528,7 +533,7 @@ test('splitAndAllocateFunds persists payment callback metadata before B2B payout
       id: 'settlement-split-1',
       status: 'INITIATED',
       metadata: {},
-      paymentSnapshot: { type: 'BANK', shortcode: '12345', accountName: 'ACCT NAME' },
+      paymentSnapshot: { type: 'BANK', shortcode: '12345', accountNumber: '0020186595955', accountName: 'ACCT NAME' },
       processedAt: null,
       amount: '2',
       businessId: 'retailer-1',
@@ -828,7 +833,7 @@ test('dispatchB2bPayouts accepts a settled processing-state settlement without a
         paymentCallback: { status: 'SUCCESS', merchantTransactionReference: 'TXN-DISPATCH-1' },
         splitRecords: [{ totalAmount: 2000, merchantTransactionReference: 'TXN-DISPATCH-1', status: 'SUCCESS' }],
       },
-      paymentSnapshot: { type: 'BANK', shortcode: '12345', accountName: 'ACCT NAME' },
+      paymentSnapshot: { type: 'BANK', shortcode: '12345', accountNumber: '0020186595955', accountName: 'ACCT NAME' },
       amount: 2000,
     }),
     updateSettlementStatus: async (_id: string, status: string, updates: any) => {
@@ -867,7 +872,7 @@ test('dispatchB2bPayouts records a dispatch and updates settlement metadata', as
       metadata: {
         paymentCallback: { status: 'SUCCESS', merchantTransactionReference: 'TXN-DISPATCH-1' },
       },
-      paymentSnapshot: { type: 'BANK', shortcode: '12345', accountName: 'ACCT NAME' },
+      paymentSnapshot: { type: 'BANK', shortcode: '12345', accountNumber: '0020186595955', accountName: 'ACCT NAME' },
     }),
     updateSettlementStatus: async (_id: string, status: string, updates: any) => {
       updatedStatus = status;
@@ -925,7 +930,7 @@ test('dispatchB2bPayouts validates payment confirmation against the parent settl
           paymentCallback: { status: 'SUCCESS', merchantTransactionReference: 'MTXN-20260816220335-84A618453622' },
           supplierMerchantId: 'pay_d68f568ddc7d7b2a',
         },
-        paymentSnapshot: { type: 'BANK', shortcode: '12345', accountName: 'ACCT NAME' },
+        paymentSnapshot: { type: 'BANK', shortcode: '12345', accountNumber: '0020186595955', accountName: 'ACCT NAME' },
       };
     },
     updateSettlementStatus: async (_id: string, status: string, updates: any) => {
@@ -1000,7 +1005,7 @@ test('dispatchB2bPayouts falls back to supplier merchant ID from payment payload
       metadata: {
         paymentCallback: { status: 'SUCCESS', merchantTransactionReference: 'TXN-DISPATCH-2' },
       },
-      paymentSnapshot: { type: 'BANK', shortcode: '12345', accountName: 'ACCT NAME' },
+      paymentSnapshot: { type: 'BANK', shortcode: '12345', accountNumber: '0020186595955', accountName: 'ACCT NAME' },
       paymentPayload: {
         suppliers: [{ supplierMerchantId: 'SUP-2001' }],
       },

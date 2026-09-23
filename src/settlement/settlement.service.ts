@@ -27,6 +27,7 @@ interface B2bPayoutRecipient {
   type: string;
   provider?: string | null;
   shortcode?: string | null;
+  accountNumber?: string | null;
   accountName?: string | null;
   phoneNumber?: string | null;
   payerPhoneNumber?: string | null;
@@ -380,10 +381,10 @@ export class SettlementService {
       }
 
       const response = await b2bService.initiateB2B({
-        recipientShortCode: payload.recipientShortCode ?? payload.recipientPhoneNumber ?? payload.accountReference ?? '174379',
+        recipientShortCode: payload.recipientShortCode ?? payload.recipientPhoneNumber ?? '174379',
         amount: Number(payload.amount ?? 0),
         description: payload.description ?? payload.remarks ?? 'Settlement payout',
-        accountReference: payload.accountReference ?? payload.metadata?.supplierMerchantId ?? 'B2B Payment',
+        accountReference: payload.accountReference ?? 'B2B Payment',
         callbackUrl: payload.callbackUrl ?? process.env.MPESA_CALLBACK_URL ?? process.env.B2B_PAYOUT_CALLBACK_URL ?? process.env.PAYMENT_GATEWAY_CALLBACK_URL,
       });
 
@@ -498,6 +499,7 @@ export class SettlementService {
             type: payment.type,
             provider: payment.provider ?? null,
             shortcode: payment.shortcode ?? null,
+            accountNumber: payment.accountNumber ?? null,
             accountName: payment.accountName ?? null,
             phoneNumber: payment.phoneNumber ?? payment.payerPhoneNumber ?? null,
             payerPhoneNumber: payment.payerPhoneNumber ?? payment.phoneNumber ?? null,
@@ -517,6 +519,7 @@ export class SettlementService {
         type: payment.type,
         provider: payment.provider ?? null,
         shortcode: payment.shortcode ?? null,
+        accountNumber: payment.accountNumber ?? null,
         accountName: payment.accountName ?? null,
         phoneNumber: payment.phoneNumber ?? payment.payerPhoneNumber ?? null,
         payerPhoneNumber: payment.payerPhoneNumber ?? payment.phoneNumber ?? null,
@@ -534,6 +537,7 @@ export class SettlementService {
         type: payment.type,
         provider: payment.provider ?? null,
         shortcode: payment.shortcode ?? null,
+        accountNumber: payment.accountNumber ?? null,
         accountName: payment.accountName ?? null,
         phoneNumber: payment.phoneNumber ?? payment.payerPhoneNumber ?? null,
         payerPhoneNumber: payment.payerPhoneNumber ?? payment.phoneNumber ?? null,
@@ -554,6 +558,7 @@ export class SettlementService {
       type: supplierPayment.type,
       provider: supplierPayment.provider ?? null,
       shortcode: supplierPayment.shortcode ?? null,
+      accountNumber: supplierPayment.accountNumber ?? null,
       accountName: supplierPayment.accountName ?? null,
       phoneNumber: supplierPayment.phoneNumber ?? supplierPayment.payerPhoneNumber ?? null,
       payerPhoneNumber: supplierPayment.payerPhoneNumber ?? supplierPayment.phoneNumber ?? null,
@@ -599,8 +604,8 @@ export class SettlementService {
     const recipient = await this.resolveB2bRecipient(workingSettlement, party, resolvedSupplierMerchantId ?? undefined);
 
     if (recipient.type === 'BANK') {
-      if (!recipient.shortcode || !recipient.accountName) {
-        throw new BadRequestException({ statusCode: 400, message: 'Bank payouts require a recipient shortcode and accountName', error: 'BANK_PAYOUT_DETAILS_INCOMPLETE' });
+      if (!recipient.shortcode || !recipient.accountNumber) {
+        throw new BadRequestException({ statusCode: 400, message: 'Bank payouts require a recipient shortcode and accountNumber', error: 'BANK_PAYOUT_DETAILS_INCOMPLETE' });
       }
     }
     if (recipient.type === 'MPESA') {
@@ -671,6 +676,7 @@ export class SettlementService {
       type: recipient.type,
       provider: recipient.provider ?? null,
       shortcode: recipient.shortcode ?? null,
+      accountNumber: recipient.accountNumber ?? null,
       accountName: recipient.accountName ?? null,
       phoneNumber: recipientPhoneNumber,
       payerPhoneNumber: recipientPhoneNumber,
@@ -684,7 +690,7 @@ export class SettlementService {
       amount: roundedAmount,
       currency: workingSettlement.currency ?? 'KES',
       recipientShortCode,
-      accountReference: recipient.accountName,
+      accountReference: recipient.accountNumber,
       remarks: `B2B payout to ${party}`,
       description: `Settlement payout for ${party}`,
       callbackUrl: callbackUrl ?? undefined,
@@ -711,6 +717,18 @@ export class SettlementService {
       isNewAttempt: payoutAttemptResult.isNewAttempt,
       attemptCount: payoutAttemptResult.attemptCount,
     });
+
+    if (recipient.type === 'BANK') {
+      this.logger.log('[B2B][BANK_PAYOUT] dispatching bank payout through M-Pesa B2B', {
+        settlementId: settlement.id,
+        party,
+        amount: roundedAmount,
+        recipientShortCode,
+        accountReference: recipient.accountNumber,
+        accountName: recipient.accountName,
+        merchantTransactionReference: workingSettlement.merchantTransactionReference,
+      });
+    }
 
     let gatewayResult: B2bGatewayResponse;
     try {
@@ -813,6 +831,10 @@ export class SettlementService {
   }
 
   async handleB2bPayoutCallback(data: any, callbackIdentifier?: string): Promise<any> {
+    const payoutAttempt = data.reference && typeof this.idempotencyService.getPayoutAttemptByReference === 'function'
+      ? await this.idempotencyService.getPayoutAttemptByReference(String(data.reference))
+      : null;
+
     // PRIMARY LOOKUP: Use callbackIdentifier from URL path (most reliable)
     let settlement = null;
     if (callbackIdentifier) {
@@ -840,6 +862,24 @@ export class SettlementService {
       }
     }
 
+    if (!settlement && !payoutAttempt) {
+      this.logger.warn('[B2B][CALLBACK][UNMATCHED] callback acknowledged without settlement or payout attempt', {
+        callbackIdentifier: callbackIdentifier ?? null,
+        merchantTransactionReference: data?.merchantTransactionReference ?? null,
+        reference: data?.reference ?? null,
+        transactionId: data?.transactionId ?? null,
+        status: data?.status ?? null,
+        callback: data,
+      });
+      return {
+        success: true,
+        accepted: true,
+        status: 'UNMATCHED',
+        message: 'M-Pesa callback was received and logged, but no settlement payout was found.',
+        callback: data,
+      };
+    }
+
     if (!settlement) {
       this.logger.error('[B2B][CALLBACK][LOOKUP] settlement not found', {
         callbackIdentifier,
@@ -850,7 +890,7 @@ export class SettlementService {
       throw new NotFoundException({ statusCode: 404, message: 'Settlement not found for the provided B2B callback reference', error: 'SETTLEMENT_NOT_FOUND' });
     }
 
-    const party = (String(data.party || 'SUPPLIER').toUpperCase() as 'SUPPLIER' | 'RETAILER');
+    const party = (String(data.party || payoutAttempt?.party || 'SUPPLIER').toUpperCase() as 'SUPPLIER' | 'RETAILER');
     const payoutStatus = String(data.status || 'FAILED').toUpperCase();
     const isSuccess = payoutStatus === 'SUCCESS' || payoutStatus === 'PAID';
     const status = isSuccess ? 'PAID' : 'FAILED';
@@ -867,6 +907,19 @@ export class SettlementService {
       } catch (error) {
         this.logger.warn('[B2B][CALLBACK] Failed to update idempotency tracking', {
           callbackIdentifier: callbackRef,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else if (payoutAttempt?.idempotencyKey) {
+      try {
+        await this.idempotencyService.markCallbackReceived(payoutAttempt.idempotencyKey, data);
+        this.logger.log('[B2B][CALLBACK] Marked payout reference callback as received in idempotency tracking', {
+          payoutReference: data.reference,
+          payoutStatus: status,
+        });
+      } catch (error) {
+        this.logger.warn('[B2B][CALLBACK] Failed to update payout reference idempotency tracking', {
+          payoutReference: data.reference,
           error: error instanceof Error ? error.message : String(error),
         });
       }

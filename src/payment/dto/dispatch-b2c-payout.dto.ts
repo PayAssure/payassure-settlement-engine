@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsNumber, IsOptional, IsString, IsUrl } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
 
 export default class DispatchB2CPayoutDto {
   @ApiProperty({
@@ -33,11 +33,6 @@ export default class DispatchB2CPayoutDto {
   @IsString()
   @IsNotEmpty()
   Remarks: string = '';
-
-  @ApiPropertyOptional({ example: 'https://mydomain.com/payments/callbacks/mpesa', description: 'URL used for both B2C result and timeout notifications. Defaults to MPESA_CALLBACK_URL plus /callbacks/mpesa.' })
-  @IsUrl()
-  @IsOptional()
-  callbackUrl?: string;
 
   @ApiPropertyOptional({ example: 'ChristmasPay', description: 'Optional additional transaction information.' })
   @IsString()

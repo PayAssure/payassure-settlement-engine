@@ -14,7 +14,12 @@ export interface ParsedStkCallback {
 export function parseStkCallback(payload: Record<string, unknown>): ParsedStkCallback {
   const result = (payload?.Result as Record<string, unknown> | undefined) ?? null;
   if (result) {
-    const resultParameters = (result?.ResultParameters as Record<string, unknown> | undefined)?.ResultParameter as Array<Record<string, unknown>> | undefined;
+    const rawResultParameter = (result?.ResultParameters as Record<string, unknown> | undefined)?.ResultParameter;
+    const resultParameters: Array<Record<string, unknown>> = Array.isArray(rawResultParameter)
+      ? rawResultParameter.filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
+      : rawResultParameter && typeof rawResultParameter === 'object'
+        ? [rawResultParameter as Record<string, unknown>]
+        : [];
     const paramValue = (key: string): string | null => {
       const entry = resultParameters?.find((item) => item?.Key === key);
       const value = entry?.Value;

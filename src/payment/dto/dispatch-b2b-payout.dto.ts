@@ -59,14 +59,6 @@ export default class DispatchB2bPayoutDto {
   currency?: string;
 
   @ApiPropertyOptional({
-    example: 'http://localhost:3000/callbacks/mpesa/b2b/payout',
-    description: 'Callback URL for payout result',
-  })
-  @IsString()
-  @IsOptional()
-  callbackUrl?: string;
-
-  @ApiPropertyOptional({
     example: 'B2B payout to SUPPLIER',
     description: 'Remarks for the transaction',
   })

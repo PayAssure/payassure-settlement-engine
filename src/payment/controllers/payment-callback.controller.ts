@@ -22,6 +22,19 @@ export class PaymentCallbackController {
     const timestamp = new Date().toISOString();
 
     try {
+      this.logger.log('[PAYMENT][CALLBACK][RAW]', JSON.stringify({
+        timestamp,
+        path: req.originalUrl,
+        callbackIdentifier,
+        body: req.body,
+      }));
+
+      const payoutCallback = this.toPayoutCallback(req.body as Record<string, unknown>);
+      if (payoutCallback) {
+        const payoutResult = await this.settlementService.handleB2bPayoutCallback(payoutCallback);
+        return res.status(200).json({ received: true, accepted: true, timestamp, payout: payoutResult });
+      }
+
       // Step 1: Parse the M-Pesa callback
       const parsed = parseStkCallback(req.body as Record<string, unknown>);
       // Step 2: Update M-Pesa transaction record in database
@@ -162,6 +175,19 @@ export class PaymentCallbackController {
   ) {
     const timestamp = new Date().toISOString();
     try {
+      this.logger.log('[PAYMENT][CALLBACK][RAW]', JSON.stringify({
+        timestamp,
+        path: req.originalUrl,
+        callbackIdentifier,
+        body: req.body,
+      }));
+
+      const payoutCallback = this.toPayoutCallback(req.body as Record<string, unknown>);
+      if (payoutCallback) {
+        const payoutResult = await this.settlementService.handleB2bPayoutCallback(payoutCallback, callbackIdentifier);
+        return res.status(200).json({ received: true, accepted: true, timestamp, payout: payoutResult });
+      }
+
       // Step 1: Parse the M-Pesa callback
       const parsed = parseStkCallback(req.body as Record<string, unknown>);
       // Step 2: Update M-Pesa transaction record
@@ -281,5 +307,40 @@ export class PaymentCallbackController {
         error: errorMsg,
       });
     }
+  }
+
+  private toPayoutCallback(payload: Record<string, unknown>): Record<string, any> | null {
+    const result = payload?.Result as Record<string, any> | undefined;
+    if (!result || !result.OriginatorConversationID) {
+      return null;
+    }
+
+    const resultCode = Number(result.ResultCode ?? -1);
+    const resultParameters = result.ResultParameters?.ResultParameter;
+    const parameters = Array.isArray(resultParameters)
+      ? resultParameters
+      : resultParameters && typeof resultParameters === 'object'
+        ? [resultParameters]
+        : [];
+    const parameterValue = (key: string) => {
+      const parameter = parameters.find((item: any) => item?.Key === key);
+      return parameter?.Value ?? null;
+    };
+
+    return {
+      reference: String(result.OriginatorConversationID),
+      transactionId: result.TransactionID ?? null,
+      providerReference: result.TransactionID ?? null,
+      merchantTransactionReference: String(result.OriginatorConversationID),
+      status: resultCode === 0 ? 'SUCCESS' : 'FAILED',
+      amount: parameterValue('TransactionAmount'),
+      resultCode,
+      resultDescription: result.ResultDesc ?? null,
+      metadata: {
+        rawResult: result,
+        conversationId: result.ConversationID ?? null,
+        resultType: result.ResultType ?? null,
+      },
+    };
   }
 }

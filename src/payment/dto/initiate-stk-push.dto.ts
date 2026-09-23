@@ -58,14 +58,6 @@ export default class InitiateStkPushDto {
   settlementId?: string;
 
   @ApiPropertyOptional({
-    example: 'http://localhost:3000/callbacks/mpesa/token-123',
-    description: 'Custom callback URL (overrides default)',
-  })
-  @IsString()
-  @IsOptional()
-  callbackUrl?: string;
-
-  @ApiPropertyOptional({
     description: 'Gateway payload for advanced configuration',
   })
   @IsOptional()

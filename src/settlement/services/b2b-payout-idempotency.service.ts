@@ -266,6 +266,12 @@ export class B2BPayoutIdempotencyService {
     });
   }
 
+  async getPayoutAttemptByReference(payoutReference: string): Promise<any | null> {
+    return this.prisma.b2BPayoutAttempt.findUnique({
+      where: { payoutReference },
+    });
+  }
+
   /**
    * Get all pending retries
    */

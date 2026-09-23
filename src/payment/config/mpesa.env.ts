@@ -62,6 +62,13 @@ export const getMpesaEnv = (): MpesaEnvConfig => ({
   callbackUrl: process.env.MPESA_CALLBACK_URL,
 });
 
+export function getMpesaCallbackUrl(suffix = ''): string {
+  const configuredUrl = (process.env.MPESA_CALLBACK_URL || '').trim().replace(/\/+$/, '');
+  const baseUrl = configuredUrl || `http://localhost:${process.env.PORT || '3000'}`;
+  const callbackPath = baseUrl.includes('/callbacks/mpesa') ? '' : '/callbacks/mpesa';
+  return `${baseUrl}${callbackPath}${suffix}`;
+}
+
 export const prisma = global.prisma ?? new PrismaClient();
 
 if (process.env.NODE_ENV !== 'production') {

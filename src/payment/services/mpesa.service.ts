@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
-import { getMpesaEnv, prisma, MPESA_PRODUCTION_ENDPOINTS } from '../config/mpesa.env';
+import { getMpesaCallbackUrl, getMpesaEnv, prisma, MPESA_PRODUCTION_ENDPOINTS } from '../config/mpesa.env';
 
 export interface PaymentRequestLog {
   endpoint: string;
@@ -209,7 +209,7 @@ export class MpesaService {
       },
     });
 
-    const callbackUrl = request.callbackUrl ?? `${(env.callbackUrl || `http://localhost:${process.env.PORT || '3000'}`).replace(/\/+$/, '')}/callbacks/mpesa/${callbackToken}`;
+    const callbackUrl = getMpesaCallbackUrl(`/${callbackToken}`);
     const payload = {
       BusinessShortCode: shortcode,
       Password: this.buildPassword(shortcode, passkey, timestamp),
@@ -297,6 +297,8 @@ export class MpesaService {
       BusinessShortCode: shortcode,
       Password: this.buildPassword(shortcode, passkey, timestamp),
       Timestamp: timestamp,
+      QueueTimeOutURL: getMpesaCallbackUrl(),
+      ResultURL: getMpesaCallbackUrl(),
     };
 
     return this.makeRequest('b2b', request);
@@ -308,6 +310,8 @@ export class MpesaService {
       CommandID: payload.CommandID || 'BusinessPayToPochi',
       Amount: String(payload.Amount ?? '0'),
       PartyB: Number(payload.PartyB ?? payload.partyB ?? payload.recipientPhone ?? 0),
+      QueueTimeOutURL: getMpesaCallbackUrl(),
+      ResultURL: getMpesaCallbackUrl(),
     };
 
     const response = await this.makeRequest('b2pochi', request);
@@ -327,6 +331,8 @@ export class MpesaService {
       Amount: String(payload.Amount ?? '0'),
       PartyA: String(payload.PartyA ?? payload.partyA ?? ''),
       PartyB: String(payload.PartyB ?? payload.partyB ?? payload.recipientPhone ?? ''),
+      QueueTimeOutURL: getMpesaCallbackUrl(),
+      ResultURL: getMpesaCallbackUrl(),
     };
 
     const response = await this.makeRequest('b2c', request);

@@ -282,6 +282,7 @@ test('accepts the canonical mixed payment payload and calculates allocations ser
 
   const normalized = normalizeCanonicalSettlement(dto);
   assert.equal(normalized.totalAmount, 400);
+  assert.equal(normalized.settlementMethod, 'MIXED');
   assert.equal(normalized.paymentMethods?.[0].provider, 'ESCROW');
   assert.equal(normalized.suppliers?.[0].supplierTotalAmount, 198.4);
   assert.equal(normalized.suppliers?.[0].retailerTotalAmount, 198.4);

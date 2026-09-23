@@ -55,11 +55,10 @@ export function buildStkPayload(options: {
   timestamp: string;
   formattedNumber: string;
   amount: string | number;
-  callbackUrl?: string;
   accountReference?: string;
   transactionDesc?: string;
 }): Record<string, unknown> {
-  const callbackUrl = options.callbackUrl ?? process.env.MPESA_CALLBACK_URL ?? 'http://localhost:3000/callbacks/mpesa';
+  const callbackUrl = process.env.MPESA_CALLBACK_URL ?? 'http://localhost:3000/callbacks/mpesa';
   return {
     BusinessShortCode: options.shortcode,
     Password: buildPassword(options.shortcode, options.passkey, options.timestamp),
@@ -167,14 +166,13 @@ export async function initiateMpesaStkPush(request: Record<string, any>): Promis
     },
   });
 
-  const callbackUrl = request.callbackUrl ?? `${(env.MPESA_CALLBACK_URL || `http://localhost:${env.PORT || '3000'}`).replace(/\/+$/, '')}/callbacks/mpesa/${callbackToken}`;
+  const callbackUrl = `${(env.MPESA_CALLBACK_URL || `http://localhost:${env.PORT || '3000'}`).replace(/\/+$/, '')}/callbacks/mpesa/${callbackToken}`;
   const payload = buildStkPayload({
     shortcode,
     passkey,
     timestamp,
     formattedNumber,
     amount: request.amount,
-    callbackUrl,
     accountReference: request.accountReference ?? 'Payassure',
     transactionDesc: request.transactionDesc || request.description || 'payment for goods',
   });

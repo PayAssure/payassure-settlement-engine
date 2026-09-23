@@ -1,22 +1,7 @@
-import { getMpesaEnv } from '../config/mpesa.env';
+import { getMpesaCallbackUrl, getMpesaEnv } from '../config/mpesa.env';
 import { generateSecurityCredential } from '../lib/mpesa-security-credential';
 import { mpesaService } from './mpesa.service';
 import type { MpesaEnv } from '../types/mpesa';
-
-function resolveCallbackUrl(requestCallbackUrl?: string, envCallbackUrl?: string, endpoint = '/callbacks/mpesa'): string {
-  const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  const base = (requestCallbackUrl ?? envCallbackUrl ?? 'https://example.com').replace(/\/+$/, '');
-
-  if (base.includes('/callbacks/mpesa')) {
-    return base;
-  }
-
-  if (base.includes('/settlement/payouts/callback')) {
-    return `${base}${normalizedEndpoint}`;
-  }
-
-  return `${base}${normalizedEndpoint}`;
-}
 
 function resolveDescription(requestDescription?: string, fallback = 'B2Pochi transfer'): string {
   return requestDescription || fallback;
@@ -38,8 +23,8 @@ class B2PochiService {
       PartyA: partyA,
       PartyB: Number(request.PartyB ?? request.partyB ?? request.recipientPhone ?? 0),
       Remarks: resolveDescription(request.Remarks || request.remarks, 'B2Pochi disbursement'),
-      QueueTimeOutURL: request.QueueTimeOutURL || request.queueTimeoutUrl || resolveCallbackUrl(request.callbackUrl, env.MPESA_CALLBACK_URL, '/callbacks/mpesa'),
-      ResultURL: request.ResultURL || request.resultUrl || resolveCallbackUrl(request.callbackUrl, env.MPESA_CALLBACK_URL, '/callbacks/mpesa'),
+      QueueTimeOutURL: getMpesaCallbackUrl(),
+      ResultURL: getMpesaCallbackUrl(),
       Occassion: request.Occassion || request.occasion || undefined,
     };
 

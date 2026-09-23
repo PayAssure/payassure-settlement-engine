@@ -17,8 +17,9 @@ test('B2C payment request is built with the documented Safaricom fields', async 
     assert.equal(payload.PartyA, process.env.MPESA_PARTYA);
     assert.equal(payload.PartyB, '254705912645');
     assert.equal(payload.Remarks, 'remarked');
-    assert.equal(payload.QueueTimeOutURL, 'https://mydomain.com/callbacks/mpesa');
-    assert.equal(payload.ResultURL, 'https://mydomain.com/callbacks/mpesa');
+    const configuredCallbackUrl = `${String(process.env.MPESA_CALLBACK_URL).replace(/\/+$/, '')}/callbacks/mpesa`;
+    assert.equal(payload.QueueTimeOutURL, configuredCallbackUrl);
+    assert.equal(payload.ResultURL, configuredCallbackUrl);
     assert.equal(payload.Occassion, 'ChristmasPay');
 
     return {
@@ -33,7 +34,6 @@ test('B2C payment request is built with the documented Safaricom fields', async 
     Amount: 10,
     PartyB: 254705912645,
     Remarks: 'remarked',
-    callbackUrl: 'https://mydomain.com',
     Occassion: 'ChristmasPay',
   });
 

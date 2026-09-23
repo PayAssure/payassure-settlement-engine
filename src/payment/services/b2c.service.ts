@@ -1,13 +1,7 @@
-import { getMpesaEnv } from '../config/mpesa.env';
+import { getMpesaCallbackUrl, getMpesaEnv } from '../config/mpesa.env';
 import { generateSecurityCredential } from '../lib/mpesa-security-credential';
 import { mpesaService } from './mpesa.service';
 import type { MpesaEnv } from '../types/mpesa';
-
-function resolveCallbackUrl(requestCallbackUrl?: string, envCallbackUrl?: string): string {
-  const base = (requestCallbackUrl ?? envCallbackUrl ?? 'https://example.com').replace(/\/+$/, '');
-  if (base.includes('/callbacks/mpesa')) return base;
-  return `${base}/callbacks/mpesa`;
-}
 
 class B2CService {
   async initiateB2C(request: Record<string, any>): Promise<Record<string, unknown>> {
@@ -15,7 +9,7 @@ class B2CService {
     const initiatorName = process.env.MPESA_INITIATOR_NAME || env.MPESA_INITIATOR_NAME || 'testapi';
     const securityCredential = generateSecurityCredential();
     const partyA = process.env.MPESA_PARTYA || env.MPESA_PARTYA || env.MPESA_SHORTCODE || '174379';
-    const callbackUrl = resolveCallbackUrl(request.callbackUrl, env.MPESA_CALLBACK_URL);
+    const callbackUrl = getMpesaCallbackUrl();
 
     const payload = {
       OriginatorConversationID: request.OriginatorConversationID || request.originatorConversationId || `${Date.now()}_b2c`,
@@ -26,8 +20,8 @@ class B2CService {
       PartyA: String(partyA),
       PartyB: String(request.PartyB ?? request.partyB ?? request.recipientPhone ?? ''),
       Remarks: request.Remarks || request.remarks || 'B2C payment',
-      QueueTimeOutURL: request.QueueTimeOutURL || request.queueTimeoutUrl || callbackUrl,
-      ResultURL: request.ResultURL || request.resultUrl || callbackUrl,
+      QueueTimeOutURL: callbackUrl,
+      ResultURL: callbackUrl,
       Occassion: request.Occassion || request.occasion || undefined,
     };
 
