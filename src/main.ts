@@ -17,6 +17,7 @@ import { ValidationErrorFilter } from './common/filters/validation-error.filter'
 import { RequestBodyLoggingInterceptor } from './common/interceptors/request-body-logging.interceptor';
 import { KcbModule } from './kcb/kcb.module';
 import { CoopBankModule } from './coop-bank/coop-bank.module';
+import { EquityBankModule } from './equity-bank/equity-bank.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -100,7 +101,7 @@ The CASH provider path includes escrow validation, simulated collection from ret
     .build();
 
   const document = SwaggerModule.createDocument(app, config, {
-    include: [SettlementModule, OnbordingsModule, AuthModule, HealthModule, PaymentModule, EscrowIntelligenceModule, KcbModule, CoopBankModule],
+    include: [SettlementModule, OnbordingsModule, AuthModule, HealthModule, PaymentModule, EscrowIntelligenceModule, KcbModule, CoopBankModule, EquityBankModule],
   });
   SwaggerModule.setup('api', app, document, {
     customSiteTitle: 'PayAssure API',

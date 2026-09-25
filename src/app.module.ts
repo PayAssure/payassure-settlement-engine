@@ -7,8 +7,9 @@ import { SettlementModule } from './settlement/settlement.module';
 import { EscrowIntelligenceModule } from './escrow-intelligence/escrow-intelligence.module';
 import { KcbModule } from './kcb/kcb.module';
 import { CoopBankModule } from './coop-bank/coop-bank.module';
+import { EquityBankModule } from './equity-bank/equity-bank.module';
 
 @Module({
-  imports: [SettlementModule, EscrowIntelligenceModule, OnbordingsModule, AuthModule, HealthModule, PaymentModule, KcbModule, CoopBankModule],
+  imports: [SettlementModule, EscrowIntelligenceModule, OnbordingsModule, AuthModule, HealthModule, PaymentModule, KcbModule, CoopBankModule, EquityBankModule],
 })
 export class AppModule {}

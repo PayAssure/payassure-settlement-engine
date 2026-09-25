@@ -21,6 +21,7 @@ This application is organized into the following modules:
 4. **Supplier Product Lookup** - Read-only mock retailer product queries are documented in the [API Endpoints Reference](./API_ENDPOINTS.md)
 5. **[Escrow Intelligence Module](./ESCROW_INTELLIGENCE_MODULE.md)** - Expected vs actual escrow reconciliation and settlement blocking
 6. **[Health Module](./HEALTH_MODULE.md)** - Application health checks
+7. **[Equity Bank / Finserve Module](./EQUITY_BANK_MODULE.md)** - Account balance, internal transfer, and PesaLink integrations
 
 ## Additional Documentation
 
