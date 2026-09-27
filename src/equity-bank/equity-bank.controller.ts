@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import {
   EquityBankAccountBalanceDto,
@@ -29,9 +29,10 @@ export class EquityBankController {
   }
 
   @Post('remittance/internal-bank-transfer')
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Transfer funds between Equity Bank accounts', description: 'Signs source.accountNumber+transfer.amount+transfer.currencyCode+transfer.reference.' })
   @ApiBody({ type: EquityBankInternalTransferDto })
-  @ApiResponse({ status: 201, description: 'Internal transfer response from Finserve.', schema: { example: { status: true, code: 0, message: 'success', reference: '192112602006', data: { transactionId: '5414', status: 'SUCCESS' } } } })
+  @ApiResponse({ status: 200, description: 'Internal transfer response from Finserve.', schema: { example: { status: true, code: 0, message: 'success', reference: '192112602006', data: { transactionId: '5414', status: 'SUCCESS' } } } })
   @ApiResponse({ status: 503, description: 'Finserve authentication or provider request failed.' })
   async internalTransfer(@Body() body: EquityBankInternalTransferDto) { return this.equityBankService.internalBankTransfer(body); }
 
