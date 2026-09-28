@@ -6,9 +6,8 @@ const defaultCertificatePath = resolve(process.cwd(), 'ProductionCertificate .ce
 
 export function generateSecurityCredential(
   certificatePath = defaultCertificatePath,
+  initiatorPassword = process.env.MPESA_INITIATOR_PASSWORD,
 ): string {
-  const initiatorPassword = process.env.MPESA_INITIATOR_PASSWORD;
-
   if (!initiatorPassword) {
     throw new Error('MPESA_INITIATOR_PASSWORD is not configured');
   }

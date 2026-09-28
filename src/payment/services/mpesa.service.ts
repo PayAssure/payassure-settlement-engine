@@ -2,6 +2,12 @@ import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { getMpesaCallbackUrl, getMpesaEnv, prisma, MPESA_PRODUCTION_ENDPOINTS } from '../config/mpesa.env';
 
+export interface MpesaRequestCredentials {
+  environment?: string;
+  consumerKey: string;
+  consumerSecret: string;
+}
+
 export interface PaymentRequestLog {
   endpoint: string;
   method: string;
@@ -51,10 +57,13 @@ export class MpesaService {
     }
   }
 
-  private async getAccessToken(): Promise<string> {
+  private async getAccessToken(credentials?: MpesaRequestCredentials): Promise<string> {
     const env = getMpesaEnv();
-    const auth = Buffer.from(`${env.consumerKey}:${env.consumerSecret}`).toString('base64');
-    const tokenUrl = `${this.getBaseUrl(env.environment)}/oauth/v1/generate?grant_type=client_credentials`;
+    const consumerKey = credentials?.consumerKey ?? env.consumerKey;
+    const consumerSecret = credentials?.consumerSecret ?? env.consumerSecret;
+    const environment = credentials?.environment ?? env.environment;
+    const auth = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
+    const tokenUrl = `${this.getBaseUrl(environment)}/oauth/v1/generate?grant_type=client_credentials`;
 
     const response = await fetch(tokenUrl, {
       method: 'GET',
@@ -119,23 +128,34 @@ export class MpesaService {
     return sandboxEndpoints[endpoint] || '';
   }
 
-  async makeRequest(endpoint: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async makeRequest(
+    endpoint: string,
+    payload: Record<string, unknown>,
+    credentials?: MpesaRequestCredentials,
+  ): Promise<Record<string, unknown>> {
     const env = getMpesaEnv();
-    const baseUrl = this.getBaseUrl(env.environment);
-    const apiEndpoint = this.getEndpointPath(endpoint, env.environment);
+    const environment = credentials?.environment ?? env.environment;
+    const baseUrl = this.getBaseUrl(environment);
+    const apiEndpoint = this.getEndpointPath(endpoint, environment);
 
     if (!apiEndpoint) {
       throw new Error(`Unsupported M-Pesa endpoint: ${endpoint}`);
     }
 
-    const token = await this.getAccessToken();
+    const token = await this.getAccessToken(credentials);
     const url = `${baseUrl}${apiEndpoint}`;
+    const loggedPayload = Object.fromEntries(
+      Object.entries(payload).map(([key, value]) => [
+        key,
+        ['SecurityCredential', 'Password'].includes(key) ? '[redacted]' : value,
+      ]),
+    );
 
     await this.logRequest({
       endpoint,
       method: 'POST',
       path: apiEndpoint,
-      requestBody: payload,
+      requestBody: loggedPayload,
     });
 
     const response = await fetch(url, {
@@ -157,7 +177,7 @@ export class MpesaService {
         statusText: response.statusText,
         errorResponse: data,
         url,
-        environment: env.environment || 'not set (defaulting to sandbox)',
+        environment: environment || 'not set (defaulting to sandbox)',
       });
 
       // Provide specific diagnostics for common errors
@@ -171,8 +191,8 @@ export class MpesaService {
             'ConsumerKey/ConsumerSecret invalid for environment',
           ],
           debugInfo: {
-            consumerKeyLength: env.consumerKey?.length || 0,
-            consumerSecretLength: env.consumerSecret?.length || 0,
+            consumerKeyLength: credentials?.consumerKey?.length || env.consumerKey?.length || 0,
+            consumerSecretLength: credentials?.consumerSecret?.length || env.consumerSecret?.length || 0,
             securityCredentialLength: (payload.SecurityCredential as string)?.length || 0,
           },
           timestamp: new Date().toISOString(),

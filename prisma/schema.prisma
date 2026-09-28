@@ -262,6 +262,7 @@ model Settlement {
   paymentSnapshot       Json?
   transactions          Transaction[]
   b2bPayoutAttempts     B2BPayoutAttempt[]  @relation("B2BPayoutAttempts")
+  escrowTransfers       RetailerEscrowTransfer[] @relation("SettlementEscrowTransfers")
   createdAt             DateTime            @default(now())
   processedAt           DateTime?
   completedAt           DateTime?
@@ -273,6 +274,49 @@ model Settlement {
   @@index([integrationId])
   @@index([status])
   @@index([createdAt])
+}
+
+model RetailerEscrowFloat {
+  id                       String                   @id @default(cuid())
+  merchantId               String                   @unique
+  currency                 String                   @default("KES")
+  dailyFloat               Decimal                  @db.Decimal(18, 2)
+  expectedRemainingBalance Decimal                  @db.Decimal(18, 2)
+  activeTransferId         String?
+  transfers                RetailerEscrowTransfer[] @relation("RetailerEscrowFloatTransfers")
+  createdAt                DateTime                 @default(now())
+  updatedAt                DateTime                 @updatedAt
+
+  @@map("retailer_escrow_floats")
+}
+
+model RetailerEscrowTransfer {
+  id                              String             @id @default(cuid())
+  settlementId                    String
+  settlement                      Settlement         @relation("SettlementEscrowTransfers", fields: [settlementId], references: [id], onDelete: Cascade)
+  retailerEscrowFloatId           String
+  retailerEscrowFloat             RetailerEscrowFloat @relation("RetailerEscrowFloatTransfers", fields: [retailerEscrowFloatId], references: [id], onDelete: Restrict)
+  retailerMerchantId              String
+  amount                          Decimal            @db.Decimal(18, 2)
+  mpesaAmount                     Decimal            @default(0) @db.Decimal(18, 2)
+  mpesaPayerPhone                 String?
+  mpesaStatus                     String             @default("NOT_REQUIRED")
+  requiredBalance                 Decimal            @db.Decimal(18, 2)
+  observedBalance                 Decimal?           @db.Decimal(18, 2)
+  balanceOriginatorConversationId String?            @unique
+  balanceConversationId           String?
+  b2bOriginatorConversationId     String?            @unique
+  b2bConversationId               String?
+  status                          String             @default("BALANCE_PENDING")
+  balanceCallback                 Json?
+  transferCallback                Json?
+  failureReason                   String?
+  createdAt                       DateTime           @default(now())
+  updatedAt                       DateTime           @updatedAt
+
+  @@unique([settlementId])
+  @@index([retailerMerchantId, status])
+  @@map("retailer_escrow_transfers")
 }
 
 model Transaction {

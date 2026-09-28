@@ -1,7 +1,10 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
-import { ApiExcludeEndpoint, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, ForbiddenException, Get, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiExcludeEndpoint, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { retailerEscrowTransferService } from '../payment/services/retailer-escrow-transfer.service';
 import { EscrowIntelligenceService } from './escrow-intelligence.service';
 import { MockBankEscrowProvider } from './providers/mock-bank-escrow.provider';
+import { RetailerEscrowFloatDto } from './dto/retailer-escrow-float.dto';
 
 @ApiTags('escrow')
 @Controller('escrow')
@@ -24,6 +27,40 @@ export class EscrowIntelligenceController {
   @Get('summary/:customerId')
   async summary(@Param('customerId') customerId: string, @Query('date') date?: string) {
     return this.escrowIntelligenceService.getDailyCustomerSummary(customerId, date ? new Date(date) : new Date());
+  }
+
+  @Get('retailers/:merchantId/float')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Get a retailer escrow float configuration' })
+  @ApiResponse({ status: 200, description: 'Daily float and current expected remaining balance' })
+  @ApiResponse({ status: 403, description: 'Only administrators can view retailer float configuration' })
+  async getRetailerFloat(@Param('merchantId') merchantId: string, @Req() request: any) {
+    this.assertAdministrator(request.user);
+    return retailerEscrowTransferService.getFloat(merchantId);
+  }
+
+  @Put('retailers/:merchantId/float')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Add or edit a retailer escrow float configuration',
+    description: 'Initial setup defaults expectedRemainingBalance to dailyFloat. Editing dailyFloat preserves the current remainder unless expectedRemainingBalance is explicitly provided.',
+  })
+  @ApiResponse({ status: 200, description: 'Retailer float configuration saved' })
+  @ApiResponse({ status: 403, description: 'Only administrators can edit retailer float configuration' })
+  @ApiResponse({ status: 409, description: 'A transfer is in progress for this retailer' })
+  async setRetailerFloat(
+    @Param('merchantId') merchantId: string,
+    @Body() body: RetailerEscrowFloatDto,
+    @Req() request: any,
+  ) {
+    this.assertAdministrator(request.user);
+    return retailerEscrowTransferService.setFloat(
+      merchantId,
+      body.dailyFloat,
+      body.expectedRemainingBalance,
+    );
   }
 
   @Get('history')
@@ -153,5 +190,11 @@ export class EscrowIntelligenceController {
       scenario,
       customerId,
     };
+  }
+
+  private assertAdministrator(user: any): void {
+    if (!['ADMIN', 'SUPER_ADMIN'].includes(user?.role)) {
+      throw new ForbiddenException('Only administrators can manage retailer escrow floats');
+    }
   }
 }

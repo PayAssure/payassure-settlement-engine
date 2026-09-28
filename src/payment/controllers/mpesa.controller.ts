@@ -1,6 +1,8 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
-import { ApiOperation, ApiTags, ApiResponse } from '@nestjs/swagger';
+import { Body, Controller, ForbiddenException, Get, Post, Req, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags, ApiResponse } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { mpesaService } from '../services/mpesa.service';
+import { accountBalanceService } from '../services/account-balance.service';
 import { b2pochiService } from '../services/b2pochi.service';
 import { b2cService } from '../services/b2c.service';
 import { InitiateStkPushDto, QueryStkStatusDto, DispatchB2bPayoutDto, DispatchB2PochiPayoutDto, DispatchB2CPayoutDto } from '../dto';
@@ -29,6 +31,22 @@ export class MpesaController {
   @ApiResponse({ status: 400, description: 'Invalid checkout request ID' })
   async queryStk(@Body() body: QueryStkStatusDto) {
     return mpesaService.queryStkStatus(body.checkoutRequestId);
+  }
+
+  @Post('mpesa/account-balance')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Request the M-Pesa account balance',
+    description: 'Submits an asynchronous AccountBalance query using MPESA_RETAILER_* credentials, reserved for retailer escrow balance and B2B operations. Requires an ADMIN or SUPER_ADMIN token; Safaricom sends the result to the account-balance callback endpoint.',
+  })
+  @ApiResponse({ status: 200, description: 'Account balance query accepted; the balance is delivered asynchronously to the configured callback URL' })
+  @ApiResponse({ status: 500, description: 'M-Pesa credentials are missing or Safaricom rejected the request' })
+  async queryAccountBalance(@Req() request: any) {
+    if (!['ADMIN', 'SUPER_ADMIN'].includes(request.user?.role)) {
+      throw new ForbiddenException('Only administrators can query retailer escrow balances');
+    }
+    return accountBalanceService.queryAccountBalance();
   }
 
   @Post('mpesa/b2b')

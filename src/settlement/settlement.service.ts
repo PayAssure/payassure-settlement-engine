@@ -1282,6 +1282,36 @@ export class SettlementService {
       });
     }
 
+    const escrowTransfer = await this.prisma.retailerEscrowTransfer.findUnique({
+      where: { settlementId: settlement.id },
+    });
+    if (escrowTransfer) {
+      if (['FAILED', 'BALANCE_MISMATCH'].includes(escrowTransfer.status)) {
+        return {
+          success: false,
+          status: SettlementStatus.FAILED,
+          message: escrowTransfer.failureReason ?? 'Retailer escrow funding failed; settlement allocation was blocked.',
+        };
+      }
+      if (escrowTransfer.status !== 'SUCCEEDED') {
+        return {
+          success: true,
+          status: SettlementStatus.PENDING_PROCESSING,
+          message: 'Settlement allocation is waiting for retailer escrow balance verification and B2B transfer confirmation.',
+          escrowTransferStatus: escrowTransfer.status,
+        };
+      }
+      if (Number(escrowTransfer.mpesaAmount) > 0 && escrowTransfer.mpesaStatus !== 'SUCCESS') {
+        return {
+          success: true,
+          status: SettlementStatus.PENDING_PROCESSING,
+          message: 'Settlement allocation is waiting for the M-Pesa funding callback.',
+          escrowTransferStatus: escrowTransfer.status,
+          mpesaFundingStatus: escrowTransfer.mpesaStatus,
+        };
+      }
+    }
+
     // Get supplier information from the payment payload
     const suppliers = Array.isArray(paymentPayload.suppliers) ? paymentPayload.suppliers : [];
     if (suppliers.length === 0) {
