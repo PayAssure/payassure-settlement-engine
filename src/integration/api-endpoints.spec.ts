@@ -391,7 +391,7 @@ test('covers auth, onboarding, and settlement API flows end to end', async () =>
     totalAmount: 7200,
     currency: 'KES',
     settlementMethod: 'BANK_TRANSFER',
-    paymentMethod: { type: 'MPESA', payerPhoneNumber: '254700000000' },
+    paymentMethod: { type: 'MPESA', payerPhoneNumber: '254700000000', provider: 'MPESA' },
     transactionDate: '2026-07-03T17:30:15+03:00',
     suppliers: [{ supplierMerchantId: 'SUP-1001', items: [{ itemId: 'ITEM-001', supplierAmount: 7200 }] }],
   } as any, authenticateResult.token);

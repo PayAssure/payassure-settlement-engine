@@ -1,6 +1,6 @@
 import { Injectable, InternalServerErrorException, Logger, ServiceUnavailableException } from '@nestjs/common';
-import { createHash } from 'crypto';
 import { KcbFundsTransferDto } from './dto/kcb-funds-transfer.dto';
+import { logAuthorizationHeader } from './helpers/log-authorization-header';
 
 interface KcbConfig {
   tokenUrl: string;
@@ -57,7 +57,7 @@ export class KcbService {
     }
 
     const { authorizationHeader } = await this.getAccessToken(config);
-    this.logAuthorizationHeader('KCB token obtained and used for funds transfer', authorizationHeader);
+    logAuthorizationHeader(this.logger, 'KCB token obtained and used for funds transfer', authorizationHeader);
 
     const response = await fetch(config.transferUrl, {
       method: 'POST',
@@ -129,15 +129,5 @@ export class KcbService {
     }
 
     return { authorizationHeader: `${tokenType} ${accessToken}` };
-  }
-
-  private logAuthorizationHeader(message: string, authorizationHeader: string) {
-    const [scheme, token] = authorizationHeader.split(' ');
-    const tokenFingerprint = createHash('sha256').update(token).digest('hex').slice(0, 12);
-    const maskedToken = token.length > 12
-      ? `${token.slice(0, 6)}...${token.slice(-6)}`
-      : '[short-token]';
-
-    this.logger.log(`${message}: scheme=${scheme}, token=${maskedToken}, fingerprint=${tokenFingerprint}`);
   }
 }

@@ -1,7 +1,8 @@
 import { getMpesaCallbackUrl, getMpesaEnv } from '../config/mpesa.env';
 import { generateSecurityCredential } from '../lib/mpesa-security-credential';
 import { mpesaService } from './mpesa.service';
-import type { B2BRequest, MpesaEnv } from '../types/mpesa';
+import type { B2BRequest } from '../types/mpesa';
+import { normalizeMpesaResponse } from '../utils/normalize-mpesa-response';
 
 function resolveAccountReference(requestAccountReference?: string, fallback = 'B2B Payment'): string {
   return requestAccountReference || fallback;
@@ -13,10 +14,11 @@ function resolveDescription(requestDescription?: string, fallback = 'B2B Transfe
 
 class B2BService {
   async initiateB2B(request: B2BRequest): Promise<Record<string, unknown>> {
-    const env = getMpesaEnv() as MpesaEnv;
-    const initiatorName = process.env.MPESA_INITIATOR_NAME || env.MPESA_INITIATOR_NAME || 'testapi';
-    const partyA = process.env.MPESA_PARTYA || env.MPESA_PARTYA || env.MPESA_SHORTCODE || '174379';
-    const securityCredential = generateSecurityCredential();
+    const env = getMpesaEnv();
+    const initiatorName = request.initiatorName || env.initiatorName || 'testapi';
+    const partyA = request.partyA || env.partyA || env.shortcode || '174379';
+    const securityCredential = generateSecurityCredential(undefined, request.initiatorPassword ?? env.initiatorPassword);
+    const callbackUrl = request.callbackUrl || getMpesaCallbackUrl();
 
     const payload = {
       Initiator: initiatorName,
@@ -26,40 +28,35 @@ class B2BService {
       RecieverIdentifierType: '4',
       Amount: Math.floor(Number(request.amount ?? 0)),
       PartyA: partyA,
-      PartyB: request.recipientShortCode || request.recieverPartyPublicID || env.MPESA_SHORTCODE || '174379',
+      PartyB: request.recipientShortCode || request.recieverPartyPublicID || env.shortcode || '174379',
       AccountReference: resolveAccountReference(request.accountReference, 'B2B Payment'),
-      Remarks: resolveDescription(request.description, 'B2B Transfer'),
-      QueueTimeOutURL: getMpesaCallbackUrl(),
-      ResultURL: getMpesaCallbackUrl(),
+      Remarks: request.remarks || resolveDescription(request.description, 'B2B Transfer'),
+      QueueTimeOutURL: request.queueTimeOutUrl || callbackUrl,
+      ResultURL: request.resultUrl || callbackUrl,
     };
 
     console.log('[B2B][GATEWAY][EXACT_PAYLOAD]', JSON.stringify({
-      request,
+      amount: request.amount,
+      partyA,
+      partyB: payload.PartyB,
+      accountReference: payload.AccountReference,
+      remarks: payload.Remarks,
       payload: {
         ...payload,
         SecurityCredential: '[generated from initiator password]',
       },
       environment: {
-        shortCode: env.MPESA_SHORTCODE,
+        shortCode: env.shortcode,
         partyA,
-        callbackUrl: env.MPESA_CALLBACK_URL,
+        callbackUrl,
+        environment: request.credentials?.environment ?? env.environment,
         securityCredentialConfigured: !!securityCredential,
       },
     }, null, 2));
 
     try {
-      const response = await mpesaService.makeRequest('b2b', payload as Record<string, unknown>);
-      const responseCode = response.ResponseCode ?? response.responseCode ?? 'UNKNOWN';
-      const responseDescription = response.ResponseDescription ?? response.responseDescription ?? 'Unknown M-Pesa B2B response';
-
-      return {
-        responseCode,
-        responseDescription,
-        originatorConversationId: response.OriginatorConversationID ?? response.originatorConversationId,
-        conversationId: `${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        success: String(responseCode) === '0',
-      };
+      const response = await mpesaService.makeRequest('b2b', payload as Record<string, unknown>, request.credentials);
+      return normalizeMpesaResponse(response, 'B2B', `${Date.now()}`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error('[B2B][RESPONSE][ERROR]', {

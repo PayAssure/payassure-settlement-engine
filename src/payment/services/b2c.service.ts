@@ -2,6 +2,7 @@ import { getMpesaCallbackUrl, getMpesaEnv } from '../config/mpesa.env';
 import { generateSecurityCredential } from '../lib/mpesa-security-credential';
 import { mpesaService } from './mpesa.service';
 import type { MpesaEnv } from '../types/mpesa';
+import { normalizeMpesaResponse } from '../utils/normalize-mpesa-response';
 
 class B2CService {
   async initiateB2C(request: Record<string, any>): Promise<Record<string, unknown>> {
@@ -33,17 +34,7 @@ class B2CService {
 
     try {
       const response = await mpesaService.makeRequest('b2c', payload);
-      const responseCode = response.ResponseCode ?? response.responseCode ?? 'UNKNOWN';
-      const responseDescription = response.ResponseDescription ?? response.responseDescription ?? 'Unknown M-Pesa B2C response';
-
-      return {
-        responseCode,
-        responseDescription,
-        originatorConversationId: response.OriginatorConversationID ?? response.originatorConversationId,
-        conversationId: response.ConversationID ?? response.conversationId,
-        timestamp: new Date().toISOString(),
-        success: String(responseCode) === '0',
-      };
+      return normalizeMpesaResponse(response, 'B2C');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error('[B2C][RESPONSE][ERROR]', { error: errorMessage, initiator: initiatorName, partyA, timestamp: new Date().toISOString() });

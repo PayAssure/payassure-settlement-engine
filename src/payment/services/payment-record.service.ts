@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { prisma } from '../config/mpesa.env';
+import { prisma } from '../../common/database/prisma';
 import { parseStkCallback } from '../utils/mpesa-callback.util';
 
 export class PaymentRecordService {

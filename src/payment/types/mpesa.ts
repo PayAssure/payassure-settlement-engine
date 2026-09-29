@@ -17,4 +17,15 @@ export interface B2BRequest {
   description?: string;
   accountReference?: string;
   callbackUrl?: string;
+  initiatorName?: string;
+  initiatorPassword?: string;
+  partyA?: string;
+  remarks?: string;
+  queueTimeOutUrl?: string;
+  resultUrl?: string;
+  credentials?: {
+    environment?: string;
+    consumerKey: string;
+    consumerSecret: string;
+  };
 }

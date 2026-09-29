@@ -1,8 +1,4 @@
-import * as dotenv from 'dotenv';
-import * as path from 'node:path';
-import { PrismaClient } from '@prisma/client';
-
-dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+import '../../common/config/environment';
 
 export interface MpesaEnvConfig {
   environment?: string;
@@ -14,17 +10,6 @@ export interface MpesaEnvConfig {
   initiatorName?: string;
   initiatorPassword?: string;
   callbackUrl?: string;
-}
-
-export interface RetailerEscrowMpesaConfig {
-  environment: string;
-  consumerKey: string;
-  consumerSecret: string;
-  shortcode: string;
-  partyA: string;
-  initiatorName: string;
-  initiatorPassword: string;
-  callbackUrl: string;
 }
 
 /**
@@ -57,10 +42,6 @@ export const MPESA_PRODUCTION_ENDPOINTS = {
   },
 };
 
-declare global {
-  var prisma: PrismaClient | undefined;
-}
-
 export const getMpesaEnv = (): MpesaEnvConfig => ({
   environment: process.env.MPESA_ENVIRONMENT,
   consumerKey: process.env.MPESA_CONSUMER_KEY,
@@ -73,38 +54,35 @@ export const getMpesaEnv = (): MpesaEnvConfig => ({
   callbackUrl: process.env.MPESA_CALLBACK_URL,
 });
 
-export function getRetailerEscrowMpesaConfig(): RetailerEscrowMpesaConfig {
-  const prefix = 'MPESA_RETAILER_';
-  const readRequired = (name: string): string => {
-    const value = process.env[`${prefix}${name}`]?.trim();
-    if (!value) {
-      throw new Error(`Missing required retailer M-Pesa configuration: ${prefix}${name}`);
-    }
-    return value;
-  };
-
-  const shortcode = readRequired('SHORTCODE');
-  return {
-    environment: readRequired('ENVIRONMENT'),
-    consumerKey: readRequired('CONSUMER_KEY'),
-    consumerSecret: readRequired('CONSUMER_SECRET'),
-    shortcode,
-    partyA: process.env[`${prefix}PARTY_A`]?.trim() || shortcode,
-    initiatorName: readRequired('INITIATOR_NAME'),
-    initiatorPassword: readRequired('INITIATOR_PASSWORD'),
-    callbackUrl: readRequired('CALLBACK_URL'),
-  };
-}
-
 export function getMpesaCallbackUrl(suffix = ''): string {
   const configuredUrl = (process.env.MPESA_CALLBACK_URL || '').trim().replace(/\/+$/, '');
   const baseUrl = configuredUrl || `http://localhost:${process.env.PORT || '3000'}`;
-  const callbackPath = baseUrl.includes('/callbacks/mpesa') ? '' : '/callbacks/mpesa';
-  return `${baseUrl}${callbackPath}${suffix}`;
+  const normalizedSuffix = suffix ? (suffix.startsWith('/') ? suffix : `/${suffix}`) : '';
+  return resolveMpesaCallbackUrl(baseUrl, normalizedSuffix);
 }
 
-export const prisma = global.prisma ?? new PrismaClient();
-
-if (process.env.NODE_ENV !== 'production') {
-  global.prisma = prisma;
+export function resolveMpesaCallbackUrl(
+  callbackUrl: string,
+  callbackPath = '',
+  callbackPrefix = '/callbacks/mpesa',
+): string {
+  const baseUrl = callbackUrl.trim().replace(/\/+$/, '');
+  const normalizedPrefix = callbackPrefix.startsWith('/') ? callbackPrefix : `/${callbackPrefix}`;
+  const normalizedPath = callbackPath.replace(/^\/+/, '');
+  const hasCallbackBase = /\/(?:payments\/)?callbacks\/mpesa$/i.test(baseUrl);
+  const callbackBase = hasCallbackBase
+    ? baseUrl
+    : /\/payments$/i.test(baseUrl)
+      ? `${baseUrl}/callbacks/mpesa`
+      : `${baseUrl}${normalizedPrefix}`;
+  return normalizedPath ? `${callbackBase}/${normalizedPath}` : callbackBase;
 }
+
+export function getMpesaCallbackUrls(suffix = ''): {
+  QueueTimeOutURL: string;
+  ResultURL: string;
+} {
+  const callbackUrl = getMpesaCallbackUrl(suffix);
+  return { QueueTimeOutURL: callbackUrl, ResultURL: callbackUrl };
+}
+

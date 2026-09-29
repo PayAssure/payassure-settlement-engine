@@ -1,6 +1,6 @@
 import { Injectable, InternalServerErrorException, Logger, ServiceUnavailableException } from '@nestjs/common';
-import { createHash } from 'crypto';
 import { CoopBankAccountEnquiryDto } from './dto/coop-bank-account-enquiry.dto';
+import { logAuthorizationHeader } from './helpers/log-authorization-header';
 
 interface CoopBankConfig {
   baseUrl: string;
@@ -73,7 +73,7 @@ export class CoopBankService {
   async enquireAccountTransactions(request: CoopBankAccountEnquiryDto) {
     const config = this.getConfig();
     const { authorizationHeader } = await this.getAccessToken();
-    this.logAuthorizationHeader('COOP Bank token obtained and used for account enquiry', authorizationHeader);
+    logAuthorizationHeader(this.logger, 'COOP Bank token obtained and used for account enquiry', authorizationHeader);
 
     const payload = {
       MessageReference: request.messageReference,
@@ -112,13 +112,5 @@ export class CoopBankService {
       request: payload,
       response: responseBody,
     };
-  }
-
-  private logAuthorizationHeader(message: string, authorizationHeader: string) {
-    const [scheme, token] = authorizationHeader.split(' ');
-    const tokenFingerprint = createHash('sha256').update(token).digest('hex').slice(0, 12);
-    const maskedToken = token.length > 12 ? `${token.slice(0, 6)}...${token.slice(-6)}` : '[short-token]';
-
-    this.logger.log(`${message}: scheme=${scheme}, token=${maskedToken}, fingerprint=${tokenFingerprint}`);
   }
 }

@@ -1,7 +1,8 @@
-import { getMpesaCallbackUrl, getMpesaEnv } from '../config/mpesa.env';
+import { getMpesaCallbackUrls, getMpesaEnv } from '../config/mpesa.env';
 import { generateSecurityCredential } from '../lib/mpesa-security-credential';
 import { mpesaService } from './mpesa.service';
 import type { MpesaEnv } from '../types/mpesa';
+import { normalizeMpesaResponse } from '../utils/normalize-mpesa-response';
 
 function resolveDescription(requestDescription?: string, fallback = 'B2Pochi transfer'): string {
   return requestDescription || fallback;
@@ -23,8 +24,7 @@ class B2PochiService {
       PartyA: partyA,
       PartyB: Number(request.PartyB ?? request.partyB ?? request.recipientPhone ?? 0),
       Remarks: resolveDescription(request.Remarks || request.remarks, 'B2Pochi disbursement'),
-      QueueTimeOutURL: getMpesaCallbackUrl(),
-      ResultURL: getMpesaCallbackUrl(),
+      ...getMpesaCallbackUrls(),
       Occassion: request.Occassion || request.occasion || undefined,
     };
 
@@ -44,17 +44,7 @@ class B2PochiService {
 
     try {
       const response = await mpesaService.makeRequest('b2pochi', payload as Record<string, unknown>);
-      const responseCode = response.ResponseCode ?? response.responseCode ?? 'UNKNOWN';
-      const responseDescription = response.ResponseDescription ?? response.responseDescription ?? 'Unknown M-Pesa B2Pochi response';
-
-      return {
-        responseCode,
-        responseDescription,
-        originatorConversationId: response.OriginatorConversationID ?? response.originatorConversationId,
-        conversationId: response.ConversationID ?? response.conversationId,
-        timestamp: new Date().toISOString(),
-        success: String(responseCode) === '0',
-      };
+      return normalizeMpesaResponse(response, 'B2Pochi');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error('[B2POCHI][RESPONSE][ERROR]', {

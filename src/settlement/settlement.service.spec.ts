@@ -3,7 +3,7 @@ import * as assert from 'node:assert/strict';
 import { SettlementService } from './settlement.service';
 import { SettlementRecordRepository } from './repository/settlement/settlement.repository';
 import { paymentRecordService } from '../payment/services/payment-record.service';
-import { prisma } from '../payment/config/mpesa.env';
+import { prisma } from '../common/database/prisma';
 import { b2bService } from '../payment/services/b2b.service';
 import { b2cService } from '../payment/services/b2c.service';
 

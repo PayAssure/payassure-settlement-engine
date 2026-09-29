@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { prisma } from '../config/mpesa.env';
-import { getRetailerEscrowMpesaConfig } from '../config/mpesa.env';
-import { retailerEscrowB2bService } from './retailer-escrow-b2b.service';
-import { retailerEscrowTransferService } from './retailer-escrow-transfer.service';
+import { prisma } from '../../common/database/prisma';
+import { getRetailerEscrowMpesaConfig } from '../config/retailer-escrow.env';
+import { retailerEscrowB2bService } from './transfer/retailer-escrow-b2b.service';
+import { retailerEscrowTransferService } from './transfer/retailer-escrow-transfer.service';
 
 test('retailer escrow credentials use fixed MPESA_RETAILER environment names', () => {
   const names = [
@@ -43,6 +43,48 @@ test('retailer escrow credentials use fixed MPESA_RETAILER environment names', (
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
     }
+  }
+});
+
+test('retailer escrow balance query uses MPESA_RETAILER_* credentials and dedicated callback URL', async () => {
+  const previousRetailerCallback = process.env.MPESA_RETAILER_CALLBACK_URL;
+  const previousRetailerInitiator = process.env.MPESA_RETAILER_INITIATOR_NAME;
+  const previousRetailerPassword = process.env.MPESA_RETAILER_INITIATOR_PASSWORD;
+  const previousMakeRequest = (require('../../payment/services/mpesa.service').mpesaService as any).makeRequest;
+
+  try {
+    process.env.MPESA_RETAILER_CALLBACK_URL = 'https://example.test/retailer';
+    process.env.MPESA_RETAILER_INITIATOR_NAME = 'retailer-initiator';
+    process.env.MPESA_RETAILER_INITIATOR_PASSWORD = 'retailer-password';
+
+    let payload: any;
+    let credentials: any;
+    (require('../../payment/services/mpesa.service').mpesaService as any).makeRequest = async (_endpoint: string, nextPayload: Record<string, unknown>, nextCredentials?: Record<string, unknown>) => {
+      payload = nextPayload;
+      credentials = nextCredentials;
+      return {
+        OriginatorConversationID: 'retailer-ocid',
+        ConversationID: 'retailer-cid',
+        ResponseCode: '0',
+        ResponseDescription: 'Accept the service request successfully',
+      };
+    };
+
+    const { retailerEscrowBalanceService } = require('./balance/retailer-escrow-balance.service');
+    const result = await retailerEscrowBalanceService.queryBalance('/escrow-balance', '/escrow-balance-timeout');
+
+    assert.equal(payload.Initiator, 'retailer-initiator');
+    assert.equal(payload.IdentifierType, '2');
+    assert.equal(payload.PartyA, '600997');
+    assert.equal(payload.QueueTimeOutURL, 'https://example.test/retailer/callbacks/mpesa/escrow-balance-timeout');
+    assert.equal(payload.ResultURL, 'https://example.test/retailer/callbacks/mpesa/escrow-balance');
+    assert.equal(credentials.consumerKey, 'wOvA4RkFd83LcSfGGwGKK1KzGSNcRJjAYZmrwJgg3Gy9ASsA');
+    assert.equal(result.ResponseCode, '0');
+  } finally {
+    (require('../../payment/services/mpesa.service').mpesaService as any).makeRequest = previousMakeRequest;
+    if (previousRetailerCallback === undefined) delete process.env.MPESA_RETAILER_CALLBACK_URL; else process.env.MPESA_RETAILER_CALLBACK_URL = previousRetailerCallback;
+    if (previousRetailerInitiator === undefined) delete process.env.MPESA_RETAILER_INITIATOR_NAME; else process.env.MPESA_RETAILER_INITIATOR_NAME = previousRetailerInitiator;
+    if (previousRetailerPassword === undefined) delete process.env.MPESA_RETAILER_INITIATOR_PASSWORD; else process.env.MPESA_RETAILER_INITIATOR_PASSWORD = previousRetailerPassword;
   }
 });
 
