@@ -1681,6 +1681,108 @@
         ]
       }
     },
+    "/escrow/retailers/{merchantId}/float": {
+      "get": {
+        "operationId": "EscrowIntelligenceController_getRetailerFloat",
+        "summary": "Get a retailer escrow float configuration",
+        "description": "Returns the configured daily float and current expected remaining balance. Requires an ADMIN or SUPER_ADMIN bearer token.",
+        "parameters": [
+          {
+            "name": "merchantId",
+            "required": true,
+            "in": "path",
+            "description": "Retailer merchant ID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retailer float configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetailerEscrowFloatResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Only administrators can view retailer float configuration"
+          },
+          "404": {
+            "description": "Retailer integration or float configuration was not found"
+          }
+        },
+        "tags": [
+          "escrow"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      },
+      "put": {
+        "operationId": "EscrowIntelligenceController_setRetailerFloat",
+        "summary": "Add or edit a retailer escrow float configuration",
+        "description": "Requires an ADMIN or SUPER_ADMIN bearer token. On initial setup, expectedRemainingBalance defaults to dailyFloat. Editing dailyFloat preserves the current remainder unless expectedRemainingBalance is explicitly provided.",
+        "parameters": [
+          {
+            "name": "merchantId",
+            "required": true,
+            "in": "path",
+            "description": "Retailer merchant ID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetailerEscrowFloatDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Retailer float configuration saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetailerEscrowFloatResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Float amounts must be non-negative numbers"
+          },
+          "403": {
+            "description": "Only administrators can edit retailer float configuration"
+          },
+          "404": {
+            "description": "Retailer integration was not found"
+          },
+          "409": {
+            "description": "A transfer is in progress for this retailer"
+          }
+        },
+        "tags": [
+          "escrow"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
     "/payassure/health": {
       "get": {
         "operationId": "HealthController_getHealth",
@@ -3014,6 +3116,58 @@
         },
         "required": [
           "refreshToken"
+        ]
+      },
+      "RetailerEscrowFloatDto": {
+        "type": "object",
+        "properties": {
+          "dailyFloat": {
+            "type": "number",
+            "minimum": 0,
+            "example": 1000,
+            "description": "Configured starting daily float in KES."
+          },
+          "expectedRemainingBalance": {
+            "type": "number",
+            "minimum": 0,
+            "example": 800,
+            "description": "Current expected remaining balance. On initial setup this defaults to dailyFloat; specify it to reset the tracked remainder during an edit."
+          }
+        },
+        "required": [
+          "dailyFloat"
+        ]
+      },
+      "RetailerEscrowFloatResponseDto": {
+        "type": "object",
+        "properties": {
+          "merchantId": {
+            "type": "string",
+            "example": "pay_retailer_001"
+          },
+          "currency": {
+            "type": "string",
+            "example": "KES"
+          },
+          "dailyFloat": {
+            "type": "number",
+            "example": 1000
+          },
+          "expectedRemainingBalance": {
+            "type": "number",
+            "example": 800
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "merchantId",
+          "currency",
+          "dailyFloat",
+          "expectedRemainingBalance",
+          "updatedAt"
         ]
       }
     }

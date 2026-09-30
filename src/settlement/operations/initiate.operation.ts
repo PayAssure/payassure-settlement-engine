@@ -18,6 +18,8 @@ import { findExistingSettlementResponse } from './initiate/helpers/find-existing
 import { validateAndFilterSuppliers } from './initiate/helpers/validate-and-filter-suppliers';
 import { createSupplierSettlements } from './initiate/suppliers/create-supplier-settlements';
 import { initiateCustomerPayment } from './initiate/payment/initiate-customer-payment';
+import { normalizePaymentMethods } from './initiate/payment/normalize-payment-methods';
+import { retailerEscrowTransferService } from '../../retailer';
 import type { SettlementInitiationContext } from './initiate/context';
 
 export { simulateMpesaLandingCallback } from './initiate/payment/simulate-mpesa-landing-callback';
@@ -59,6 +61,13 @@ export async function initiateOperation(
     const invalidSuppliers = await validateAndFilterSuppliers(data, repository, logger, supportedCurrencies);
 
     data.suppliers = aggregateSuppliers(data.suppliers) as any;
+    const cashAmount = normalizePaymentMethods(data)
+      .filter((method) => String(method.type ?? '').trim().toUpperCase() === 'CASH')
+      .reduce((sum, method) => sum + method.amount, 0);
+    if (cashAmount > 0 && !(await retailerEscrowTransferService.hasFloatConfig(retailerMerchantId))) {
+      throw new BadRequestException(`Retailer escrow daily float is not configured for ${retailerMerchantId}; CASH settlement was blocked.`);
+    }
+
     const payAssureReference = generatePayAssureReference();
     const internalMerchantTransactionReference = generateInternalMerchantTransactionReference();
     const primarySettlement = await repository.createSettlement(
@@ -81,12 +90,14 @@ export async function initiateOperation(
       retailerMerchantId,
       primarySettlement,
     };
+    const deferredPaymentResult = await initiateCustomerPayment(context);
+    if (deferredPaymentResult && !deferredPaymentResult.success) return deferredPaymentResult;
+
     const allocations = await createSupplierSettlements({
       ...context,
       internalMerchantTransactionReference,
     });
 
-    const deferredPaymentResult = await initiateCustomerPayment(context);
     if (deferredPaymentResult) return deferredPaymentResult;
 
     return {

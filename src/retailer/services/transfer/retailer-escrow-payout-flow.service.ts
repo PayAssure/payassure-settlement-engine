@@ -11,6 +11,11 @@ class RetailerEscrowPayoutFlowService {
     const transfer = await prisma.retailerEscrowTransfer.findUnique({ where: { id: transferId } });
     if (!transfer) throw new NotFoundException(`Escrow transfer ${transferId} was not found`);
     if (transfer.status !== 'TRANSFER_PENDING') {
+      this.logger.warn('[ESCROW_TRANSFER][TRANSFER_CALLBACK][DUPLICATE]', {
+        settlementId: transfer.settlementId,
+        transferId,
+        status: transfer.status,
+      });
       return { received: true, duplicate: true, status: transfer.status };
     }
 
@@ -20,6 +25,10 @@ class RetailerEscrowPayoutFlowService {
       settlementId: transfer.settlementId,
       transferId,
       resultCode,
+      resultDescription: result.ResultDesc ?? result.ResultDescription,
+      transactionId: result.TransactionID ?? result.transactionId,
+      originatorConversationId: result.OriginatorConversationID ?? result.originatorConversationId,
+      conversationId: result.ConversationID ?? result.conversationId,
     });
     if (resultCode !== '0') {
       const reason = String(result.ResultDesc ?? result.ResultDescription ?? 'M-Pesa escrow B2B transfer failed');
@@ -97,9 +106,21 @@ class RetailerEscrowPayoutFlowService {
   async dispatchB2bTransfer(transferId: string): Promise<EscrowJsonRecord> {
     const transfer = await prisma.retailerEscrowTransfer.findUniqueOrThrow({ where: { id: transferId } });
     if (transfer.status === 'TRANSFER_PENDING' || transfer.status === 'SUCCEEDED') {
+      this.logger.log('[ESCROW_TRANSFER][B2B_TRANSFER][SKIPPED]', {
+        settlementId: transfer.settlementId,
+        transferId,
+        status: transfer.status,
+        reason: 'Transfer is already pending or completed',
+      });
       return { accepted: true, status: transfer.status, transferId };
     }
     if (transfer.status !== 'BALANCE_VERIFIED' && transfer.status !== 'WAITING_FOR_MPESA') {
+      this.logger.warn('[ESCROW_TRANSFER][B2B_TRANSFER][SKIPPED]', {
+        settlementId: transfer.settlementId,
+        transferId,
+        status: transfer.status,
+        reason: 'Balance is not verified or M-Pesa funding is not pending',
+      });
       return { accepted: false, status: transfer.status, transferId };
     }
     if (Number(transfer.mpesaAmount) > 0 && transfer.mpesaStatus !== 'SUCCESS') {
@@ -113,6 +134,14 @@ class RetailerEscrowPayoutFlowService {
 
     await prisma.retailerEscrowTransfer.update({ where: { id: transferId }, data: { status: 'TRANSFER_PENDING' } });
     await updateEscrowSettlementMetadata(transfer.settlementId, { escrowStatus: 'TRANSFER_PENDING' });
+    this.logger.log('[ESCROW_TRANSFER][B2B_TRANSFER][DISPATCH_READY]', {
+      settlementId: transfer.settlementId,
+      transferId,
+      amount: Number(transfer.amount),
+      observedBalance: transfer.observedBalance === null ? null : Number(transfer.observedBalance),
+      mpesaAmount: Number(transfer.mpesaAmount),
+      mpesaStatus: transfer.mpesaStatus,
+    });
     try {
       const settlement = await prisma.settlement.findUniqueOrThrow({ where: { id: transfer.settlementId } });
       this.logger.log('[ESCROW_TRANSFER][B2B_TRANSFER][START]', {
@@ -126,6 +155,8 @@ class RetailerEscrowPayoutFlowService {
         merchantTransactionReference: settlement.merchantTransactionReference,
         callbackPath: `escrow-transfer/${transfer.id}`,
         timeoutCallbackPath: `escrow-transfer-timeout/${transfer.id}`,
+        settlementId: transfer.settlementId,
+        transferId: transfer.id,
       });
       if (response.success !== true) {
         throw new Error(String(response.responseDescription ?? 'M-Pesa did not accept the escrow transfer'));

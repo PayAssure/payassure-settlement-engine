@@ -19,6 +19,19 @@ export abstract class SettlementPaymentCallbackBase extends SettlementPaymentCon
       receivedAt: new Date().toISOString(),
     };
     const existingMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
+    if (!['SUCCESS', 'PAID', 'COMPLETED'].includes(String(paymentCallback.status).trim().toUpperCase())) {
+      await this.repository.updateSettlementStatus(settlement.id, 'FAILED', {
+        metadata: { ...existingMetadata, paymentCallback },
+        failedAt: new Date(),
+      });
+      return {
+        success: false,
+        status: 'FAILED',
+        message: 'Customer payment failed; the settlement was rejected.',
+        settlementId: settlement.id,
+      };
+    }
+
     const paymentPayloadForAllocation = (settlement.paymentPayload && typeof settlement.paymentPayload === 'object' && !Array.isArray(settlement.paymentPayload))
       ? settlement.paymentPayload as Record<string, any>
       : {};

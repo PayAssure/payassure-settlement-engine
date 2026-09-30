@@ -40,8 +40,21 @@ class RetailerEscrowBalanceQueryService {
     const config = await prisma.retailerEscrowFloat.findUnique({
       where: { merchantId: request.retailerMerchantId },
     });
-    if (!config) throw new NotFoundException(`Escrow float is not configured for retailer ${request.retailerMerchantId}`);
+    if (!config) {
+      this.logger.warn('[ESCROW_TRANSFER][FLOAT_CONFIG][MISSING]', {
+        settlementId: request.settlementId,
+        retailerMerchantId: request.retailerMerchantId,
+      });
+      throw new NotFoundException(`Escrow float is not configured for retailer ${request.retailerMerchantId}`);
+    }
     getRetailerEscrowMpesaConfig();
+    this.logger.log('[ESCROW_TRANSFER][FLOAT_CONFIG][LOADED]', {
+      settlementId: request.settlementId,
+      retailerMerchantId: request.retailerMerchantId,
+      dailyFloat: Number(config.dailyFloat),
+      expectedRemainingBalance: Number(config.expectedRemainingBalance),
+      transferInProgress: Boolean(config.activeTransferId),
+    });
     this.logger.log('[ESCROW_TRANSFER][FLOAT_LOCK][START]', {
       settlementId: request.settlementId,
       retailerMerchantId: request.retailerMerchantId,
@@ -49,33 +62,44 @@ class RetailerEscrowBalanceQueryService {
     });
 
     const transferId = randomUUID();
-    const created = await prisma.$transaction(async (tx) => {
-      const claimed = await tx.retailerEscrowFloat.updateMany({
-        where: {
-          id: config.id,
-          activeTransferId: null,
-          expectedRemainingBalance: config.expectedRemainingBalance,
-        },
-        data: { activeTransferId: transferId },
+    let created;
+    try {
+      created = await prisma.$transaction(async (tx) => {
+        const claimed = await tx.retailerEscrowFloat.updateMany({
+          where: {
+            id: config.id,
+            activeTransferId: null,
+            expectedRemainingBalance: config.expectedRemainingBalance,
+          },
+          data: { activeTransferId: transferId },
+        });
+        if (claimed.count !== 1) {
+          throw new ConflictException('Another escrow transfer is already active or the expected float changed');
+        }
+        return tx.retailerEscrowTransfer.create({
+          data: {
+            id: transferId,
+            settlementId: request.settlementId,
+            retailerEscrowFloatId: config.id,
+            retailerMerchantId: request.retailerMerchantId,
+            amount: new Prisma.Decimal(request.cashAmount),
+            mpesaAmount: new Prisma.Decimal(request.mpesaAmount),
+            mpesaPayerPhone: request.mpesaPayerPhone ?? null,
+            mpesaStatus: request.mpesaAmount > 0 ? 'NOT_STARTED' : 'NOT_REQUIRED',
+            requiredBalance: config.expectedRemainingBalance,
+            status: 'BALANCE_PENDING',
+          },
+        });
       });
-      if (claimed.count !== 1) {
-        throw new ConflictException('Another escrow transfer is already active or the expected float changed');
-      }
-      return tx.retailerEscrowTransfer.create({
-        data: {
-          id: transferId,
-          settlementId: request.settlementId,
-          retailerEscrowFloatId: config.id,
-          retailerMerchantId: request.retailerMerchantId,
-          amount: new Prisma.Decimal(request.cashAmount),
-          mpesaAmount: new Prisma.Decimal(request.mpesaAmount),
-          mpesaPayerPhone: request.mpesaPayerPhone ?? null,
-          mpesaStatus: request.mpesaAmount > 0 ? 'NOT_STARTED' : 'NOT_REQUIRED',
-          requiredBalance: config.expectedRemainingBalance,
-          status: 'BALANCE_PENDING',
-        },
+    } catch (error) {
+      this.logger.warn('[ESCROW_TRANSFER][FLOAT_LOCK][FAILED]', {
+        settlementId: request.settlementId,
+        transferId,
+        retailerMerchantId: request.retailerMerchantId,
+        error: error instanceof Error ? error.message : String(error),
       });
-    });
+      throw error;
+    }
     await updateEscrowSettlementMetadata(request.settlementId, {
       escrowStatus: 'BALANCE_PENDING',
       transferId: created.id,
@@ -88,6 +112,14 @@ class RetailerEscrowBalanceQueryService {
       retailerMerchantId: request.retailerMerchantId,
       requiredBalance: Number(config.expectedRemainingBalance),
     });
+    this.logger.log('[ESCROW_TRANSFER][RECORD][CREATED]', {
+      settlementId: request.settlementId,
+      transferId: created.id,
+      merchantTransactionReference: request.merchantTransactionReference,
+      cashAmount: request.cashAmount,
+      mpesaAmount: request.mpesaAmount,
+      status: created.status,
+    });
 
     try {
       this.logger.log('[ESCROW_TRANSFER][BALANCE_QUERY][START]', {
@@ -99,6 +131,11 @@ class RetailerEscrowBalanceQueryService {
       const response = await retailerEscrowBalanceService.queryBalance(
         `escrow-balance/${created.id}`,
         `escrow-balance-timeout/${created.id}`,
+        {
+          settlementId: request.settlementId,
+          transferId: created.id,
+          retailerMerchantId: request.retailerMerchantId,
+        },
       );
       const responseCode = String(response.responseCode ?? response.ResponseCode ?? '');
       const responseDescription = String(response.responseDescription ?? response.ResponseDescription ?? 'Safaricom did not accept the account balance query');

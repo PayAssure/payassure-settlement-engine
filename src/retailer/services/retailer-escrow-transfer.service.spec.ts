@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { prisma } from '../../common/database/prisma';
-import { getRetailerEscrowMpesaConfig } from '../config/retailer-escrow.env';
+import { getRetailerEscrowMpesaConfig, getRetailerEscrowMpesaLogContext } from '../config/retailer-escrow.env';
 import { retailerEscrowB2bService } from './transfer/retailer-escrow-b2b.service';
 import { retailerEscrowTransferService } from './transfer/retailer-escrow-transfer.service';
 
@@ -38,6 +38,11 @@ test('retailer escrow credentials use fixed MPESA_RETAILER environment names', (
     assert.equal(config.shortcode, '600001');
     assert.equal(config.partyA, '600001');
     assert.equal(config.environment, 'sandbox');
+    const logContext = JSON.stringify(getRetailerEscrowMpesaLogContext(config));
+    assert.match(logContext, /MPESA_RETAILER_ENVIRONMENT/);
+    assert.match(logContext, /MPESA_RETAILER_SHORTCODE \(fallback\)/);
+    assert.match(logContext, /\[REDACTED\]/);
+    assert.doesNotMatch(logContext, /retailer-secret|retailer-password|retailer-key/);
   } finally {
     for (const [name, value] of previous) {
       if (value === undefined) delete process.env[name];
@@ -236,6 +241,66 @@ test('retailer escrow rejects a balance below current expected remainder', async
     assert.equal(result.accepted, false);
     assert.match(String(result.reason), /tampering detected/i);
     assert.equal(transferStatus, 'BALANCE_MISMATCH');
+    assert.equal(releasedActiveTransfer, true);
+  } finally {
+    (prisma as any).$transaction = originalTransaction;
+    Object.assign(transferModel, originalTransferMethods);
+    floatModel.updateMany = originalFloatUpdateMany;
+    Object.assign(settlementModel, originalSettlementMethods);
+  }
+});
+
+test('retailer escrow rejects and releases the float when available balance is below the CASH amount', async () => {
+  const originalTransaction = (prisma as any).$transaction;
+  const transferModel = (prisma as any).retailerEscrowTransfer;
+  const floatModel = (prisma as any).retailerEscrowFloat;
+  const settlementModel = (prisma as any).settlement;
+  const originalTransferMethods = {
+    findUnique: transferModel.findUnique,
+    update: transferModel.update,
+  };
+  const originalFloatUpdateMany = floatModel.updateMany;
+  const originalSettlementMethods = {
+    findUnique: settlementModel.findUnique,
+    update: settlementModel.update,
+  };
+  const transfer = {
+    id: 'transfer-test-insufficient',
+    settlementId: 'settlement-test-insufficient',
+    retailerEscrowFloatId: 'float-test-insufficient',
+    amount: 4000,
+    requiredBalance: 800,
+    status: 'BALANCE_PENDING',
+  };
+  let releasedActiveTransfer = false;
+
+  try {
+    (prisma as any).$transaction = async (callback: (tx: any) => Promise<unknown>) => callback(prisma);
+    transferModel.findUnique = async () => transfer;
+    transferModel.update = async ({ data }: any) => {
+      Object.assign(transfer, data);
+      return transfer;
+    };
+    floatModel.updateMany = async () => {
+      releasedActiveTransfer = true;
+      return { count: 1 };
+    };
+    settlementModel.findUnique = async () => ({ id: transfer.settlementId, metadata: {} });
+    settlementModel.update = async () => ({});
+
+    const result = await retailerEscrowTransferService.handleBalanceCallback(transfer.id, {
+      Result: {
+        ResultCode: 0,
+        ResultParameters: {
+          ResultParameter: [{ Key: 'AccountBalance', Value: 'Working Account|KES|3500.00' }],
+        },
+      },
+    });
+
+    assert.equal(result.accepted, false);
+    assert.match(String(result.reason), /available 3500 KES/i);
+    assert.match(String(result.reason), /Top up.*500 KES/i);
+    assert.equal(transfer.status, 'BALANCE_MISMATCH');
     assert.equal(releasedActiveTransfer, true);
   } finally {
     (prisma as any).$transaction = originalTransaction;

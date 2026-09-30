@@ -26,6 +26,9 @@ class RetailerEscrowBalanceCallbackService {
       settlementId: transfer.settlementId,
       transferId,
       resultCode,
+      resultDescription: result.ResultDesc ?? result.ResultDescription,
+      originatorConversationId: result.OriginatorConversationID ?? result.originatorConversationId,
+      conversationId: result.ConversationID ?? result.conversationId,
     });
     if (resultCode !== '0') {
       const reason = String(result.ResultDesc ?? result.ResultDescription ?? 'M-Pesa account balance query failed');
@@ -58,13 +61,16 @@ class RetailerEscrowBalanceCallbackService {
       return { received: true, accepted: false, reason };
     }
     if (observedBalance < transferAmount) {
-      const reason = `Insufficient escrow balance: available ${observedBalance} KES; CASH amount required ${transferAmount} KES.`;
+      const shortfall = transferAmount - observedBalance;
+      const reason = `Insufficient escrow balance: available ${observedBalance} KES; CASH amount required ${transferAmount} KES. Top up the retailer escrow account by at least ${shortfall} KES, then retry with a new transaction reference.`;
       this.logger.warn('[ESCROW_TRANSFER][BALANCE_CALLBACK][BALANCE_MISMATCH]', {
         settlementId: transfer.settlementId,
         transferId,
         observedBalance,
-        requiredBalance: transferAmount,
+        cashAmount: transferAmount,
+        shortfall,
         mismatch: 'CASH_AMOUNT',
+        action: 'TOP_UP_REQUIRED',
       });
       await failEscrowTransfer(transfer.id, reason, 'BALANCE_MISMATCH', body, observedBalance);
       return { received: true, accepted: false, reason };

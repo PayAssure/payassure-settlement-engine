@@ -658,6 +658,38 @@ test('handlePaymentCallback transitions a settlement into pending processing usi
   assert.equal(response.allocationPlan.paymentDetails.retailer.shortcode ?? response.allocationPlan.paymentDetails.retailer.phoneNumber, '600000');
 });
 
+test('handlePaymentCallback rejects failed customer payments before allocation', async () => {
+  let updatedStatus: any = null;
+  let updatedPayload: any = null;
+  const repository = {
+    findSettlementByReference: async () => ({
+      id: 'settlement-payment-failed',
+      status: 'INITIATED',
+      metadata: { existing: true },
+      amount: 10000,
+      paymentPayload: { suppliers: [{ supplierMerchantId: 'supplier-1', supplierTotalAmount: 10000 }] },
+    }),
+    updateSettlementStatus: async (_id: string, status: string, updates: any) => {
+      updatedStatus = status;
+      updatedPayload = updates;
+    },
+  };
+  const service = new SettlementService(repository as any, mockIdempotencyService, mockRetryService);
+
+  const response = await service.handlePaymentCallback({
+    merchantTransactionReference: 'TXN-PAYMENT-FAILED',
+    status: 'FAILED',
+    provider: 'M-PESA',
+  } as any);
+
+  assert.equal(response.success, false);
+  assert.equal(response.status, 'FAILED');
+  assert.equal(updatedStatus, 'FAILED');
+  assert.equal(updatedPayload.metadata.existing, true);
+  assert.equal(updatedPayload.metadata.paymentCallback.status, 'FAILED');
+  assert.equal(updatedPayload.metadata.allocationPlan, undefined);
+});
+
 test('confirmSettlementPayment records a customer payment confirmation and marks the settlement as pending processing', async () => {
   let updatedStatus: any = null;
   let updatedPayload: any = null;

@@ -1,8 +1,8 @@
 import { Body, Get, Post } from '@nestjs/common';
 import { ApiExcludeEndpoint } from '@nestjs/swagger';
-import { EscrowControllerContextBase } from './controller-context.base';
+import { RetailerFloatControllerBase } from './retailer-float.controller.base';
 
-export abstract class MockSetupControllerBase extends EscrowControllerContextBase {
+export abstract class MockSetupControllerBase extends RetailerFloatControllerBase {
   @ApiExcludeEndpoint()
   @Get('mock/control-panel')
   mockControlPanel() {

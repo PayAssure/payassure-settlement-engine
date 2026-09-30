@@ -46,10 +46,11 @@ class B2BService {
         SecurityCredential: '[generated from initiator password]',
       },
       environment: {
-        shortCode: env.shortcode,
-        partyA,
-        callbackUrl,
         environment: request.credentials?.environment ?? env.environment,
+        partyA,
+        partyB: payload.PartyB,
+        resultUrl: payload.ResultURL,
+        timeoutUrl: payload.QueueTimeOutURL,
         securityCredentialConfigured: !!securityCredential,
       },
     }, null, 2));
