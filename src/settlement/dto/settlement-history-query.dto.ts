@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsISO8601, IsOptional } from 'class-validator';
+import { SettlementStatus } from '@prisma/client';
+import { IsEnum, IsISO8601, IsOptional } from 'class-validator';
 
 export class SettlementHistoryQueryDto {
   @ApiPropertyOptional({
@@ -17,4 +18,13 @@ export class SettlementHistoryQueryDto {
   @IsOptional()
   @IsISO8601()
   to?: string;
+
+  @ApiPropertyOptional({
+    enum: SettlementStatus,
+    example: SettlementStatus.COMPLETED,
+    description: 'Filter by settlement status.',
+  })
+  @IsOptional()
+  @IsEnum(SettlementStatus)
+  status?: SettlementStatus;
 }

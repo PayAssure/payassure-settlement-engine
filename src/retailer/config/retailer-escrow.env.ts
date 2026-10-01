@@ -3,6 +3,7 @@ export interface RetailerEscrowMpesaConfig {
   consumerKey: string;
   consumerSecret: string;
   shortcode: string;
+  passkey: string;
   partyA: string;
   initiatorName: string;
   initiatorPassword: string;
@@ -25,6 +26,7 @@ export function getRetailerEscrowMpesaConfig(): RetailerEscrowMpesaConfig {
     consumerKey: readRequired('CONSUMER_KEY'),
     consumerSecret: readRequired('CONSUMER_SECRET'),
     shortcode,
+    passkey: readRequired('PASSKEY'),
     partyA: process.env[`${prefix}PARTY_A`]?.trim() || shortcode,
     initiatorName: readRequired('INITIATOR_NAME'),
     initiatorPassword: readRequired('INITIATOR_PASSWORD'),
@@ -47,6 +49,11 @@ export function getRetailerEscrowMpesaLogContext(config: RetailerEscrowMpesaConf
       value: config.consumerSecret ? '[REDACTED]' : '[MISSING]',
     },
     shortcode: { variable: 'MPESA_RETAILER_SHORTCODE', value: config.shortcode },
+    passkey: {
+      variable: 'MPESA_RETAILER_PASSKEY',
+      configured: Boolean(config.passkey),
+      value: config.passkey ? '[REDACTED]' : '[MISSING]',
+    },
     partyA: {
       variable: partyAOverride ? 'MPESA_RETAILER_PARTY_A' : 'MPESA_RETAILER_SHORTCODE (fallback)',
       value: config.partyA,

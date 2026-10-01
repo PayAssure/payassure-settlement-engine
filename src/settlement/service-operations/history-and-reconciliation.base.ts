@@ -13,10 +13,23 @@ export abstract class SettlementHistoryAndReconciliationBase extends SettlementT
       throw new BadRequestException({ statusCode: 400, message: '`from` must be earlier than `to`', error: 'INVALID_DATE_RANGE' });
     }
     const integration = await this.repository.findIntegrationByMerchantId(merchantId);
-    if (!integration) {
-      throw new NotFoundException({ statusCode: 404, message: 'Merchant integration not found', error: 'MERCHANT_NOT_FOUND' });
+    const settlements = await this.repository.findSettlementsByMerchantId(merchantId, integration?.id, from, to, filters.status);
+    if (!integration && settlements.length === 0) {
+      throw new NotFoundException({ statusCode: 404, message: 'Merchant integration not found and no supplier settlement matches the merchant ID', error: 'MERCHANT_NOT_FOUND' });
     }
-    const settlements = await this.repository.findSettlementsByIntegrationId(integration.id, from, to);
+    const supplierMerchantIds = [...new Set(
+      settlements.flatMap((settlement: any) => (settlement.transactions ?? [])
+        .map((transaction: any) => transaction.supplierMerchantId)
+        .filter(Boolean)),
+    )];
+    const supplierNames = new Map<string, string>();
+    await Promise.all(supplierMerchantIds.map(async (supplierMerchantId) => {
+      const supplierIntegration = await this.repository.findIntegrationByMerchantId(supplierMerchantId);
+      const supplierName = supplierIntegration?.participant?.businessName;
+      if (supplierName) {
+        supplierNames.set(supplierMerchantId, supplierName);
+      }
+    }));
     return {
       success: true,
       merchantId,
@@ -31,6 +44,10 @@ export abstract class SettlementHistoryAndReconciliationBase extends SettlementT
         amount: Number(settlement.amount),
         currency: settlement.currency,
         settlementMethod: settlement.settlementMethod,
+        matchedPositions: [
+          ...(integration?.id === settlement.integrationId ? ['RETAILER'] : []),
+          ...((settlement.transactions ?? []).some((transaction: any) => transaction.supplierMerchantId === merchantId) ? ['SUPPLIER'] : []),
+        ],
         description: settlement.description,
         createdAt: settlement.createdAt,
         processedAt: settlement.processedAt,
@@ -40,7 +57,7 @@ export abstract class SettlementHistoryAndReconciliationBase extends SettlementT
         transactions: (settlement.transactions ?? []).map((transaction: any) => ({
           transactionId: transaction.id,
           itemId: transaction.itemId,
-          supplierMerchantId: transaction.supplierMerchantId,
+          supplierName: transaction.supplierMerchantId ? supplierNames.get(transaction.supplierMerchantId) ?? null : null,
           type: transaction.type,
           amount: Number(transaction.amount),
           status: transaction.status,

@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsNumber, IsOptional, Min } from 'class-validator';
+import { IsNumber, IsOptional, IsString, Min } from 'class-validator';
 
 export class RetailerEscrowFloatDto {
   @ApiProperty({ example: 1000, description: 'Configured starting daily float in KES' })
@@ -18,4 +18,14 @@ export class RetailerEscrowFloatDto {
   @IsNumber()
   @Min(0)
   expectedRemainingBalance?: number;
+
+  @ApiPropertyOptional({ example: 'TILL-001', description: 'Retailer till identifier.' })
+  @IsOptional()
+  @IsString()
+  tillNumber?: string;
+
+  @ApiPropertyOptional({ example: 'STORE-001', description: 'Retailer store identifier.' })
+  @IsOptional()
+  @IsString()
+  storeNumber?: string;
 }

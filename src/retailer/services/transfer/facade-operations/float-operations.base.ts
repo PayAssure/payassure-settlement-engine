@@ -2,6 +2,10 @@ import { retailerEscrowFloatService } from '../../retailer-escrow-float.service'
 import type { EscrowJsonRecord } from '../../retailer-escrow-transfer.helpers';
 
 export abstract class RetailerFloatOperationsBase {
+  getAuthenticatedRetailerMerchantId(user: { email?: string } | undefined): Promise<string> {
+    return retailerEscrowFloatService.getAuthenticatedRetailerMerchantId(user);
+  }
+
   hasFloatConfig(merchantId: string): Promise<boolean> {
     return retailerEscrowFloatService.hasFloatConfig(merchantId);
   }
@@ -10,7 +14,7 @@ export abstract class RetailerFloatOperationsBase {
     return retailerEscrowFloatService.getFloat(merchantId);
   }
 
-  setFloat(merchantId: string, dailyFloat: number, expectedRemainingBalance?: number): Promise<EscrowJsonRecord> {
-    return retailerEscrowFloatService.setFloat(merchantId, dailyFloat, expectedRemainingBalance);
+  setFloat(merchantId: string, dailyFloat: number, expectedRemainingBalance?: number, tillNumber?: string, storeNumber?: string): Promise<EscrowJsonRecord> {
+    return retailerEscrowFloatService.setFloat(merchantId, dailyFloat, expectedRemainingBalance, tillNumber, storeNumber);
   }
 }

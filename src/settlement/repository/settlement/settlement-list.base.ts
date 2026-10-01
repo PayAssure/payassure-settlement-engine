@@ -1,6 +1,21 @@
 import { SettlementReadBase } from './settlement-read.base';
 
 export abstract class SettlementListBase extends SettlementReadBase {
+  async findSettlementsByMerchantId(merchantId: string, integrationId?: string, from?: Date, to?: Date, status?: string) {
+    return this.prisma.settlement.findMany({
+      where: {
+        OR: [
+          ...(integrationId ? [{ integrationId }] : []),
+          { transactions: { some: { supplierMerchantId: merchantId } } },
+        ],
+        ...(status ? { status: status as any } : {}),
+        ...(from || to ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } } : {}),
+      },
+      include: { transactions: true },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   async findSettlementsByIntegrationId(integrationId: string, from?: Date, to?: Date) {
     return this.prisma.settlement.findMany({
       where: {

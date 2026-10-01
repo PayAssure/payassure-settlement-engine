@@ -1681,25 +1681,15 @@
         ]
       }
     },
-    "/escrow/retailers/{merchantId}/float": {
+    "/escrow/retailer/float": {
       "get": {
         "operationId": "EscrowIntelligenceController_getRetailerFloat",
-        "summary": "Get a retailer escrow float configuration",
-        "description": "Returns the configured daily float and current expected remaining balance. Requires an ADMIN or SUPER_ADMIN bearer token.",
-        "parameters": [
-          {
-            "name": "merchantId",
-            "required": true,
-            "in": "path",
-            "description": "Retailer merchant ID.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
+        "summary": "Get the authenticated retailer escrow float configuration",
+        "description": "The retailer merchant ID is resolved from the authenticated bearer token.",
+        "parameters": [],
         "responses": {
           "200": {
-            "description": "Retailer float configuration",
+            "description": "Daily float and current expected remaining balance",
             "content": {
               "application/json": {
                 "schema": {
@@ -1708,22 +1698,40 @@
               }
             }
           },
-          "403": {
-            "description": "Only administrators can view retailer float configuration"
-          },
-          "404": {
-            "description": "Retailer integration or float configuration was not found"
+          "401": { "description": "Missing or invalid bearer token" },
+          "403": { "description": "Authenticated user is not an active retailer integration owner" },
+          "404": { "description": "Retailer or float configuration not found" }
+        },
+        "tags": ["escrow"],
+        "security": [{ "access-token": [] }]
+      }
+    },
+    "/escrow/retailer/float/deposits": {
+      "post": {
+        "operationId": "EscrowIntelligenceController_depositRetailerFloat",
+        "summary": "Initiate a retailer escrow float deposit",
+        "description": "Starts an STK Push using the authenticated retailer M-Pesa credentials. The expected float balance changes only after a successful callback.",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RetailerFloatDepositDto" }
+            }
           }
         },
-        "tags": [
-          "escrow"
-        ],
-        "security": [
-          {
-            "access-token": []
-          }
-        ]
-      },
+        "responses": {
+          "201": { "description": "Retailer float deposit STK Push submitted" },
+          "400": { "description": "Invalid amount or payer phone number" },
+          "401": { "description": "Missing or invalid bearer token" },
+          "403": { "description": "Authenticated user is not an active retailer integration owner" },
+          "404": { "description": "Retailer or float configuration not found" }
+        },
+        "tags": ["escrow"],
+        "security": [{ "access-token": [] }]
+      }
+    },
+    "/escrow/retailers/{merchantId}/float": {
       "put": {
         "operationId": "EscrowIntelligenceController_setRetailerFloat",
         "summary": "Add or edit a retailer escrow float configuration",
@@ -3132,10 +3140,40 @@
             "minimum": 0,
             "example": 800,
             "description": "Current expected remaining balance. On initial setup this defaults to dailyFloat; specify it to reset the tracked remainder during an edit."
+          },
+          "tillNumber": {
+            "type": "string",
+            "example": "TILL-001",
+            "description": "Retailer till identifier."
+          },
+          "storeNumber": {
+            "type": "string",
+            "example": "STORE-001",
+            "description": "Retailer store identifier."
           }
         },
         "required": [
           "dailyFloat"
+        ]
+      },
+      "RetailerFloatDepositDto": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "minimum": 1,
+            "example": 5000,
+            "description": "Amount to request from the payer in KES."
+          },
+          "payerPhoneNumber": {
+            "type": "string",
+            "example": "254700000000",
+            "description": "Phone number that will receive the M-Pesa STK prompt."
+          }
+        },
+        "required": [
+          "amount",
+          "payerPhoneNumber"
         ]
       },
       "RetailerEscrowFloatResponseDto": {
@@ -3156,6 +3194,14 @@
           "expectedRemainingBalance": {
             "type": "number",
             "example": 800
+          },
+          "tillNumber": {
+            "type": "string",
+            "example": "TILL-001"
+          },
+          "storeNumber": {
+            "type": "string",
+            "example": "STORE-001"
           },
           "updatedAt": {
             "type": "string",

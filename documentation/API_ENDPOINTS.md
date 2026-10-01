@@ -182,6 +182,87 @@ Base path: /escrow
   - Status: 200 OK
   - Body: array of reconciliation records
 
+### 5) GET /escrow/retailer/float
+- Purpose: Return the authenticated retailer's current float configuration and expected remaining balance.
+- Required headers:
+  - Authorization: Bearer <jwt from /auth/login>
+- Path parameters: none. The merchant ID is resolved from the authenticated bearer token.
+- Authorization: the JWT user must be active and belong to a `RETAILER` integration.
+- Success response:
+  - Status: 200 OK
+  - Body:
+    ```json
+    {
+      "merchantId": "pay_retailer_001",
+      "currency": "KES",
+      "dailyFloat": 10000,
+      "expectedRemainingBalance": 8000,
+      "tillNumber": "TILL-001",
+      "storeNumber": "STORE-001",
+      "updatedAt": "2026-09-28T19:30:00.000Z"
+    }
+    ```
+- Error responses:
+  - 401 Unauthorized: missing or invalid bearer token.
+  - 403 Forbidden: authenticated user is not an active retailer integration owner.
+  - 404 Not Found: retailer or float configuration not found.
+
+### 6) POST /escrow/retailer/float/deposits
+- Purpose: Start a retailer-specific M-Pesa STK Push to deposit money into the retailer escrow float.
+- Required headers:
+  - Authorization: Bearer <jwt from /auth/login>
+- Authorization: the JWT user must belong to an active retailer integration. The merchant ID is resolved from the token.
+- Path parameters: none.
+- Request body:
+  ```json
+  {
+    "amount": 5000,
+    "payerPhoneNumber": "254700000000"
+  }
+  ```
+- The request uses `MPESA_RETAILER_CONSUMER_KEY`, `MPESA_RETAILER_CONSUMER_SECRET`, `MPESA_RETAILER_SHORTCODE`, and `MPESA_RETAILER_PASSKEY`. It does not use the shared customer STK credentials.
+- Success response:
+  - Status: 201 Created
+  - Body includes `depositId`, `merchantId`, `amount`, `status`, `merchantRequestId`, `checkoutRequestId`, and the gateway response fields.
+- Balance behavior:
+  - The float's `expectedRemainingBalance` is unchanged when the request is created or accepted by Safaricom.
+  - It is incremented only after a successful callback at `POST /payments/callbacks/mpesa/retailer-float-deposit/:depositId`.
+  - Failed, mismatched, timed-out, and duplicate callbacks do not increment it.
+- Error responses:
+  - 400 Bad Request: invalid amount or payer phone number.
+  - 401 Unauthorized: missing or invalid bearer token.
+  - 403 Forbidden: authenticated user is not an active retailer integration owner.
+  - 404 Not Found: retailer integration or float configuration not found.
+
+### 7) POST /payments/callbacks/mpesa/retailer-float-deposit/:depositId
+- Purpose: Receive the Safaricom STK Push result for a retailer float deposit.
+- Required headers: none; this callback is called by Safaricom.
+- Path parameters:
+  - `depositId`: deposit ID returned by the float deposit initiation endpoint.
+- Request body: Safaricom STK callback payload. The service accepts the standard `Body.stkCallback` format and the nested `Result` format used by other M-Pesa callbacks.
+- Processing behavior:
+  - `ResultCode === 0`: mark the deposit `SUCCEEDED` and increment the retailer's `expectedRemainingBalance` by the confirmed amount.
+  - Non-zero result code: mark the deposit `FAILED` and leave the balance unchanged.
+  - Amount mismatch: mark the deposit `FAILED` and leave the balance unchanged.
+  - Replayed callback: return a duplicate acknowledgment without incrementing the balance again.
+- Success acknowledgment:
+  - Status: 200 OK, including when internal processing records a failure. This prevents unnecessary Safaricom callback redelivery.
+  - Body:
+    ```json
+    {
+      "Result": {
+        "ResultCode": 0,
+        "ResultDesc": "Retailer float deposit callback received"
+      },
+      "processing": {
+        "received": true,
+        "status": "SUCCEEDED",
+        "receiptNumber": "ABC123XYZ"
+      }
+    }
+    ```
+- This callback is isolated from the normal settlement payment callback and never triggers settlement splitting.
+
 ## Onboarding endpoints
 
 Base path: /onbordings
@@ -469,6 +550,74 @@ Base path: /settlement
   - 401 Unauthorized: invalid token/session
   - 409 Conflict: duplicate settlement reference
   - 500 Internal Server Error
+
+### Settlement history by merchant
+- Endpoint: `GET /settlement/merchant/:merchantId`
+- Purpose: Return settlement history where the merchant ID was used as the retailer or as a supplier.
+- Required headers:
+  - Authorization: Bearer <jwt>
+- Path parameters:
+  - `merchantId`: retailer integration merchant ID or supplier merchant ID stored on a settlement transaction.
+- Query parameters:
+  - `status`: optional settlement status: `INITIATED`, `PENDING_PROCESSING`, `PROCESSING`, `PROCESSING_COMPLETE`, `AWAITING_RECONCILIATION`, `COMPLETED`, `PROCESSING_FAILED`, or `FAILED`.
+  - `from`: optional inclusive `createdAt` ISO 8601 timestamp.
+  - `to`: optional exclusive `createdAt` ISO 8601 timestamp.
+- Matching behavior:
+  - Retailer match: the merchant ID resolves to the settlement's retailer integration.
+  - Supplier match: the merchant ID matches `Transaction.supplierMerchantId` for at least one transaction in the settlement.
+  - A settlement may report both positions in `matchedPositions`.
+  - Transaction results expose `supplierName` from the supplier onboarding record instead of the internal supplier merchant ID.
+- Example request:
+  ```http
+  GET /settlement/merchant/pay_supplier_001?status=COMPLETED&from=2026-09-01T00:00:00.000Z&to=2026-10-01T00:00:00.000Z
+  Authorization: Bearer <jwt>
+  ```
+- Success response:
+  - Status: 200 OK
+  - Body:
+    ```json
+    {
+      "success": true,
+      "merchantId": "pay_supplier_001",
+      "from": "2026-09-01T00:00:00.000Z",
+      "to": "2026-10-01T00:00:00.000Z",
+      "count": 1,
+      "data": [
+        {
+          "settlementId": "settlement_123",
+          "reference": "PASTL-20260916-001",
+          "merchantTransactionReference": "TXN-20260916-000001",
+          "status": "COMPLETED",
+          "amount": 16500,
+          "currency": "KES",
+          "settlementMethod": "BANK_TRANSFER",
+          "matchedPositions": ["SUPPLIER"],
+          "createdAt": "2026-09-16T08:28:12.520Z",
+          "processedAt": "2026-09-16T08:30:00.000Z",
+          "completedAt": "2026-09-16T08:31:00.000Z",
+          "reconciliationStatus": "RECONCILED",
+          "bankReference": "BANK-001",
+          "transactions": [
+            {
+              "transactionId": "transaction_456",
+              "itemId": "ITEM-CEMENT-001",
+              "supplierName": "Acme Supplies Ltd",
+              "type": "SUPPLIER",
+              "amount": 15000,
+              "status": "COMPLETED",
+              "description": "Cement supply",
+              "createdAt": "2026-09-16T08:28:12.520Z",
+              "completedAt": "2026-09-16T08:31:00.000Z"
+            }
+          ]
+        }
+      ]
+    }
+    ```
+- Error responses:
+  - 400 Bad Request: invalid status, invalid ISO 8601 date, or `from` is not earlier than `to`.
+  - 401 Unauthorized: missing or invalid JWT.
+  - 404 Not Found: merchant integration not found and no supplier settlement matches the merchant ID.
 
 ### 3) POST /settlement/payment-callback
 - Purpose: Receive a payment provider callback.

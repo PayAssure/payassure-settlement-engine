@@ -11,6 +11,7 @@ test('retailer escrow credentials use fixed MPESA_RETAILER environment names', (
     'MPESA_RETAILER_CONSUMER_KEY',
     'MPESA_RETAILER_CONSUMER_SECRET',
     'MPESA_RETAILER_SHORTCODE',
+    'MPESA_RETAILER_PASSKEY',
     'MPESA_RETAILER_PARTY_A',
     'MPESA_RETAILER_INITIATOR_NAME',
     'MPESA_RETAILER_INITIATOR_PASSWORD',
@@ -25,6 +26,7 @@ test('retailer escrow credentials use fixed MPESA_RETAILER environment names', (
     process.env.MPESA_RETAILER_CONSUMER_KEY = 'retailer-key';
     process.env.MPESA_RETAILER_CONSUMER_SECRET = 'retailer-secret';
     process.env.MPESA_RETAILER_SHORTCODE = '600001';
+    process.env.MPESA_RETAILER_PASSKEY = 'retailer-passkey';
     delete process.env.MPESA_RETAILER_PARTY_A;
     process.env.MPESA_RETAILER_INITIATOR_NAME = 'retailer-initiator';
     process.env.MPESA_RETAILER_INITIATOR_PASSWORD = 'retailer-password';
@@ -53,12 +55,14 @@ test('retailer escrow credentials use fixed MPESA_RETAILER environment names', (
 
 test('retailer escrow balance query uses MPESA_RETAILER_* credentials and dedicated callback URL', async () => {
   const previousRetailerCallback = process.env.MPESA_RETAILER_CALLBACK_URL;
+  const previousRetailerPasskey = process.env.MPESA_RETAILER_PASSKEY;
   const previousRetailerInitiator = process.env.MPESA_RETAILER_INITIATOR_NAME;
   const previousRetailerPassword = process.env.MPESA_RETAILER_INITIATOR_PASSWORD;
   const previousMakeRequest = (require('../../payment/services/mpesa.service').mpesaService as any).makeRequest;
 
   try {
     process.env.MPESA_RETAILER_CALLBACK_URL = 'https://example.test/retailer';
+    process.env.MPESA_RETAILER_PASSKEY = 'retailer-passkey';
     process.env.MPESA_RETAILER_INITIATOR_NAME = 'retailer-initiator';
     process.env.MPESA_RETAILER_INITIATOR_PASSWORD = 'retailer-password';
 
@@ -88,6 +92,7 @@ test('retailer escrow balance query uses MPESA_RETAILER_* credentials and dedica
   } finally {
     (require('../../payment/services/mpesa.service').mpesaService as any).makeRequest = previousMakeRequest;
     if (previousRetailerCallback === undefined) delete process.env.MPESA_RETAILER_CALLBACK_URL; else process.env.MPESA_RETAILER_CALLBACK_URL = previousRetailerCallback;
+    if (previousRetailerPasskey === undefined) delete process.env.MPESA_RETAILER_PASSKEY; else process.env.MPESA_RETAILER_PASSKEY = previousRetailerPasskey;
     if (previousRetailerInitiator === undefined) delete process.env.MPESA_RETAILER_INITIATOR_NAME; else process.env.MPESA_RETAILER_INITIATOR_NAME = previousRetailerInitiator;
     if (previousRetailerPassword === undefined) delete process.env.MPESA_RETAILER_INITIATOR_PASSWORD; else process.env.MPESA_RETAILER_INITIATOR_PASSWORD = previousRetailerPassword;
   }

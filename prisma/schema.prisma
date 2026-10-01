@@ -282,12 +282,41 @@ model RetailerEscrowFloat {
   currency                 String                   @default("KES")
   dailyFloat               Decimal                  @db.Decimal(18, 2)
   expectedRemainingBalance Decimal                  @db.Decimal(18, 2)
+  tillNumber               String?
+  storeNumber              String?
   activeTransferId         String?
   transfers                RetailerEscrowTransfer[] @relation("RetailerEscrowFloatTransfers")
+  deposits                 RetailerEscrowFloatDeposit[] @relation("RetailerEscrowFloatDeposits")
   createdAt                DateTime                 @default(now())
   updatedAt                DateTime                 @updatedAt
 
   @@map("retailer_escrow_floats")
+}
+
+model RetailerEscrowFloatDeposit {
+  id                    String             @id @default(cuid())
+  retailerMerchantId    String
+  retailerEscrowFloatId String
+  retailerEscrowFloat   RetailerEscrowFloat @relation("RetailerEscrowFloatDeposits", fields: [retailerEscrowFloatId], references: [id], onDelete: Restrict)
+  amount                Decimal            @db.Decimal(18, 2)
+  payerPhone            String
+  status                String             @default("PENDING")
+  callbackToken         String             @unique
+  merchantRequestId     String?
+  checkoutRequestId     String?            @unique
+  receiptNumber         String?
+  resultCode            Int?
+  resultDescription     String?
+  requestBody           Json?
+  callbackBody          Json?
+  failureReason         String?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  completedAt           DateTime?
+
+  @@index([retailerMerchantId, status])
+  @@index([retailerEscrowFloatId, status])
+  @@map("retailer_escrow_float_deposits")
 }
 
 model RetailerEscrowTransfer {
