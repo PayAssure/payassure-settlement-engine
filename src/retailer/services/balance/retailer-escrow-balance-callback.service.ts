@@ -94,7 +94,7 @@ class RetailerEscrowBalanceCallbackService {
       settlementId: transfer.settlementId,
       transferId,
       observedBalance,
-      expectedRemainingBalance: requiredBalance,
+      ledgerBalanceAtInitiation: requiredBalance,
       cashAmount: transferAmount,
     });
 

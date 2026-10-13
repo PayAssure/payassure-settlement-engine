@@ -1,5 +1,5 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
-import { ParticipantType, Prisma } from '@prisma/client';
+import { ConflictException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ParticipantStatus, ParticipantType, Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { prisma } from '../../../common/database/prisma';
 import { resolveMpesaCallbackUrl } from '../../../payment/config/mpesa.env';
@@ -23,6 +23,9 @@ class RetailerFloatDepositService extends MpesaStkOperationsBase {
     if (!integration || integration.participant.participantType !== ParticipantType.RETAILER) {
       throw new NotFoundException(`Retailer integration ${merchantId} was not found`);
     }
+    if (!integration.isActive || integration.participant.status !== ParticipantStatus.ACTIVE) {
+      throw new ForbiddenException('An active retailer integration is required to initiate a float deposit');
+    }
 
     const float = await prisma.retailerEscrowFloat.findUnique({ where: { merchantId } });
     if (!float) {
@@ -43,7 +46,8 @@ class RetailerFloatDepositService extends MpesaStkOperationsBase {
     });
 
     const timestamp = this.generateTimestamp();
-    const callbackUrl = resolveMpesaCallbackUrl(config.callbackUrl, `/retailer-float-deposit/${deposit.id}`);
+    const callbackUrl = new URL(resolveMpesaCallbackUrl(config.callbackUrl, `/retailer-float-deposit/${deposit.id}`));
+    callbackUrl.searchParams.set('token', callbackToken);
     const payload = {
       BusinessShortCode: config.shortcode,
       Password: this.buildPassword(config.shortcode, config.passkey, timestamp),
@@ -53,7 +57,7 @@ class RetailerFloatDepositService extends MpesaStkOperationsBase {
       PartyA: deposit.payerPhone,
       PartyB: config.shortcode,
       PhoneNumber: deposit.payerPhone,
-      CallBackURL: callbackUrl,
+      CallBackURL: callbackUrl.toString(),
       AccountReference: `FLOAT-${deposit.id}`,
       TransactionDesc: `Retailer escrow float deposit ${deposit.id}`,
     };
@@ -97,10 +101,25 @@ class RetailerFloatDepositService extends MpesaStkOperationsBase {
     }
   }
 
-  async handleCallback(depositId: string, body: Record<string, unknown>) {
+  async handleCallback(depositId: string, body: Record<string, unknown>, callbackToken?: string) {
     const callback = parseStkCallback(body);
-    const deposit = await prisma.retailerEscrowFloatDeposit.findUnique({ where: { id: depositId } });
+    const deposit = await prisma.retailerEscrowFloatDeposit.findUnique({
+      where: { id: depositId },
+      include: { retailerEscrowFloat: { select: { merchantId: true } } },
+    });
     if (!deposit) throw new NotFoundException(`Float deposit ${depositId} was not found`);
+    if (!callbackToken || callbackToken !== deposit.callbackToken) {
+      throw new UnauthorizedException('Invalid float deposit callback token');
+    }
+    if (!deposit.retailerEscrowFloat || deposit.retailerMerchantId !== deposit.retailerEscrowFloat.merchantId) {
+      throw new ConflictException('Float deposit retailer does not match the owner of the linked escrow float');
+    }
+    if (deposit.checkoutRequestId && callback.checkoutRequestId !== deposit.checkoutRequestId) {
+      throw new UnauthorizedException('Float deposit callback does not match its M-Pesa STK request');
+    }
+    if (deposit.merchantRequestId && callback.merchantRequestId !== deposit.merchantRequestId) {
+      throw new UnauthorizedException('Float deposit callback does not match its M-Pesa merchant request');
+    }
     if (deposit.status === 'SUCCEEDED' || deposit.status === 'FAILED') {
       return { received: true, duplicate: true, status: deposit.status };
     }
@@ -119,8 +138,9 @@ class RetailerFloatDepositService extends MpesaStkOperationsBase {
       });
       return { received: true, status: 'FAILED', reason: callback.resultDesc ?? 'M-Pesa float deposit failed' };
     }
-    if (callbackAmount !== null && callbackAmount !== Number(deposit.amount)) {
-      const reason = `Float deposit amount mismatch: expected ${deposit.amount} KES, received ${callbackAmount} KES`;
+    if (callbackAmount === null || callbackAmount !== Number(deposit.amount)) {
+      const receivedAmount = callbackAmount === null ? 'missing' : `${callbackAmount} KES`;
+      const reason = `Float deposit amount mismatch: expected ${deposit.amount} KES, received ${receivedAmount}`;
       await prisma.retailerEscrowFloatDeposit.update({ where: { id: deposit.id }, data: { status: 'FAILED', failureReason: reason, callbackBody: body as Prisma.InputJsonValue } });
       return { received: true, status: 'FAILED', reason };
     }
@@ -141,10 +161,6 @@ class RetailerFloatDepositService extends MpesaStkOperationsBase {
         const current = await transaction.retailerEscrowFloatDeposit.findUniqueOrThrow({ where: { id: deposit.id }, select: { status: true } });
         return { received: true, duplicate: true, status: current.status };
       }
-      await transaction.retailerEscrowFloat.update({
-        where: { id: deposit.retailerEscrowFloatId },
-        data: { expectedRemainingBalance: { increment: deposit.amount } },
-      });
       return { received: true, status: 'SUCCEEDED', receiptNumber: callback.receipt };
     });
   }

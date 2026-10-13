@@ -281,7 +281,6 @@ model RetailerEscrowFloat {
   merchantId               String                   @unique
   currency                 String                   @default("KES")
   dailyFloat               Decimal                  @db.Decimal(18, 2)
-  expectedRemainingBalance Decimal                  @db.Decimal(18, 2)
   tillNumber               String?
   storeNumber              String?
   activeTransferId         String?
@@ -319,6 +318,23 @@ model RetailerEscrowFloatDeposit {
   @@map("retailer_escrow_float_deposits")
 }
 
+model RetailerEscrowReconciliation {
+  id               String   @id @default(cuid())
+  status           String   @default("PENDING")
+  expectedBalance  Decimal  @db.Decimal(18, 2)
+  observedBalance  Decimal? @db.Decimal(18, 2)
+  difference       Decimal? @db.Decimal(18, 2)
+  originatorConversationId String? @unique
+  conversationId   String?
+  callbackBody     Json?
+  failureReason    String?
+  createdAt        DateTime @default(now())
+  completedAt      DateTime?
+
+  @@index([status, createdAt])
+  @@map("retailer_escrow_reconciliations")
+}
+
 model RetailerEscrowTransfer {
   id                              String             @id @default(cuid())
   settlementId                    String
@@ -345,6 +361,7 @@ model RetailerEscrowTransfer {
 
   @@unique([settlementId])
   @@index([retailerMerchantId, status])
+  @@index([retailerEscrowFloatId, status])
   @@map("retailer_escrow_transfers")
 }
 

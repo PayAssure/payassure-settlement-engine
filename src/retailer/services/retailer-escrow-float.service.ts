@@ -32,31 +32,44 @@ class RetailerEscrowFloatService {
   async getFloat(merchantId: string): Promise<EscrowJsonRecord> {
     const config = await prisma.retailerEscrowFloat.findUnique({ where: { merchantId } });
     if (!config) throw new NotFoundException(`Escrow float is not configured for retailer ${merchantId}`);
+    const availableBalance = await this.getAvailableBalance(config.id);
     return {
       merchantId: config.merchantId,
       currency: config.currency,
       dailyFloat: Number(config.dailyFloat),
-      expectedRemainingBalance: Number(config.expectedRemainingBalance),
+      availableBalance,
       tillNumber: config.tillNumber,
       storeNumber: config.storeNumber,
       updatedAt: config.updatedAt,
     };
   }
 
+  async getAvailableBalance(
+    floatId: string,
+    client: Prisma.TransactionClient = prisma,
+  ): Promise<number> {
+    const [deposits, transfers] = await Promise.all([
+      client.retailerEscrowFloatDeposit.aggregate({
+        where: { retailerEscrowFloatId: floatId, status: 'SUCCEEDED' },
+        _sum: { amount: true },
+      }),
+      client.retailerEscrowTransfer.aggregate({
+        where: { retailerEscrowFloatId: floatId, status: 'SUCCEEDED' },
+        _sum: { amount: true },
+      }),
+    ]);
+    return Number(deposits._sum.amount ?? 0) - Number(transfers._sum.amount ?? 0);
+  }
+
   async setFloat(
     merchantId: string,
     dailyFloat: number,
-    expectedRemainingBalance?: number,
     tillNumber?: string,
     storeNumber?: string,
   ): Promise<EscrowJsonRecord> {
     if (!Number.isFinite(dailyFloat) || dailyFloat < 0) {
       throw new Error('dailyFloat must be a non-negative number');
     }
-    if (expectedRemainingBalance !== undefined && (!Number.isFinite(expectedRemainingBalance) || expectedRemainingBalance < 0)) {
-      throw new Error('expectedRemainingBalance must be a non-negative number');
-    }
-
     const integration = await prisma.integration.findUnique({
       where: { merchantId },
       include: { participant: true },
@@ -74,9 +87,6 @@ class RetailerEscrowFloatService {
           dailyFloat: new Prisma.Decimal(dailyFloat),
           ...(tillNumber === undefined ? {} : { tillNumber: tillNumber.trim() || null }),
           ...(storeNumber === undefined ? {} : { storeNumber: storeNumber.trim() || null }),
-          ...(expectedRemainingBalance === undefined
-            ? {}
-            : { expectedRemainingBalance: new Prisma.Decimal(expectedRemainingBalance) }),
         },
       });
       if (updated.count !== 1) {
@@ -88,18 +98,18 @@ class RetailerEscrowFloatService {
         data: {
           merchantId,
           dailyFloat: new Prisma.Decimal(dailyFloat),
-          expectedRemainingBalance: new Prisma.Decimal(expectedRemainingBalance ?? dailyFloat),
           tillNumber: tillNumber?.trim() || null,
           storeNumber: storeNumber?.trim() || null,
         },
       });
     }
 
+    const availableBalance = await this.getAvailableBalance(config.id);
     return {
       merchantId: config.merchantId,
       currency: config.currency,
       dailyFloat: Number(config.dailyFloat),
-      expectedRemainingBalance: Number(config.expectedRemainingBalance),
+      availableBalance,
       tillNumber: config.tillNumber,
       storeNumber: config.storeNumber,
       updatedAt: config.updatedAt,

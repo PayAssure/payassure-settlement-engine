@@ -1735,7 +1735,7 @@
       "put": {
         "operationId": "EscrowIntelligenceController_setRetailerFloat",
         "summary": "Add or edit a retailer escrow float configuration",
-        "description": "Requires an ADMIN or SUPER_ADMIN bearer token. On initial setup, expectedRemainingBalance defaults to dailyFloat. Editing dailyFloat preserves the current remainder unless expectedRemainingBalance is explicitly provided.",
+        "description": "Requires an ADMIN or SUPER_ADMIN bearer token. Configures daily float metadata and location. Available balance is derived only from successful deposit and settlement callbacks and cannot be set through this endpoint.",
         "parameters": [
           {
             "name": "merchantId",
@@ -3135,12 +3135,6 @@
             "example": 1000,
             "description": "Configured starting daily float in KES."
           },
-          "expectedRemainingBalance": {
-            "type": "number",
-            "minimum": 0,
-            "example": 800,
-            "description": "Current expected remaining balance. On initial setup this defaults to dailyFloat; specify it to reset the tracked remainder during an edit."
-          },
           "tillNumber": {
             "type": "string",
             "example": "TILL-001",
@@ -3191,9 +3185,10 @@
             "type": "number",
             "example": 1000
           },
-          "expectedRemainingBalance": {
+          "availableBalance": {
             "type": "number",
-            "example": 800
+            "example": 800,
+            "description": "Successful retailer deposit total minus successful settlement transfer total."
           },
           "tillNumber": {
             "type": "string",
@@ -3212,7 +3207,7 @@
           "merchantId",
           "currency",
           "dailyFloat",
-          "expectedRemainingBalance",
+          "availableBalance",
           "updatedAt"
         ]
       }

@@ -17,7 +17,7 @@ class RetailerEscrowBalanceService {
   async queryBalance(
     resultRoute = '/account-balance',
     timeoutRoute = '/account-balance',
-    context: { settlementId?: string; transferId?: string; retailerMerchantId?: string } = {},
+    context: { settlementId?: string; transferId?: string; retailerMerchantId?: string; reconciliationId?: string } = {},
   ): Promise<Record<string, unknown>> {
     const retailer = getRetailerEscrowMpesaConfig();
     const shortcode = retailer.shortcode || '174379';

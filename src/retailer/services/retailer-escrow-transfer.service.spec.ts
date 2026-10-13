@@ -3,6 +3,9 @@ import * as assert from 'node:assert/strict';
 import { prisma } from '../../common/database/prisma';
 import { getRetailerEscrowMpesaConfig, getRetailerEscrowMpesaLogContext } from '../config/retailer-escrow.env';
 import { retailerEscrowB2bService } from './transfer/retailer-escrow-b2b.service';
+import { retailerEscrowPayoutFlowService } from './transfer/retailer-escrow-payout-flow.service';
+import { retailerEscrowBalanceQueryService } from './balance/retailer-escrow-balance-query.service';
+import { retailerEscrowFloatService } from './retailer-escrow-float.service';
 import { retailerEscrowTransferService } from './transfer/retailer-escrow-transfer.service';
 
 test('retailer escrow credentials use fixed MPESA_RETAILER environment names', () => {
@@ -55,6 +58,10 @@ test('retailer escrow credentials use fixed MPESA_RETAILER environment names', (
 
 test('retailer escrow balance query uses MPESA_RETAILER_* credentials and dedicated callback URL', async () => {
   const previousRetailerCallback = process.env.MPESA_RETAILER_CALLBACK_URL;
+  const previousRetailerShortcode = process.env.MPESA_RETAILER_SHORTCODE;
+  const previousRetailerPartyA = process.env.MPESA_RETAILER_PARTY_A;
+  const previousRetailerConsumerKey = process.env.MPESA_RETAILER_CONSUMER_KEY;
+  const previousRetailerConsumerSecret = process.env.MPESA_RETAILER_CONSUMER_SECRET;
   const previousRetailerPasskey = process.env.MPESA_RETAILER_PASSKEY;
   const previousRetailerInitiator = process.env.MPESA_RETAILER_INITIATOR_NAME;
   const previousRetailerPassword = process.env.MPESA_RETAILER_INITIATOR_PASSWORD;
@@ -62,6 +69,10 @@ test('retailer escrow balance query uses MPESA_RETAILER_* credentials and dedica
 
   try {
     process.env.MPESA_RETAILER_CALLBACK_URL = 'https://example.test/retailer';
+    process.env.MPESA_RETAILER_SHORTCODE = '600997';
+    process.env.MPESA_RETAILER_PARTY_A = '600997';
+    process.env.MPESA_RETAILER_CONSUMER_KEY = 'wOvA4RkFd83LcSfGGwGKK1KzGSNcRJjAYZmrwJgg3Gy9ASsA';
+    process.env.MPESA_RETAILER_CONSUMER_SECRET = 'test-retailer-consumer-secret';
     process.env.MPESA_RETAILER_PASSKEY = 'retailer-passkey';
     process.env.MPESA_RETAILER_INITIATOR_NAME = 'retailer-initiator';
     process.env.MPESA_RETAILER_INITIATOR_PASSWORD = 'retailer-password';
@@ -92,13 +103,89 @@ test('retailer escrow balance query uses MPESA_RETAILER_* credentials and dedica
   } finally {
     (require('../../payment/services/mpesa.service').mpesaService as any).makeRequest = previousMakeRequest;
     if (previousRetailerCallback === undefined) delete process.env.MPESA_RETAILER_CALLBACK_URL; else process.env.MPESA_RETAILER_CALLBACK_URL = previousRetailerCallback;
+    if (previousRetailerShortcode === undefined) delete process.env.MPESA_RETAILER_SHORTCODE; else process.env.MPESA_RETAILER_SHORTCODE = previousRetailerShortcode;
+    if (previousRetailerPartyA === undefined) delete process.env.MPESA_RETAILER_PARTY_A; else process.env.MPESA_RETAILER_PARTY_A = previousRetailerPartyA;
+    if (previousRetailerConsumerKey === undefined) delete process.env.MPESA_RETAILER_CONSUMER_KEY; else process.env.MPESA_RETAILER_CONSUMER_KEY = previousRetailerConsumerKey;
+    if (previousRetailerConsumerSecret === undefined) delete process.env.MPESA_RETAILER_CONSUMER_SECRET; else process.env.MPESA_RETAILER_CONSUMER_SECRET = previousRetailerConsumerSecret;
     if (previousRetailerPasskey === undefined) delete process.env.MPESA_RETAILER_PASSKEY; else process.env.MPESA_RETAILER_PASSKEY = previousRetailerPasskey;
     if (previousRetailerInitiator === undefined) delete process.env.MPESA_RETAILER_INITIATOR_NAME; else process.env.MPESA_RETAILER_INITIATOR_NAME = previousRetailerInitiator;
     if (previousRetailerPassword === undefined) delete process.env.MPESA_RETAILER_INITIATOR_PASSWORD; else process.env.MPESA_RETAILER_INITIATOR_PASSWORD = previousRetailerPassword;
   }
 });
 
-test('retailer escrow checks current remainder and decrements it only after confirmed B2B transfer', async () => {
+test('retailer escrow initiation trusts the tracked remainder and reports the exact shortfall', async () => {
+  const originalTransaction = (prisma as any).$transaction;
+  const floatModel = (prisma as any).retailerEscrowFloat;
+  const transferModel = (prisma as any).retailerEscrowTransfer;
+  const settlementModel = (prisma as any).settlement;
+  const original = {
+    floatFindUnique: floatModel.findUnique,
+    floatUpdateMany: floatModel.updateMany,
+    transferCreate: transferModel.create,
+    settlementFindUnique: settlementModel.findUnique,
+    settlementUpdate: settlementModel.update,
+    dispatch: retailerEscrowPayoutFlowService.dispatchB2bTransfer,
+    getAvailableBalance: retailerEscrowFloatService.getAvailableBalance,
+  };
+  const float = { id: 'float-ledger-test', activeTransferId: null };
+  let locked = false;
+  let createdTransfer: any;
+
+  try {
+    floatModel.findUnique = async () => float;
+    floatModel.updateMany = async ({ where }: any) => {
+      assert.equal(where.activeTransferId, null);
+      assert.equal('expectedRemainingBalance' in where, false);
+      locked = true;
+      return { count: 1 };
+    };
+    transferModel.create = async ({ data }: any) => { createdTransfer = data; return { id: data.id, ...data }; };
+    settlementModel.findUnique = async () => ({ metadata: {} });
+    settlementModel.update = async () => ({});
+    retailerEscrowFloatService.getAvailableBalance = async (floatId: string) => {
+      assert.equal(floatId, 'float-ledger-test');
+      assert.equal(locked, true, 'the ledger is read only after the retailer lock is acquired');
+      return 10000;
+    };
+    (prisma as any).$transaction = async (callback: (tx: any) => Promise<unknown>) => callback(prisma);
+    retailerEscrowPayoutFlowService.dispatchB2bTransfer = async (transferId: string) => {
+      return { accepted: true, status: 'TRANSFER_PENDING', transferId };
+    };
+
+    const started = await retailerEscrowBalanceQueryService.startForSettlement({
+      settlementId: 'settlement-ledger-test',
+      merchantTransactionReference: 'TXN-LEDGER-TEST',
+      retailerMerchantId: 'retailer-ledger-test',
+      cashAmount: 2000,
+      mpesaAmount: 0,
+    });
+    assert.equal(started.status, 'TRANSFER_PENDING');
+    assert.equal(locked, true);
+    assert.equal(Number(createdTransfer.requiredBalance), 10000);
+
+    await assert.rejects(
+      () => retailerEscrowBalanceQueryService.startForSettlement({
+        settlementId: 'settlement-short-test',
+        merchantTransactionReference: 'TXN-SHORT-TEST',
+        retailerMerchantId: 'retailer-ledger-test',
+        cashAmount: 11000,
+        mpesaAmount: 0,
+      }),
+      (error: any) => error.response?.message.includes('shortfall 1000 KES'),
+    );
+  } finally {
+    (prisma as any).$transaction = originalTransaction;
+    floatModel.findUnique = original.floatFindUnique;
+    floatModel.updateMany = original.floatUpdateMany;
+    transferModel.create = original.transferCreate;
+    settlementModel.findUnique = original.settlementFindUnique;
+    settlementModel.update = original.settlementUpdate;
+    retailerEscrowPayoutFlowService.dispatchB2bTransfer = original.dispatch;
+    retailerEscrowFloatService.getAvailableBalance = original.getAvailableBalance;
+  }
+});
+
+test('retailer escrow clears the transfer lock only after confirmed B2B callback', async () => {
   const originalTransaction = (prisma as any).$transaction;
   const transferModel = (prisma as any).retailerEscrowTransfer;
   const floatModel = (prisma as any).retailerEscrowFloat;
@@ -132,7 +219,7 @@ test('retailer escrow checks current remainder and decrements it only after conf
     status: 'BALANCE_PENDING',
     observedBalance: null,
   };
-  const float = { id: 'float-test-1', expectedRemainingBalance: 800 };
+  const float = { id: 'float-test-1', activeTransferId: 'transfer-test-1' };
   const settlement = {
     id: 'settlement-test-1',
     merchantTransactionReference: 'TXN-ESCROW-TEST',
@@ -179,14 +266,14 @@ test('retailer escrow checks current remainder and decrements it only after conf
 
     assert.equal(balanceResult.status, 'TRANSFER_PENDING');
     assert.equal(b2bAmount, 200);
-    assert.equal(Number(float.expectedRemainingBalance), 800, 'remainder must not change when the transfer is only accepted');
+    assert.equal(float.activeTransferId, 'transfer-test-1', 'the lock remains while transfer success is unconfirmed');
 
     const transferResult = await retailerEscrowTransferService.handleTransferCallback('transfer-test-1', {
       Result: { ResultCode: 0, ResultDesc: 'Transfer completed' },
     });
 
     assert.equal(transferResult.status, 'SUCCEEDED');
-    assert.equal(Number(float.expectedRemainingBalance), 600);
+    assert.equal(float.activeTransferId, null);
   } finally {
     (prisma as any).$transaction = originalTransaction;
     Object.assign(transferModel, originalTransferMethods);

@@ -183,7 +183,7 @@ Base path: /escrow
   - Body: array of reconciliation records
 
 ### 5) GET /escrow/retailer/float
-- Purpose: Return the authenticated retailer's current float configuration and expected remaining balance.
+- Purpose: Return the authenticated retailer's current float configuration and callback-derived available balance.
 - Required headers:
   - Authorization: Bearer <jwt from /auth/login>
 - Path parameters: none. The merchant ID is resolved from the authenticated bearer token.
@@ -196,7 +196,7 @@ Base path: /escrow
       "merchantId": "pay_retailer_001",
       "currency": "KES",
       "dailyFloat": 10000,
-      "expectedRemainingBalance": 8000,
+      "availableBalance": 8000,
       "tillNumber": "TILL-001",
       "storeNumber": "STORE-001",
       "updatedAt": "2026-09-28T19:30:00.000Z"
@@ -225,9 +225,10 @@ Base path: /escrow
   - Status: 201 Created
   - Body includes `depositId`, `merchantId`, `amount`, `status`, `merchantRequestId`, `checkoutRequestId`, and the gateway response fields.
 - Balance behavior:
-  - The float's `expectedRemainingBalance` is unchanged when the request is created or accepted by Safaricom.
-  - It is incremented only after a successful callback at `POST /payments/callbacks/mpesa/retailer-float-deposit/:depositId`.
-  - Failed, mismatched, timed-out, and duplicate callbacks do not increment it.
+  - Available balance is the sum of `SUCCEEDED` deposit records minus `SUCCEEDED` settlement transfer records.
+  - A deposit counts only after its STK callback succeeds and confirms the exact requested amount.
+  - Settlement funds are deducted only when the escrow B2B callback marks the transfer `SUCCEEDED`.
+  - Failed, mismatched, timed-out, and duplicate callbacks do not change the derived balance.
 - Error responses:
   - 400 Bad Request: invalid amount or payer phone number.
   - 401 Unauthorized: missing or invalid bearer token.
@@ -241,10 +242,10 @@ Base path: /escrow
   - `depositId`: deposit ID returned by the float deposit initiation endpoint.
 - Request body: Safaricom STK callback payload. The service accepts the standard `Body.stkCallback` format and the nested `Result` format used by other M-Pesa callbacks.
 - Processing behavior:
-  - `ResultCode === 0`: mark the deposit `SUCCEEDED` and increment the retailer's `expectedRemainingBalance` by the confirmed amount.
-  - Non-zero result code: mark the deposit `FAILED` and leave the balance unchanged.
-  - Amount mismatch: mark the deposit `FAILED` and leave the balance unchanged.
-  - Replayed callback: return a duplicate acknowledgment without incrementing the balance again.
+  - The STK callback URL includes a per-deposit token; a missing or invalid token is rejected without changing deposit status.
+  - `ResultCode === 0` with the exact requested amount: mark the deposit `SUCCEEDED`; it is included in the derived balance.
+  - Missing or mismatched amount, or a non-zero result code: mark the deposit `FAILED` and exclude it from the balance.
+  - Replayed callback: return a duplicate acknowledgment; the deposit is counted once from its final status.
 - Success acknowledgment:
   - Status: 200 OK, including when internal processing records a failure. This prevents unnecessary Safaricom callback redelivery.
   - Body:

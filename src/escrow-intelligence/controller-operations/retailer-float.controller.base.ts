@@ -2,6 +2,7 @@ import { Get, Param, Put, Body, Req, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { retailerEscrowTransferService, retailerFloatDepositService } from '../../retailer';
+import { retailerEscrowReconciliationService } from '../../retailer';
 import { RetailerEscrowFloatDto } from '../dto/retailer-escrow-float.dto';
 import { RetailerFloatDepositDto } from '../dto/retailer-float-deposit.dto';
 import { assertAdministrator } from './assert-administrator';
@@ -11,6 +12,15 @@ export abstract class RetailerFloatControllerBase extends EscrowReadControllerBa
   @Get('history')
   history() {
     return this.escrowIntelligenceService.getReconciliationHistory();
+  }
+
+  @Get('retailer/float/reconciliations')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Get recent shared escrow balance reconciliation results' })
+  async getRetailerEscrowReconciliations(@Req() request: any) {
+    assertAdministrator(request.user);
+    return retailerEscrowReconciliationService.getRecentResults();
   }
 
   @Get('retailer/float')
@@ -30,14 +40,14 @@ export abstract class RetailerFloatControllerBase extends EscrowReadControllerBa
   @ApiBearerAuth('access-token')
   @ApiOperation({
     summary: 'Add or edit a retailer escrow float configuration',
-    description: 'Initial setup defaults expectedRemainingBalance to dailyFloat. Editing dailyFloat preserves the current remainder unless expectedRemainingBalance is explicitly provided.',
+    description: 'Configures daily float metadata and location. Available balance is derived only from successful deposit and settlement callbacks and cannot be set through this endpoint.',
   })
   @ApiResponse({ status: 200, description: 'Retailer float configuration saved' })
   @ApiResponse({ status: 403, description: 'Only administrators can edit retailer float configuration' })
   @ApiResponse({ status: 409, description: 'A transfer is in progress for this retailer' })
   async setRetailerFloat(@Param('merchantId') merchantId: string, @Body() body: RetailerEscrowFloatDto, @Req() request: any) {
     assertAdministrator(request.user);
-    return retailerEscrowTransferService.setFloat(merchantId, body.dailyFloat, body.expectedRemainingBalance, body.tillNumber, body.storeNumber);
+    return retailerEscrowTransferService.setFloat(merchantId, body.dailyFloat, body.tillNumber, body.storeNumber);
   }
 
   @Post('retailer/float/deposits')

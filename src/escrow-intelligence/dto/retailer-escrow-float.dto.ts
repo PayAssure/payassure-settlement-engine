@@ -9,16 +9,6 @@ export class RetailerEscrowFloatDto {
   @Min(0)
   dailyFloat: number = 0;
 
-  @ApiPropertyOptional({
-    example: 800,
-    description: 'Current expected remaining balance. On initial setup this defaults to dailyFloat; specify it to reset the tracked remainder during an edit.',
-  })
-  @Type(() => Number)
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  expectedRemainingBalance?: number;
-
   @ApiPropertyOptional({ example: 'TILL-001', description: 'Retailer till identifier.' })
   @IsOptional()
   @IsString()

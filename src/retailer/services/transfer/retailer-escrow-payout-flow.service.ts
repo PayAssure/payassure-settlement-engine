@@ -40,14 +40,9 @@ class RetailerEscrowPayoutFlowService {
     await prisma.$transaction(async (tx) => {
       const current = await tx.retailerEscrowTransfer.findUniqueOrThrow({ where: { id: transfer.id } });
       if (current.status !== 'TRANSFER_PENDING') return;
-      const float = await tx.retailerEscrowFloat.findUniqueOrThrow({ where: { id: current.retailerEscrowFloatId } });
-      const nextBalance = Math.max(0, Number(float.expectedRemainingBalance) - Number(current.amount));
       await tx.retailerEscrowFloat.update({
-        where: { id: float.id },
-        data: {
-          expectedRemainingBalance: new Prisma.Decimal(nextBalance),
-          activeTransferId: null,
-        },
+        where: { id: current.retailerEscrowFloatId },
+        data: { activeTransferId: null },
       });
       await tx.retailerEscrowTransfer.update({
         where: { id: current.id },
@@ -56,7 +51,6 @@ class RetailerEscrowPayoutFlowService {
       await updateEscrowSettlementMetadata(current.settlementId, {
         escrowStatus: 'SUCCEEDED',
         cashAmount: Number(current.amount),
-        expectedRemainingBalance: nextBalance,
         transferCallback: body,
       }, tx);
     });

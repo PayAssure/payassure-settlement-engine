@@ -37,11 +37,11 @@ export async function startLiveEscrowBalanceCheck(
     fundingPlan: {
       cashAmount,
       mpesaAmount,
-      mpesaStatus: mpesaAmount > 0 ? 'WAITING_FOR_ESCROW_BALANCE' : 'NOT_REQUIRED',
+      mpesaStatus: mpesaAmount > 0 ? 'WAITING_FOR_ESCROW_LEDGER' : 'NOT_REQUIRED',
     },
     escrowFunding: {
       provider: 'MPESA_ESCROW',
-      status: 'BALANCE_PENDING',
+      status: 'LEDGER_CHECK_PENDING',
       retailerMerchantId,
       cashAmount,
       mpesaAmount,
@@ -78,9 +78,9 @@ export async function startLiveEscrowBalanceCheck(
       success: true,
       settlement: buildSettlementResult(context, {
         status: SettlementStatus.PENDING_PROCESSING,
-        estimatedProcessingTime: 'Awaiting M-Pesa escrow balance callback',
+        estimatedProcessingTime: 'Awaiting M-Pesa funding or escrow transfer callback',
       }),
-      message: 'Escrow balance verification was requested. CASH transfer and settlement splitting will proceed only after the balance and any MPESA funding callbacks are confirmed.',
+      message: 'Retailer escrow ledger balance verified. CASH transfer and settlement splitting will proceed after any M-Pesa funding and escrow transfer callbacks are confirmed.',
       escrowFunding: initialMetadata.escrowFunding,
       balanceCheck,
     };

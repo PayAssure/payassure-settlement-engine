@@ -1,27 +1,28 @@
 # Retailer M-Pesa Escrow Float
 
-This document describes the retailer float configuration API and the live CASH settlement flow that protects PayAssure from unauthorized retailer withdrawals or unexpected balance changes.
+This document describes retailer float deposits, retailer-level available balances within a shared M-Pesa escrow account, and hourly reconciliation against Safaricom's actual account balance.
 
 ## 1. Concept
 
-Each retailer has one tracked escrow float in KES:
+Retailers share one M-Pesa escrow account. Each retailer's available amount is derived from callback-confirmed transaction records:
 
-- `dailyFloat`: the configured starting float or operating limit. Updating this value does not automatically change the tracked remainder.
-- `expectedRemainingBalance`: the balance that PayAssure expects to remain in the retailer's M-Pesa working account before the next settlement. It is reduced only after a successful escrow B2B callback.
+- `dailyFloat`: configuration metadata only; it does not create available funds.
+- `availableBalance`: sum of that retailer's `SUCCEEDED` float deposits minus its `SUCCEEDED` escrow transfers. It is computed from callback-finalized records and is not stored or editable.
 - `activeTransferId`: an internal lock identifying the settlement currently using the float. Only one escrow transfer may be active for a retailer at a time.
 
-The float is a control and verification mechanism, not a ledger of Safaricom's actual balance. Before each CASH settlement, Safaricom's Account Balance response is compared with `expectedRemainingBalance`. After PayAssure receives the CASH amount, the expected remainder is reduced by that CASH amount.
+Settlement initiation trusts the retailer ledger rather than querying Safaricom for every transaction. An atomic check rejects a request if its CASH amount exceeds that retailer's available balance. The shared account is queried hourly; its observed balance is compared with the sum of all retailer ledger balances. A mismatch is persisted and logged for investigation.
 
 Example:
 
 ```text
 Configured remainder:       10,000 KES
 Settlement CASH amount:       2,000 KES
-Required observed balance:   at least 10,000 KES
-New remainder after success:  8,000 KES
+Available before initiation:  10,000 KES
+Available while pending:      10,000 KES
+Available after success:       8,000 KES
 ```
 
-The new remainder is calculated as `max(0, oldExpectedRemainingBalance - cashAmount)`.
+The ledger is only debited after the successful B2B callback. A failed or unresolved transfer does not debit it.
 
 ## 2. Float configuration endpoints
 
@@ -41,7 +42,7 @@ Successful response:
   "merchantId": "pay_retailer_001",
   "currency": "KES",
   "dailyFloat": 10000,
-  "expectedRemainingBalance": 8000,
+  "availableBalance": 8000,
   "tillNumber": "TILL-001",
   "storeNumber": "STORE-001",
   "updatedAt": "2026-09-28T19:30:00.000Z"
@@ -65,7 +66,6 @@ Request fields:
 | Field | Type | Required | Rules |
 | --- | --- | --- | --- |
 | `dailyFloat` | number | Yes | Must be finite and greater than or equal to `0`. |
-| `expectedRemainingBalance` | number | No | Must be finite and greater than or equal to `0`. |
 | `tillNumber` | string | No | Retailer till identifier. |
 | `storeNumber` | string | No | Retailer store identifier. |
 
@@ -79,20 +79,19 @@ Initial setup:
 }
 ```
 
-On first setup, `expectedRemainingBalance` is set to `dailyFloat`.
+Creating a float configuration does not create available funds. Retailers must complete an STK deposit to establish a balance.
 
 Explicitly reset both values:
 
 ```json
 {
   "dailyFloat": 10000,
-  "expectedRemainingBalance": 8000,
   "tillNumber": "TILL-001",
   "storeNumber": "STORE-001"
 }
 ```
 
-When updating an existing configuration, omitting `expectedRemainingBalance` preserves its current value. This allows the configured float to be changed without silently resetting the settlement control balance.
+The endpoint cannot set or reset available funds. Unknown `expectedRemainingBalance` request fields are rejected by request validation.
 
 Successful response:
 
@@ -101,7 +100,7 @@ Successful response:
   "merchantId": "pay_retailer_001",
   "currency": "KES",
   "dailyFloat": 10000,
-  "expectedRemainingBalance": 8000,
+  "availableBalance": 8000,
   "tillNumber": "TILL-001",
   "storeNumber": "STORE-001",
   "updatedAt": "2026-09-28T19:35:00.000Z"
@@ -116,7 +115,7 @@ Successful response:
 - `409 Conflict`: the retailer has an active escrow transfer. Wait for a final transfer result before changing the float.
 - `400 Bad Request`: a value is missing, non-numeric, non-finite, or negative.
 
-The active-transfer restriction prevents an administrator from changing the expected remainder while a balance check or payout is using the old value.
+The active-transfer restriction prevents an administrator from changing the expected remainder while a payout is in progress.
 
 ## 3. M-Pesa configuration
 
@@ -171,8 +170,8 @@ Rules:
 - `payerPhoneNumber` must be a valid Kenyan phone number.
 - The STK request uses `MPESA_RETAILER_CONSUMER_KEY`, `MPESA_RETAILER_CONSUMER_SECRET`, `MPESA_RETAILER_SHORTCODE`, and `MPESA_RETAILER_PASSKEY`.
 - The callback is isolated from normal settlement payment callbacks, so a float deposit cannot trigger settlement splitting.
-- Creating the request or receiving an STK acceptance does not change `expectedRemainingBalance`.
-- A successful callback increments `expectedRemainingBalance` by the confirmed deposit amount.
+- Creating the request or receiving an STK acceptance does not add available funds.
+- Only a successful callback with an exact amount match marks the deposit `SUCCEEDED`; that confirmed deposit is then included in the derived balance.
 - A failed callback, amount mismatch, gateway failure, or timeout does not change the balance.
 - Replayed callbacks are acknowledged without incrementing the balance again.
 
@@ -195,13 +194,15 @@ Accepted response:
 The deposit lifecycle is `PENDING` -> `SUBMITTED` -> `SUCCEEDED` or `FAILED`. The final callback is received at:
 
 ```http
-POST /payments/callbacks/mpesa/retailer-float-deposit/{depositId}
+POST /payments/callbacks/mpesa/retailer-float-deposit/{depositId}?token=<deposit-callback-token>
 ```
+
+The token is generated for the deposit and included only in the callback URL sent to M-Pesa. The handler rejects callbacks with a missing or invalid token before changing deposit status.
 
 On success, the balance operation is:
 
 ```text
-new expectedRemainingBalance = current expectedRemainingBalance + confirmed deposit amount
+availableBalance = successful deposit total - successful settlement transfer total
 ```
 
 The callback handler returns HTTP `200` to Safaricom while recording the processing result internally.
@@ -220,83 +221,46 @@ Retailer escrow daily float is not configured for <merchantId>; CASH settlement 
 
 Settlements without CASH do not need this float gate. Development and test settlements without a float continue through the existing mock escrow path.
 
-### Step 2: Claim the float atomically
+### Step 2: Check and claim the retailer ledger atomically
 
 The service validates that:
 
 - `cashAmount` is finite, positive, and an integer KES amount.
 - A positive M-Pesa funding amount has a payer phone number.
 - The retailer has no active escrow transfer.
-- The stored `expectedRemainingBalance` is still the value read when the operation started.
+- Callback-confirmed available balance is at least the settlement CASH amount.
 
-Inside one database transaction, it claims the float and creates a `RetailerEscrowTransfer` with:
+Inside one database transaction, it claims the retailer float and creates a `RetailerEscrowTransfer` with:
 
 ```text
-status:     BALANCE_PENDING
+status:     BALANCE_VERIFIED
 mpesaStatus: NOT_REQUIRED or NOT_STARTED
-requiredBalance: current expectedRemainingBalance
+requiredBalance: available balance at initiation
 ```
 
-The settlement metadata records `escrowStatus: BALANCE_PENDING`, the transfer ID, `cashAmount`, and `mpesaAmount`. A concurrent request receives an error equivalent to:
+No Safaricom balance request is made during initiation. If the retailer has 10,000 KES and requests a CASH transfer of 11,000 KES, initiation fails with an available balance of 10,000 KES and a shortfall of 1,000 KES. The settlement metadata records `escrowStatus: BALANCE_VERIFIED`, the transfer ID, `cashAmount`, `mpesaAmount`, and the available balance. A concurrent request receives an error equivalent to:
 
 ```text
 Another escrow transfer is already active or the expected float changed
 ```
 
-### Step 3: Query the retailer Account Balance
+### Step 3: Continue funding and payout
 
-The application sends an Account Balance request using the retailer credentials:
+After the ledger check passes:
 
-```json
-{
-  "Initiator": "<retailer-initiator>",
-  "SecurityCredential": "<generated-security-credential>",
-  "CommandID": "AccountBalance",
-  "PartyA": "<retailer-party-a>",
-  "IdentifierType": "2",
-  "Remarks": "Retailer escrow balance query",
-  "QueueTimeOutURL": "https://api.example.com/payments/callbacks/mpesa/escrow-balance-timeout/<transferId>",
-  "ResultURL": "https://api.example.com/payments/callbacks/mpesa/escrow-balance/<transferId>"
-}
-```
+- Pure CASH dispatches the retailer-to-PayAssure B2B transfer immediately.
+- Mixed CASH + M-Pesa starts STK funding, then dispatches the B2B transfer after the M-Pesa callback succeeds.
+- The retailer float lock remains held until a final B2B result arrives.
 
-Safaricom returns the result asynchronously. The parser accepts either `Result` or `result` and reads the `Working Account` entry from an account string such as:
+### Step 3: Collect mixed M-Pesa funding, when required
 
-```text
-Working Account|KES|10850.00&Utility Account|KES|0.00
-```
-
-### Step 4: Verify the balance
-
-The observed `Working Account` must be at least both:
-
-1. The stored `expectedRemainingBalance`, to detect an unexpected decrease, and
-2. The settlement's CASH amount, to ensure the requested transfer can be funded.
-
-Successful balance verification:
-
-- Pure CASH: `BALANCE_VERIFIED`, then `TRANSFER_PENDING`.
-- Mixed CASH + M-Pesa: `BALANCE_VERIFIED`, then `WAITING_FOR_MPESA`.
-- The float lock remains held in both cases.
-
-Failure cases release the lock and fail the settlement:
-
-- Non-zero Safaricom result code.
-- Missing or unparseable `Working Account`.
-- Observed balance below the expected remainder:
-  `Escrow balance tampering detected: expected at least ... KES, observed ... KES.`
-- Observed balance below the CASH amount:
-  `Insufficient escrow balance: available ... KES; CASH amount required ... KES.`
-
-### Step 5: Collect mixed M-Pesa funding, when required
-
-For a settlement containing CASH and M-Pesa funding, STK Push starts only after the balance is verified. The request uses the shared `MPESA_*` credentials and includes the escrow transfer ID in `gatewayPayload` so the eventual callback can be associated with this transfer.
+For a settlement containing CASH and M-Pesa funding, STK Push starts after the retailer ledger check. The request uses the shared `MPESA_*` credentials and includes the escrow transfer ID in `gatewayPayload` so the eventual callback can be associated with this transfer.
 
 - STK request accepted: remain waiting for the final M-Pesa callback.
 - Failed M-Pesa callback: mark the escrow transfer `FAILED`, release the float, and fail the settlement.
 - Successful M-Pesa callback: set `mpesaStatus: SUCCESS` and dispatch the escrow B2B transfer.
 
-### Step 6: Send the escrow B2B transfer
+### Step 4: Send the escrow B2B transfer
 
 The B2B transfer is sent only when the funding gates pass:
 
@@ -314,20 +278,20 @@ AccountReference: settlement merchant transaction reference
 Remarks:         PayAssure escrow collection <reference>
 ```
 
-The transfer is marked `TRANSFER_PENDING` before dispatch. A gateway rejection or request error marks it `FAILED`, releases the float lock, and leaves `expectedRemainingBalance` unchanged.
+The transfer is marked `TRANSFER_PENDING` before dispatch. A gateway rejection or request error marks it `FAILED` and releases the float lock. Failed transfers are excluded from the available-balance calculation.
 
 An accepted request is not proof that money arrived. The float is not reduced until the final Safaricom result callback is successful.
 
-### Step 7: Final B2B callback and settlement split
+### Step 5: Final B2B callback and settlement split
 
 For result code `0`, the application reloads the transfer transactionally and, if it is still pending:
 
-1. Decreases `expectedRemainingBalance` by the CASH amount.
+1. Sets the transfer status to `SUCCEEDED` and stores the B2B callback payload.
 2. Clears `activeTransferId`.
-3. Sets the transfer status to `SUCCEEDED`.
-4. Stores the B2B callback payload.
-5. Updates settlement escrow metadata.
-6. Resumes supplier and retailer splitting/allocation.
+3. Updates settlement escrow metadata.
+4. Resumes supplier and retailer splitting/allocation.
+
+The successful transfer record is the debit event. No separate balance field is incremented or decremented.
 
 A non-zero result:
 
@@ -339,31 +303,47 @@ A non-zero result:
 
 Repeated callbacks are idempotent. Once the transfer has advanced beyond the callback's expected state, the handler acknowledges it as a duplicate without applying the balance reduction twice.
 
-## 5. Callback endpoints
+## 5. Hourly shared-account reconciliation
 
-Safaricom must be able to reach these public POST endpoints. All four callback handlers acknowledge with HTTP `200`, including when internal processing fails, so the gateway does not repeatedly redeliver the same callback solely because application processing returned an error.
+The application submits an M-Pesa Account Balance query once per hour, beginning one hour after startup. Expected balance is all callback-confirmed deposits minus all callback-confirmed successful settlement transfers. The result is compared with the shared account's `Working Account` balance and stored in `retailer_escrow_reconciliations`.
+
+Reconciliation outcomes are `MATCHED`, `MISMATCH`, or `FAILED`. A mismatch stores the expected balance, observed balance, difference, and callback payload, and emits an error log marked `INVESTIGATION_REQUIRED`. A timeout, rejected request, or unparseable balance is stored as `FAILED`.
+
+Administrators can inspect the latest 50 results:
+
+```http
+GET /escrow/retailer/float/reconciliations
+Authorization: Bearer <admin-jwt>
+```
+
+Apply the database migration before deploying the scheduler:
+
+```bash
+npx prisma migrate deploy
+npx prisma generate
+```
+
+The migration removes the old mutable `expectedRemainingBalance` column. After deployment, available balances are reconstructed from successful deposit and transfer records; configured daily float values do not count as deposits.
+
+## 6. Callback endpoints
+
+Safaricom must be able to reach these public POST endpoints. The callback handlers acknowledge with HTTP `200`, including when internal processing fails, so the gateway does not repeatedly redeliver the same callback solely because application processing returned an error.
 
 | Purpose | Route |
 | --- | --- |
-| Account Balance result | `POST /payments/callbacks/mpesa/escrow-balance/{transferId}` |
-| Account Balance queue timeout | `POST /payments/callbacks/mpesa/escrow-balance-timeout/{transferId}` |
+| Retailer float deposit result | `POST /payments/callbacks/mpesa/retailer-float-deposit/{depositId}?token={callbackToken}` |
+| Hourly shared-account reconciliation result | `POST /payments/callbacks/mpesa/escrow-reconciliation/{reconciliationId}` |
+| Hourly shared-account reconciliation timeout | `POST /payments/callbacks/mpesa/escrow-reconciliation-timeout/{reconciliationId}` |
 | B2B transfer result | `POST /payments/callbacks/mpesa/escrow-transfer/{transferId}` |
 | B2B transfer queue timeout | `POST /payments/callbacks/mpesa/escrow-transfer-timeout/{transferId}` |
 
 `{transferId}` is the internal escrow transfer ID supplied when the request is created. Do not replace it with the merchant transaction reference.
 
-## 6. Timeout and recovery behavior
+## 7. Timeout and recovery behavior
 
-### Account Balance timeout
+### Reconciliation timeout
 
-If the transfer is still `BALANCE_PENDING`, the timeout handler:
-
-- Sets the transfer to `FAILED`.
-- Releases `activeTransferId`.
-- Marks the settlement failed.
-- Stores `M-Pesa account balance request timed out before a result was received`.
-
-If a balance result already advanced the transfer, a later timeout is treated as a duplicate and does not roll the transfer back.
+A reconciliation timeout marks only that reconciliation record `FAILED`. It does not alter retailer balances or block settlements; the next hourly reconciliation can retry.
 
 ### B2B transfer timeout
 
@@ -378,19 +358,17 @@ escrowStatus:    TRANSFER_OUTCOME_UNKNOWN
 
 Settlement metadata records `transferTimeoutAt` and the timeout payload. The lock remains until a final B2B result callback confirms success or failure. Do not manually reset the float while this transfer is unresolved.
 
-## 7. State reference
+## 8. State reference
 
 | Transfer state | Meaning | Float lock | Expected remainder |
 | --- | --- | --- | --- |
-| `BALANCE_PENDING` | Waiting for Account Balance result | Held | Unchanged |
-| `BALANCE_MISMATCH` | Balance is missing, too low, or inconsistent | Released | Unchanged |
-| `BALANCE_VERIFIED` | Balance passed verification | Held | Unchanged |
+| `BALANCE_VERIFIED` | Retailer ledger check passed | Held | Unchanged |
 | `WAITING_FOR_MPESA` | Waiting for mixed-funding STK callback | Held | Unchanged |
 | `TRANSFER_PENDING` | B2B request accepted or outcome unknown | Held | Unchanged |
-| `SUCCEEDED` | B2B result confirmed success | Released | Decreased by CASH amount |
-| `FAILED` | A balance, STK, or B2B operation failed | Released | Unchanged |
+| `SUCCEEDED` | B2B result confirmed success | Released | Transfer amount is subtracted from the derived balance |
+| `FAILED` | STK or B2B operation failed | Released | Excluded from the derived balance |
 
-## 8. Operational checklist
+## 9. Operational checklist
 
 Before enabling production CASH settlements:
 
@@ -398,11 +376,11 @@ Before enabling production CASH settlements:
 - Confirm the retailer integration is of type `RETAILER`.
 - Set all required `MPESA_RETAILER_*` variables and use the correct environment.
 - Confirm the callback base URL is public and uses HTTPS.
-- Register or allow all four callback paths, including timeout paths.
-- Confirm the retailer initiator is authorized for Account Balance and B2B.
+- Register or allow the deposit, B2B transfer, and hourly reconciliation callback paths, including timeout paths.
+- Confirm the retailer initiator is authorized for Account Balance reconciliation and B2B.
 - Confirm the security credential can be generated from the configured initiator password.
 - Confirm the PayAssure receiving shortcode is correct.
 - Never edit the float while `activeTransferId` is set.
 - Investigate `TRANSFER_OUTCOME_UNKNOWN` before retrying, resetting, or releasing a float.
 
-For an individual settlement, correlate the settlement ID, escrow `transferId`, merchant transaction reference, Safaricom conversation IDs, callback payload, and final `expectedRemainingBalance` in the application logs and database.
+For an individual settlement, correlate the settlement ID, escrow `transferId`, merchant transaction reference, Safaricom conversation IDs, callback payload, and successful deposit/transfer records. For account reconciliation, review the latest run and investigate any `MISMATCH`; balances cannot be manually reset through the float configuration API.
