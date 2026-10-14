@@ -1,5 +1,6 @@
 import type { MpesaRequestCredentials } from './types';
 import { MpesaAuthenticationBase } from './authentication.base';
+import { sanitizeMpesaRequestPayload, sanitizeMpesaResponsePayload } from './request-logging';
 
 export abstract class MpesaRequestBase extends MpesaAuthenticationBase {
   async makeRequest(
@@ -12,26 +13,39 @@ export abstract class MpesaRequestBase extends MpesaAuthenticationBase {
     const baseUrl = this.getBaseUrl(environment);
     const apiEndpoint = this.getEndpointPath(endpoint, environment);
     if (!apiEndpoint) throw new Error(`Unsupported M-Pesa endpoint: ${endpoint}`);
-    const token = await this.getAccessToken(credentials);
     const url = `${baseUrl}${apiEndpoint}`;
-    const loggedPayload = Object.fromEntries(
-      Object.entries(payload).map(([key, value]) => [key, ['SecurityCredential', 'Password'].includes(key) ? '[redacted]' : value]),
-    );
+    const loggedPayload = sanitizeMpesaRequestPayload(payload);
     await this.logRequest({ endpoint, method: 'POST', path: apiEndpoint, requestBody: loggedPayload });
+    console.log(`[PAYMENT][REQUEST] ${JSON.stringify({
+      endpoint,
+      method: 'POST',
+      url,
+      environment: environment || 'not set (defaulting to sandbox)',
+      payload: loggedPayload,
+    })}`);
+    const token = await this.getAccessToken(credentials, endpoint, loggedPayload);
     const response = await fetch(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await response.json().catch(() => ({}));
+    const responseText = await response.text();
+    let data: unknown;
+    try {
+      data = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      data = responseText || '(empty response body)';
+    }
+    const safeResponse = sanitizeMpesaResponsePayload(data);
     if (!response.ok) {
-      const message = typeof data === 'string' ? data : JSON.stringify(data);
+      const message = typeof safeResponse === 'string' ? safeResponse : JSON.stringify(safeResponse);
       this.logger.error(`[PAYMENT][ERROR] endpoint=${endpoint} status=${response.status} statusText=${response.statusText}`, {
         httpStatus: response.status,
         statusText: response.statusText,
-        errorResponse: data,
+        errorResponse: safeResponse,
         url,
         environment: environment || 'not set (defaulting to sandbox)',
+        requestPayload: loggedPayload,
       });
       if (response.status === 403) {
         this.logger.error(`[PAYMENT][403_FORBIDDEN] ${endpoint}`, {
@@ -52,6 +66,12 @@ export abstract class MpesaRequestBase extends MpesaAuthenticationBase {
       }
       throw new Error(`M-Pesa ${endpoint} request failed: ${response.status} ${response.statusText} ${message}`);
     }
-    return typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : {};
+    console.log(`[PAYMENT][RESPONSE] ${JSON.stringify({
+      endpoint,
+      httpStatus: response.status,
+      statusText: response.statusText,
+      response: safeResponse,
+    })}`);
+    return typeof data === 'object' && data !== null && !Array.isArray(data) ? data as Record<string, unknown> : {};
   }
 }

@@ -44,6 +44,12 @@ class RetailerFloatDepositService extends MpesaStkOperationsBase {
         status: 'PENDING',
       },
     });
+    this.logger.log(`[RETAILER_FLOAT_DEPOSIT][INITIATED] ${JSON.stringify({
+      depositId: deposit.id,
+      merchantId,
+      amount,
+      payerPhoneNumber: deposit.payerPhone,
+    })}`);
 
     const timestamp = this.generateTimestamp();
     const callbackUrl = new URL(resolveMpesaCallbackUrl(config.callbackUrl, `/retailer-float-deposit/${deposit.id}`));
@@ -126,6 +132,15 @@ class RetailerFloatDepositService extends MpesaStkOperationsBase {
 
     const callbackAmount = callback.amount == null ? null : Number(callback.amount);
     if (callback.status !== 'completed' || callback.resultCode !== 0) {
+      this.logger.error(`[RETAILER_FLOAT_DEPOSIT][CALLBACK_FAILED] ${JSON.stringify({
+        depositId,
+        merchantRequestId: callback.merchantRequestId,
+        checkoutRequestId: callback.checkoutRequestId,
+        resultCode: callback.resultCode,
+        resultDescription: callback.resultDesc,
+        amount: callback.amount,
+        payerPhoneNumber: callback.phoneNumber,
+      })}`);
       await prisma.retailerEscrowFloatDeposit.update({
         where: { id: deposit.id },
         data: {
