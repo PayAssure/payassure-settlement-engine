@@ -88,3 +88,100 @@ test('shared escrow expected balance is successful deposits minus successful set
     retailerEscrowBalanceService.queryBalance = original.queryBalance;
   }
 });
+
+test('retailer balance check uses retailer-scoped ledger amounts and persists the authenticated owner', async () => {
+  const depositModel = (prisma as any).retailerEscrowFloatDeposit;
+  const transferModel = (prisma as any).retailerEscrowTransfer;
+  const reconciliationModel = (prisma as any).retailerEscrowReconciliation;
+  const original = {
+    transaction: (prisma as any).$transaction,
+    depositAggregate: depositModel.aggregate,
+    transferAggregate: transferModel.aggregate,
+    reconciliationCreate: reconciliationModel.create,
+    reconciliationUpdate: reconciliationModel.update,
+    queryBalance: retailerEscrowBalanceService.queryBalance,
+  };
+  const aggregateFilters: any[] = [];
+  let createdData: any;
+  let queryArgs: any;
+
+  try {
+    (prisma as any).$transaction = async (callback: (tx: any) => Promise<unknown>) => callback(prisma);
+    depositModel.aggregate = async ({ where }: any) => {
+      aggregateFilters.push(where);
+      return { _sum: { amount: 12000 } };
+    };
+    transferModel.aggregate = async ({ where }: any) => {
+      aggregateFilters.push(where);
+      return { _sum: { amount: 4000 } };
+    };
+    reconciliationModel.create = async ({ data }: any) => {
+      createdData = data;
+      return { id: 'retailer-reconciliation-test' };
+    };
+    reconciliationModel.update = async () => ({});
+    retailerEscrowBalanceService.queryBalance = async (...args: any[]) => {
+      queryArgs = args;
+      return { responseCode: '0', conversationId: 'conversation-1' };
+    };
+
+    const result = await retailerEscrowReconciliationService.requestReconciliation('pay_retailer_001');
+
+    assert.deepEqual(aggregateFilters, [
+      { status: 'SUCCEEDED', retailerMerchantId: 'pay_retailer_001' },
+      { status: 'SUCCEEDED', retailerMerchantId: 'pay_retailer_001' },
+    ]);
+    assert.equal(createdData.retailerMerchantId, 'pay_retailer_001');
+    assert.equal(Number(createdData.expectedBalance), 8000);
+    assert.deepEqual(queryArgs.slice(0, 2), [
+      'escrow-reconciliation/retailer-reconciliation-test',
+      'escrow-reconciliation-timeout/retailer-reconciliation-test',
+    ]);
+    assert.deepEqual(queryArgs[2], { reconciliationId: 'retailer-reconciliation-test', retailerMerchantId: 'pay_retailer_001' });
+    assert.equal(result.reconciliationId, 'retailer-reconciliation-test');
+    assert.equal(result.status, 'PENDING');
+  } finally {
+    (prisma as any).$transaction = original.transaction;
+    depositModel.aggregate = original.depositAggregate;
+    transferModel.aggregate = original.transferAggregate;
+    reconciliationModel.create = original.reconciliationCreate;
+    reconciliationModel.update = original.reconciliationUpdate;
+    retailerEscrowBalanceService.queryBalance = original.queryBalance;
+  }
+});
+
+test('retailer balance check result is looked up only for its owning retailer', async () => {
+  const model = (prisma as any).retailerEscrowReconciliation;
+  const original = model.findFirst;
+  let lookup: any;
+
+  try {
+    model.findFirst = async (args: any) => {
+      lookup = args;
+      return {
+        id: 'retailer-reconciliation-test',
+        status: 'MATCHED',
+        expectedBalance: 8000,
+        observedBalance: 8000,
+        difference: 0,
+        failureReason: null,
+        createdAt: new Date('2026-10-15T00:00:00.000Z'),
+        completedAt: new Date('2026-10-15T00:01:00.000Z'),
+      };
+    };
+
+    const result = await retailerEscrowReconciliationService.getRetailerBalanceCheck(
+      'retailer-reconciliation-test',
+      'pay_retailer_001',
+    );
+
+    assert.deepEqual(lookup.where, {
+      id: 'retailer-reconciliation-test',
+      retailerMerchantId: 'pay_retailer_001',
+    });
+    assert.equal(result.observedBalance, 8000);
+    assert.equal(result.status, 'MATCHED');
+  } finally {
+    model.findFirst = original;
+  }
+});

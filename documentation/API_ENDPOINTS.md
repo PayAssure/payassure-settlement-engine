@@ -235,7 +235,34 @@ Base path: /escrow
   - 403 Forbidden: authenticated user is not an active retailer integration owner.
   - 404 Not Found: retailer integration or float configuration not found.
 
-### 7) POST /payments/callbacks/mpesa/retailer-float-deposit/:depositId
+### 7) POST /escrow/retailer/float/balance
+- Purpose: Request the live balance of the authenticated retailer's escrow account through the retailer M-Pesa Account Balance flow.
+- Required headers:
+  - Authorization: ****** from /auth/login>
+- Authorization: the JWT user must belong to an active retailer integration. The merchant ID is resolved from the token.
+- Path parameters and request body: none.
+- The request follows the standard Account Balance flow using the `MPESA_RETAILER_*` credentials and callback configuration. It sets `IdentifierType` to `2` for the retailer account (the standard endpoint defaults to `4`) and requires the retailer to have a float configuration.
+- Success response:
+  - Status: 201 Created
+  - Body: the immediate M-Pesa Account Balance API acknowledgment, including `OriginatorConversationID`, `ConversationID`, `ResponseCode`, and `ResponseDescription`.
+- The actual account balance is returned asynchronously by Safaricom to the retailer balance callback. No reconciliation ID or retailer-supplied account ID is required.
+- Error responses:
+  - 401 Unauthorized: missing or invalid bearer token.
+  - 403 Forbidden: authenticated user is not an active retailer integration owner.
+  - 404 Not Found: retailer float configuration not found.
+
+### 8) POST /payments/callbacks/mpesa/retailer-escrow-balance
+- Purpose: Receive Safaricom's asynchronous result for the general retailer account balance query.
+- Required headers: none; this callback is called by Safaricom.
+- Path parameters and request body: no path parameters; request body is the Account Balance callback payload.
+- Processing behavior: the callback is logged and acknowledged. The actual account balance appears in the `Result.ResultParameters.ResultParameter` entry with key `AccountBalance`.
+
+### 9) POST /payments/callbacks/mpesa/retailer-escrow-balance-timeout
+- Purpose: Receive Safaricom's asynchronous timeout notification for the general retailer account balance query.
+- Required headers: none; this callback is called by Safaricom.
+- Processing behavior: the timeout is logged and acknowledged.
+
+### 10) POST /payments/callbacks/mpesa/retailer-float-deposit/:depositId
 - Purpose: Receive the Safaricom STK Push result for a retailer float deposit.
 - Required headers: none; this callback is called by Safaricom.
 - Path parameters:

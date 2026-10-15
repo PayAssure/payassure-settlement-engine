@@ -56,26 +56,43 @@ test('retailer escrow credentials use fixed MPESA_RETAILER environment names', (
   }
 });
 
-test('retailer escrow balance query uses MPESA_RETAILER_* credentials and dedicated callback URL', async () => {
-  const previousRetailerCallback = process.env.MPESA_RETAILER_CALLBACK_URL;
-  const previousRetailerShortcode = process.env.MPESA_RETAILER_SHORTCODE;
-  const previousRetailerPartyA = process.env.MPESA_RETAILER_PARTY_A;
-  const previousRetailerConsumerKey = process.env.MPESA_RETAILER_CONSUMER_KEY;
-  const previousRetailerConsumerSecret = process.env.MPESA_RETAILER_CONSUMER_SECRET;
-  const previousRetailerPasskey = process.env.MPESA_RETAILER_PASSKEY;
-  const previousRetailerInitiator = process.env.MPESA_RETAILER_INITIATOR_NAME;
-  const previousRetailerPassword = process.env.MPESA_RETAILER_INITIATOR_PASSWORD;
+test('retailer escrow balance query uses retailer MPESA credentials and IdentifierType 2', async () => {
+  const envNames = [
+    'MPESA_RETAILER_CALLBACK_URL',
+    'MPESA_RETAILER_ENVIRONMENT',
+    'MPESA_RETAILER_CONSUMER_KEY',
+    'MPESA_RETAILER_CONSUMER_SECRET',
+    'MPESA_RETAILER_SHORTCODE',
+    'MPESA_RETAILER_PARTY_A',
+    'MPESA_RETAILER_INITIATOR_NAME',
+    'MPESA_RETAILER_INITIATOR_PASSWORD',
+    'MPESA_CALLBACK_URL',
+    'MPESA_CONSUMER_KEY',
+    'MPESA_CONSUMER_SECRET',
+    'MPESA_SHORTCODE',
+    'MPESA_PARTYA',
+    'MPESA_INITIATOR_NAME',
+    'MPESA_INITIATOR_PASSWORD',
+  ];
+  const previousEnv = new Map(envNames.map((name) => [name, process.env[name]]));
   const previousMakeRequest = (require('../../payment/services/mpesa.service').mpesaService as any).makeRequest;
 
   try {
     process.env.MPESA_RETAILER_CALLBACK_URL = 'https://example.test/retailer';
+    process.env.MPESA_RETAILER_ENVIRONMENT = 'sandbox';
+    process.env.MPESA_RETAILER_CONSUMER_KEY = 'retailer-consumer-key';
+    process.env.MPESA_RETAILER_CONSUMER_SECRET = 'retailer-consumer-secret';
     process.env.MPESA_RETAILER_SHORTCODE = '600997';
-    process.env.MPESA_RETAILER_PARTY_A = '600997';
-    process.env.MPESA_RETAILER_CONSUMER_KEY = 'wOvA4RkFd83LcSfGGwGKK1KzGSNcRJjAYZmrwJgg3Gy9ASsA';
-    process.env.MPESA_RETAILER_CONSUMER_SECRET = 'test-retailer-consumer-secret';
-    process.env.MPESA_RETAILER_PASSKEY = 'retailer-passkey';
+    delete process.env.MPESA_RETAILER_PARTY_A;
     process.env.MPESA_RETAILER_INITIATOR_NAME = 'retailer-initiator';
     process.env.MPESA_RETAILER_INITIATOR_PASSWORD = 'retailer-password';
+    process.env.MPESA_CALLBACK_URL = 'https://example.test/shared';
+    process.env.MPESA_CONSUMER_KEY = 'shared-consumer-key';
+    process.env.MPESA_CONSUMER_SECRET = 'shared-consumer-secret';
+    process.env.MPESA_SHORTCODE = '600998';
+    process.env.MPESA_PARTYA = '600999';
+    process.env.MPESA_INITIATOR_NAME = 'shared-initiator';
+    process.env.MPESA_INITIATOR_PASSWORD = 'shared-password';
 
     let payload: any;
     let credentials: any;
@@ -91,25 +108,102 @@ test('retailer escrow balance query uses MPESA_RETAILER_* credentials and dedica
     };
 
     const { retailerEscrowBalanceService } = require('./balance/retailer-escrow-balance.service');
-    const result = await retailerEscrowBalanceService.queryBalance('/escrow-balance', '/escrow-balance-timeout');
+    const result = await retailerEscrowBalanceService.queryBalance(
+      'retailer-escrow-balance',
+      'retailer-escrow-balance-timeout',
+    );
 
     assert.equal(payload.Initiator, 'retailer-initiator');
     assert.equal(payload.IdentifierType, '2');
     assert.equal(payload.PartyA, '600997');
-    assert.equal(payload.QueueTimeOutURL, 'https://example.test/retailer/callbacks/mpesa/escrow-balance-timeout');
-    assert.equal(payload.ResultURL, 'https://example.test/retailer/callbacks/mpesa/escrow-balance');
-    assert.equal(credentials.consumerKey, 'wOvA4RkFd83LcSfGGwGKK1KzGSNcRJjAYZmrwJgg3Gy9ASsA');
+    assert.equal(payload.QueueTimeOutURL, 'https://example.test/retailer/callbacks/mpesa/retailer-escrow-balance-timeout');
+    assert.equal(payload.ResultURL, 'https://example.test/retailer/callbacks/mpesa/retailer-escrow-balance');
+    assert.equal(credentials.environment, 'sandbox');
+    assert.equal(credentials.consumerKey, 'retailer-consumer-key');
+    assert.equal(credentials.consumerSecret, 'retailer-consumer-secret');
     assert.equal(result.ResponseCode, '0');
   } finally {
     (require('../../payment/services/mpesa.service').mpesaService as any).makeRequest = previousMakeRequest;
-    if (previousRetailerCallback === undefined) delete process.env.MPESA_RETAILER_CALLBACK_URL; else process.env.MPESA_RETAILER_CALLBACK_URL = previousRetailerCallback;
-    if (previousRetailerShortcode === undefined) delete process.env.MPESA_RETAILER_SHORTCODE; else process.env.MPESA_RETAILER_SHORTCODE = previousRetailerShortcode;
-    if (previousRetailerPartyA === undefined) delete process.env.MPESA_RETAILER_PARTY_A; else process.env.MPESA_RETAILER_PARTY_A = previousRetailerPartyA;
-    if (previousRetailerConsumerKey === undefined) delete process.env.MPESA_RETAILER_CONSUMER_KEY; else process.env.MPESA_RETAILER_CONSUMER_KEY = previousRetailerConsumerKey;
-    if (previousRetailerConsumerSecret === undefined) delete process.env.MPESA_RETAILER_CONSUMER_SECRET; else process.env.MPESA_RETAILER_CONSUMER_SECRET = previousRetailerConsumerSecret;
-    if (previousRetailerPasskey === undefined) delete process.env.MPESA_RETAILER_PASSKEY; else process.env.MPESA_RETAILER_PASSKEY = previousRetailerPasskey;
-    if (previousRetailerInitiator === undefined) delete process.env.MPESA_RETAILER_INITIATOR_NAME; else process.env.MPESA_RETAILER_INITIATOR_NAME = previousRetailerInitiator;
-    if (previousRetailerPassword === undefined) delete process.env.MPESA_RETAILER_INITIATOR_PASSWORD; else process.env.MPESA_RETAILER_INITIATOR_PASSWORD = previousRetailerPassword;
+    for (const [name, value] of previousEnv) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
+test('retailer M-Pesa request retries once with the replacement OAuth token when the first token is rejected', async () => {
+  const { mpesaService } = require('../../payment/services/mpesa.service');
+  const previousFetch = globalThis.fetch;
+  const previousLogRequest = mpesaService.logRequest;
+  const previousEnvironment = process.env.MPESA_ENVIRONMENT;
+  const previousConsumerKey = process.env.MPESA_CONSUMER_KEY;
+  const previousConsumerSecret = process.env.MPESA_CONSUMER_SECRET;
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+
+  try {
+    process.env.MPESA_ENVIRONMENT = 'sandbox';
+    process.env.MPESA_CONSUMER_KEY = 'shared-key-must-not-be-used';
+    process.env.MPESA_CONSUMER_SECRET = 'shared-secret-must-not-be-used';
+    mpesaService.logRequest = async () => undefined;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      const body = requests.length === 1
+        ? { access_token: 'first-retailer-access-token', expires_in: 3599 }
+        : requests.length === 2
+          ? { errorCode: '404.001.03', errorMessage: 'Invalid Access Token' }
+          : requests.length === 3
+            ? { access_token: 'replacement-retailer-access-token', expires_in: 3599 }
+            : { ResponseCode: '0', ResponseDescription: 'Accepted' };
+      return {
+        ok: requests.length !== 2,
+        status: requests.length === 2 ? 404 : 200,
+        statusText: requests.length === 2 ? 'Not Found' : 'OK',
+        text: async () => JSON.stringify(body),
+      } as Response;
+    }) as typeof fetch;
+
+    await mpesaService.makeRequest('account_balance', { IdentifierType: '2' }, {
+      environment: 'production',
+      consumerKey: 'retailer-consumer-key',
+      consumerSecret: 'retailer-consumer-secret',
+    });
+
+    assert.equal(
+      requests[0].url,
+      'https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials',
+    );
+    assert.equal(requests[0].init?.method, 'GET');
+    assert.equal(
+      (requests[0].init?.headers as Record<string, string>).Authorization,
+      `Basic ${Buffer.from('retailer-consumer-key:retailer-consumer-secret').toString('base64')}`,
+    );
+    assert.equal(requests[1].url, 'https://api.safaricom.co.ke/mpesa/accountbalance/v1/query');
+    assert.equal(
+      (requests[1].init?.headers as Record<string, string>).Authorization,
+      'Bearer first-retailer-access-token',
+    );
+    assert.equal(
+      requests[2].url,
+      'https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials',
+    );
+    assert.equal(
+      requests[3].url,
+      'https://api.safaricom.co.ke/mpesa/accountbalance/v1/query',
+    );
+    assert.equal(
+      (requests[3].init?.headers as Record<string, string>).Authorization,
+      'Bearer replacement-retailer-access-token',
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+    mpesaService.logRequest = previousLogRequest;
+    if (previousEnvironment === undefined) delete process.env.MPESA_ENVIRONMENT;
+    else process.env.MPESA_ENVIRONMENT = previousEnvironment;
+    if (previousConsumerKey === undefined) delete process.env.MPESA_CONSUMER_KEY;
+    else process.env.MPESA_CONSUMER_KEY = previousConsumerKey;
+    if (previousConsumerSecret === undefined) delete process.env.MPESA_CONSUMER_SECRET;
+    else process.env.MPESA_CONSUMER_SECRET = previousConsumerSecret;
   }
 });
 

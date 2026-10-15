@@ -23,18 +23,34 @@ export abstract class MpesaRequestBase extends MpesaAuthenticationBase {
       environment: environment || 'not set (defaulting to sandbox)',
       payload: loggedPayload,
     })}`);
-    const token = await this.getAccessToken(credentials, endpoint, loggedPayload);
-    const response = await fetch(url, {
+    const sendRequest = (accessToken: string) => fetch(url, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const responseText = await response.text();
-    let data: unknown;
-    try {
-      data = responseText ? JSON.parse(responseText) : {};
-    } catch {
-      data = responseText || '(empty response body)';
+    const readResponse = async (apiResponse: Response): Promise<unknown> => {
+      const responseText = await apiResponse.text();
+      try {
+        return responseText ? JSON.parse(responseText) : {};
+      } catch {
+        return responseText || '(empty response body)';
+      }
+    };
+
+    let token = await this.getAccessToken(credentials, endpoint, loggedPayload);
+    let response = await sendRequest(token);
+    let data = await readResponse(response);
+    const responseError = typeof data === 'object' && data !== null
+      ? data as Record<string, unknown>
+      : undefined;
+    if (!response.ok && responseError?.errorCode === '404.001.03' && responseError.errorMessage === 'Invalid Access Token') {
+      this.logger.warn('[PAYMENT][AUTHENTICATION] M-Pesa rejected the access token; requesting one replacement token', {
+        endpoint,
+        environment: environment || 'not set (defaulting to sandbox)',
+      });
+      token = await this.getAccessToken(credentials, endpoint, loggedPayload);
+      response = await sendRequest(token);
+      data = await readResponse(response);
     }
     const safeResponse = sanitizeMpesaResponsePayload(data);
     if (!response.ok) {

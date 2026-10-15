@@ -119,13 +119,14 @@ The active-transfer restriction prevents an administrator from changing the expe
 
 ## 3. M-Pesa configuration
 
-Configure one dedicated `MPESA_RETAILER_*` set for the retailer account. These credentials are used for retailer float-deposit STK Push, Account Balance, and retailer-to-PayAssure B2B transfer. Regular customer STK Push, B2C, regular B2B, and other non-retailer operations continue to use the shared `MPESA_*` configuration.
+Configure one dedicated `MPESA_RETAILER_*` set for the retailer account. These credentials are used for retailer float-deposit STK Push, retailer Account Balance queries, and retailer-to-PayAssure B2B transfer. Retailer Account Balance queries use `IdentifierType` 2 instead of the standard Account Balance API's default of 4.
 
 ```dotenv
 MPESA_RETAILER_ENVIRONMENT=production
 MPESA_RETAILER_CONSUMER_KEY=<retailer-consumer-key>
 MPESA_RETAILER_CONSUMER_SECRET=<retailer-consumer-secret>
 MPESA_RETAILER_SHORTCODE=<retailer-shortcode>
+MPESA_RETAILER_PARTY_B=<retailer-buy-goods-till>
 MPESA_RETAILER_PASSKEY=<retailer-stk-passkey>
 MPESA_RETAILER_PARTY_A=<retailer-party-a>
 MPESA_RETAILER_INITIATOR_NAME=<retailer-initiator>
@@ -137,8 +138,9 @@ MPESA_RETAILER_PAYASSURE_SHORTCODE=<payassure-receiving-shortcode>
 Details:
 
 - `MPESA_RETAILER_PARTY_A` is optional and defaults to `MPESA_RETAILER_SHORTCODE`.
+- `MPESA_RETAILER_PARTY_B` is required for retailer float-deposit STK Push and must be the Buy Goods Till number, different from `MPESA_RETAILER_SHORTCODE`.
 - `MPESA_RETAILER_PASSKEY` is required for retailer float-deposit STK Push.
-- Account Balance and escrow B2B use the existing `ProductionCertificate.cer` certificate.
+- Retailer Account Balance and escrow B2B use the existing `ProductionCertificate.cer` certificate.
 - `MPESA_RETAILER_CALLBACK_URL` must be publicly reachable by Safaricom. The application appends the callback paths below.
 - Never commit real credentials, security credentials, or certificates to source control.
 - The retailer environment must match the credentials. Sandbox credentials must not be used with production endpoints.
@@ -168,7 +170,8 @@ Rules:
 
 - `amount` must be a positive integer KES amount.
 - `payerPhoneNumber` must be a valid Kenyan phone number.
-- The STK request uses `MPESA_RETAILER_CONSUMER_KEY`, `MPESA_RETAILER_CONSUMER_SECRET`, `MPESA_RETAILER_SHORTCODE`, and `MPESA_RETAILER_PASSKEY`.
+- The STK request uses `MPESA_RETAILER_CONSUMER_KEY`, `MPESA_RETAILER_CONSUMER_SECRET`, `MPESA_RETAILER_SHORTCODE`, `MPESA_RETAILER_PARTY_B`, and `MPESA_RETAILER_PASSKEY`.
+- The retailer Account Balance request uses the `MPESA_RETAILER_*` credentials, shortcode/party A, initiator, and callback configuration, with `IdentifierType` set to `2`.
 - The callback is isolated from normal settlement payment callbacks, so a float deposit cannot trigger settlement splitting.
 - Creating the request or receiving an STK acceptance does not add available funds.
 - Only a successful callback with an exact amount match marks the deposit `SUCCEEDED`; that confirmed deposit is then included in the derived balance.

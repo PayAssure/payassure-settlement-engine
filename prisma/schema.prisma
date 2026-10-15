@@ -320,6 +320,7 @@ model RetailerEscrowFloatDeposit {
 
 model RetailerEscrowReconciliation {
   id               String   @id @default(cuid())
+  retailerMerchantId String?
   status           String   @default("PENDING")
   expectedBalance  Decimal  @db.Decimal(18, 2)
   observedBalance  Decimal? @db.Decimal(18, 2)
@@ -332,6 +333,7 @@ model RetailerEscrowReconciliation {
   completedAt      DateTime?
 
   @@index([status, createdAt])
+  @@index([retailerMerchantId, createdAt])
   @@map("retailer_escrow_reconciliations")
 }
 
@@ -441,4 +443,3 @@ model B2BPayoutRetryPolicy {
 
   @@map("b2b_payout_retry_policies")
 }
-

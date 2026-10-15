@@ -5,6 +5,26 @@ import { retailerEscrowReconciliationService, retailerEscrowTransferService, ret
 import { EscrowTransferCallbacksBase } from './escrow-transfer-callbacks.base';
 
 export abstract class EscrowBalanceCallbacksBase extends EscrowTransferCallbacksBase {
+  @Post('callbacks/mpesa/retailer-escrow-balance')
+  @ApiExcludeEndpoint()
+  @ApiOperation({ summary: 'Receive the general retailer escrow account balance result' })
+  @ApiResponse({ status: 200, description: 'Retailer escrow account balance result received and acknowledged' })
+  async receiveRetailerEscrowBalanceCallback(@Req() req: Request, @Res() res: Response) {
+    const timestamp = new Date().toISOString();
+    this.logger.log('[PAYMENT][RETAILER_ESCROW_BALANCE][CALLBACK]', JSON.stringify({ timestamp, body: req.body }));
+    return res.status(200).json({ Result: { ResultCode: '0', ResultDesc: 'Retailer escrow account balance result received' } });
+  }
+
+  @Post('callbacks/mpesa/retailer-escrow-balance-timeout')
+  @ApiExcludeEndpoint()
+  @ApiOperation({ summary: 'Receive the general retailer escrow account balance timeout' })
+  @ApiResponse({ status: 200, description: 'Retailer escrow account balance timeout received and acknowledged' })
+  async receiveRetailerEscrowBalanceTimeout(@Req() req: Request, @Res() res: Response) {
+    const timestamp = new Date().toISOString();
+    this.logger.warn('[PAYMENT][RETAILER_ESCROW_BALANCE][TIMEOUT]', JSON.stringify({ timestamp, body: req.body }));
+    return res.status(200).json({ Result: { ResultCode: '0', ResultDesc: 'Retailer escrow account balance timeout received' } });
+  }
+
   @Post('callbacks/mpesa/retailer-float-deposit/:depositId')
   @ApiExcludeEndpoint()
   @ApiOperation({ summary: 'Receive a retailer float deposit STK callback', description: 'Updates the retailer expected float only after a successful callback. Replayed callbacks are acknowledged without a second balance update.' })

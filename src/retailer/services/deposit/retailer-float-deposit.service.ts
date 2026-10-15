@@ -33,6 +33,13 @@ class RetailerFloatDepositService extends MpesaStkOperationsBase {
     }
 
     const config = getRetailerEscrowMpesaConfig();
+    if (!config.partyB) {
+      throw new Error('Missing required retailer M-Pesa configuration: MPESA_RETAILER_PARTY_B');
+    }
+    if (config.partyB === config.shortcode) {
+      throw new Error('MPESA_RETAILER_PARTY_B must differ from MPESA_RETAILER_SHORTCODE for Buy Goods STK Push');
+    }
+
     const callbackToken = randomUUID();
     const deposit = await prisma.retailerEscrowFloatDeposit.create({
       data: {
@@ -58,10 +65,10 @@ class RetailerFloatDepositService extends MpesaStkOperationsBase {
       BusinessShortCode: config.shortcode,
       Password: this.buildPassword(config.shortcode, config.passkey, timestamp),
       Timestamp: timestamp,
-      TransactionType: 'CustomerPayBillOnline',
+      TransactionType: 'CustomerBuyGoodsOnline',
       Amount: amount,
       PartyA: deposit.payerPhone,
-      PartyB: config.shortcode,
+      PartyB: config.partyB,
       PhoneNumber: deposit.payerPhone,
       CallBackURL: callbackUrl.toString(),
       AccountReference: `FLOAT-${deposit.id}`,

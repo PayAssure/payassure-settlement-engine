@@ -19,7 +19,7 @@ export abstract class MpesaBalanceControllerBase extends MpesaHealthStkControlle
   @Post('mpesa/escrow-balance')
   @ApiOperation({
     summary: 'Get the retailer escrow account balance',
-    description: 'Queries the retailer escrow balance using the dedicated MPESA_RETAILER_* sandbox credentials configured for escrow checks and B2B transfers.',
+    description: 'Queries the retailer escrow balance using MPESA_RETAILER_* credentials and IdentifierType 2.',
   })
   @ApiResponse({ status: 200, description: 'Escrow balance query accepted; the raw Safaricom account-balance response is returned.' })
   @ApiResponse({ status: 500, description: 'The retailer M-Pesa credentials are missing or Safaricom rejected the retailer escrow balance request.' })

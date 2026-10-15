@@ -7,15 +7,15 @@ import { getEscrowResult, readEscrowWorkingBalance, type EscrowJsonRecord } from
 class RetailerEscrowReconciliationService {
   private readonly logger = new Logger(RetailerEscrowReconciliationService.name);
 
-  async requestReconciliation(): Promise<EscrowJsonRecord> {
+  async requestReconciliation(retailerMerchantId?: string): Promise<EscrowJsonRecord> {
     const [deposits, transfers] = await prisma.$transaction(
       async (tx) => Promise.all([
         tx.retailerEscrowFloatDeposit.aggregate({
-          where: { status: 'SUCCEEDED' },
+          where: { status: 'SUCCEEDED', ...(retailerMerchantId ? { retailerMerchantId } : {}) },
           _sum: { amount: true },
         }),
         tx.retailerEscrowTransfer.aggregate({
-          where: { status: 'SUCCEEDED' },
+          where: { status: 'SUCCEEDED', ...(retailerMerchantId ? { retailerMerchantId } : {}) },
           _sum: { amount: true },
         }),
       ]),
@@ -23,14 +23,14 @@ class RetailerEscrowReconciliationService {
     );
     const expectedBalance = Number(deposits._sum.amount ?? 0) - Number(transfers._sum.amount ?? 0);
     const reconciliation = await prisma.retailerEscrowReconciliation.create({
-      data: { expectedBalance },
+      data: { expectedBalance, retailerMerchantId: retailerMerchantId ?? null },
     });
 
     try {
       const response = await retailerEscrowBalanceService.queryBalance(
         `escrow-reconciliation/${reconciliation.id}`,
         `escrow-reconciliation-timeout/${reconciliation.id}`,
-        { reconciliationId: reconciliation.id },
+        { reconciliationId: reconciliation.id, retailerMerchantId },
       );
       const responseCode = String(response.responseCode ?? response.ResponseCode ?? '');
       if (responseCode !== '0') {
@@ -61,6 +61,29 @@ class RetailerEscrowReconciliationService {
       });
       return { reconciliationId: reconciliation.id, status: 'FAILED', expectedBalance, reason };
     }
+  }
+
+  async getRetailerBalanceCheck(reconciliationId: string, retailerMerchantId: string): Promise<EscrowJsonRecord> {
+    const reconciliation = await prisma.retailerEscrowReconciliation.findFirst({
+      where: { id: reconciliationId, retailerMerchantId },
+      select: {
+        id: true,
+        status: true,
+        expectedBalance: true,
+        observedBalance: true,
+        difference: true,
+        failureReason: true,
+        createdAt: true,
+        completedAt: true,
+      },
+    });
+    if (!reconciliation) throw new NotFoundException(`Escrow balance check ${reconciliationId} was not found`);
+    return {
+      ...reconciliation,
+      expectedBalance: Number(reconciliation.expectedBalance),
+      observedBalance: reconciliation.observedBalance === null ? null : Number(reconciliation.observedBalance),
+      difference: reconciliation.difference === null ? null : Number(reconciliation.difference),
+    };
   }
 
   async handleCallback(reconciliationId: string, body: EscrowJsonRecord): Promise<EscrowJsonRecord> {

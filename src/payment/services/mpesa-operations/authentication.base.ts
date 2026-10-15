@@ -45,9 +45,10 @@ export abstract class MpesaAuthenticationBase extends MpesaEnvironmentBase {
     } catch {
       payload = responseBody || '(empty response body)';
     }
-    const token = typeof payload === 'object' && payload !== null && typeof (payload as Record<string, unknown>).access_token === 'string'
+    const accessToken = typeof payload === 'object' && payload !== null && typeof (payload as Record<string, unknown>).access_token === 'string'
       ? (payload as Record<string, unknown>).access_token as string
       : undefined;
+    const token = accessToken?.trim();
     if (!response.ok || !token) {
       const safePayload = sanitizeMpesaResponsePayload(payload);
       const details = typeof safePayload === 'string' ? safePayload : JSON.stringify(safePayload);
@@ -72,6 +73,16 @@ export abstract class MpesaAuthenticationBase extends MpesaEnvironmentBase {
       });
       throw new Error(`M-Pesa authentication failed: HTTP ${response.status} ${response.statusText}; ${details}`);
     }
+    console.log('[PAYMENT][AUTHENTICATION] M-Pesa OAuth token acquired', {
+      operation,
+      tokenUrl,
+      environment: environment || 'not set (defaulting to sandbox)',
+      credentialsSource: credentials ? 'request-specific credentials' : 'MPESA_* environment variables',
+      consumerKeyConfigured: Boolean(consumerKey),
+      consumerKeyLength: consumerKey?.length ?? 0,
+      tokenReceived: true,
+      tokenLength: token.length,
+    });
     return token;
   }
 }

@@ -1,8 +1,9 @@
-import { Get, Param, Put, Body, Req, Post, UseGuards } from '@nestjs/common';
+import { Get, NotFoundException, Param, Put, Body, Req, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { retailerEscrowTransferService, retailerFloatDepositService } from '../../retailer';
 import { retailerEscrowReconciliationService } from '../../retailer';
+import { retailerEscrowBalanceService } from '../../retailer';
 import { RetailerEscrowFloatDto } from '../dto/retailer-escrow-float.dto';
 import { RetailerFloatDepositDto } from '../dto/retailer-float-deposit.dto';
 import { assertAdministrator } from './assert-administrator';
@@ -33,6 +34,29 @@ export abstract class RetailerFloatControllerBase extends EscrowReadControllerBa
   async getRetailerFloat(@Req() request: any) {
     const merchantId = await retailerEscrowTransferService.getAuthenticatedRetailerMerchantId(request.user);
     return retailerEscrowTransferService.getFloat(merchantId);
+  }
+
+  @Post('retailer/float/balance')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Check the authenticated retailer escrow account balance',
+    description: 'Submits a general M-Pesa Account Balance query for the authenticated retailer account. Safaricom returns the balance asynchronously to the retailer escrow balance callback.',
+  })
+  @ApiResponse({ status: 201, description: 'Retailer escrow account balance query submitted; the actual balance is delivered asynchronously to the callback' })
+  @ApiResponse({ status: 401, description: 'Missing or invalid bearer token' })
+  @ApiResponse({ status: 403, description: 'Authenticated user does not belong to this retailer' })
+  @ApiResponse({ status: 404, description: 'Retailer float configuration not found' })
+  async checkRetailerFloatBalance(@Req() request: any) {
+    const merchantId = await retailerEscrowTransferService.getAuthenticatedRetailerMerchantId(request.user);
+    if (!await retailerEscrowTransferService.hasFloatConfig(merchantId)) {
+      throw new NotFoundException(`Escrow float is not configured for retailer ${merchantId}`);
+    }
+    return retailerEscrowBalanceService.queryBalance(
+      'retailer-escrow-balance',
+      'retailer-escrow-balance-timeout',
+      { retailerMerchantId: merchantId },
+    );
   }
 
   @Put('retailers/:merchantId/float')
