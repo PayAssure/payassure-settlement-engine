@@ -64,6 +64,14 @@ class RetailerEscrowMpesaFundingService {
       });
       return null;
     }
+    if (!transfer.settlementId) {
+      this.logger.warn('[ESCROW_TRANSFER][MPESA_FUNDING][CALLBACK_UNMATCHED]', {
+        merchantTransactionReference,
+        transferId: transfer.id,
+        reason: 'M-Pesa funding callbacks require a settlement-linked transfer',
+      });
+      return null;
+    }
 
     this.logger.log('[ESCROW_TRANSFER][MPESA_FUNDING][CALLBACK_RECEIVED]', {
       settlementId: transfer.settlementId,

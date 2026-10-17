@@ -37,7 +37,16 @@ export abstract class MpesaRequestBase extends MpesaAuthenticationBase {
       }
     };
 
+    const logTokenUse = (accessToken: string, requestAttempt: number) => {
+      this.logger.log('[PAYMENT][AUTHENTICATION] Sending M-Pesa API request with access token', {
+        endpoint,
+        environment: environment || 'not set (defaulting to sandbox)',
+        attempt: requestAttempt,
+        tokenFingerprint: this.getAccessTokenFingerprint(accessToken),
+      });
+    };
     let token = await this.getAccessToken(credentials, endpoint, loggedPayload);
+    logTokenUse(token, 1);
     let response = await sendRequest(token);
     let data = await readResponse(response);
     const responseError = typeof data === 'object' && data !== null
@@ -49,6 +58,7 @@ export abstract class MpesaRequestBase extends MpesaAuthenticationBase {
         environment: environment || 'not set (defaulting to sandbox)',
       });
       token = await this.getAccessToken(credentials, endpoint, loggedPayload);
+      logTokenUse(token, 2);
       response = await sendRequest(token);
       data = await readResponse(response);
     }
@@ -60,6 +70,7 @@ export abstract class MpesaRequestBase extends MpesaAuthenticationBase {
         statusText: response.statusText,
         errorResponse: safeResponse,
         url,
+        responseUrl: response.url || url,
         environment: environment || 'not set (defaulting to sandbox)',
         requestPayload: loggedPayload,
       });

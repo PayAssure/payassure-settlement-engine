@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../../../common/database/prisma';
@@ -61,18 +61,15 @@ class RetailerEscrowBalanceQueryService {
 
     const transferId = randomUUID();
     let created: Awaited<ReturnType<typeof prisma.retailerEscrowTransfer.create>>;
-    let availableBalance: number;
+    let availableBalance = 0;
     try {
       ({ created, availableBalance } = await prisma.$transaction(async (tx) => {
         const claimed = await tx.retailerEscrowFloat.updateMany({
-          where: {
-            id: config.id,
-            activeTransferId: null,
-          },
+          where: { id: config.id },
           data: { activeTransferId: transferId },
         });
         if (claimed.count !== 1) {
-          throw new ConflictException('Another escrow transfer is already active for this retailer');
+          throw new NotFoundException(`Escrow float for retailer ${request.retailerMerchantId} was not found`);
         }
         const currentAvailableBalance = await retailerEscrowFloatService.getAvailableBalance(config.id, tx);
         if (currentAvailableBalance < request.cashAmount) {
@@ -94,6 +91,10 @@ class RetailerEscrowBalanceQueryService {
             requiredBalance: new Prisma.Decimal(currentAvailableBalance),
             status: 'BALANCE_VERIFIED',
           },
+        });
+        await tx.retailerEscrowFloat.updateMany({
+          where: { id: config.id, activeTransferId: transferId },
+          data: { activeTransferId: null },
         });
         return { created: transfer, availableBalance: currentAvailableBalance };
       }));
@@ -147,6 +148,57 @@ class RetailerEscrowBalanceQueryService {
     }
 
     return retailerEscrowPayoutFlowService.dispatchB2bTransfer(created.id);
+  }
+
+  async startStandaloneTransfer(retailerMerchantId: string, amount: number): Promise<EscrowJsonRecord> {
+    if (!Number.isFinite(amount) || amount <= 0 || !Number.isInteger(amount)) {
+      throw new BadRequestException('amount must be a positive integer amount in KES');
+    }
+
+    const config = await prisma.retailerEscrowFloat.findUnique({
+      where: { merchantId: retailerMerchantId },
+    });
+    if (!config) {
+      throw new NotFoundException(`Escrow float is not configured for retailer ${retailerMerchantId}`);
+    }
+
+    const transferId = randomUUID();
+    const merchantTransactionReference = `E${randomUUID().replace(/-/g, '').slice(0, 11).toUpperCase()}`;
+    await prisma.$transaction(async (tx) => {
+      const claimed = await tx.retailerEscrowFloat.updateMany({
+        where: { id: config.id },
+        data: { activeTransferId: transferId },
+      });
+      if (claimed.count !== 1) {
+        throw new NotFoundException(`Escrow float for retailer ${retailerMerchantId} was not found`);
+      }
+      await tx.retailerEscrowTransfer.create({
+        data: {
+          id: transferId,
+          settlementId: null,
+          retailerEscrowFloatId: config.id,
+          retailerMerchantId,
+          merchantTransactionReference,
+          amount: new Prisma.Decimal(amount),
+          mpesaAmount: new Prisma.Decimal(0),
+          mpesaStatus: 'NOT_REQUIRED',
+          requiredBalance: new Prisma.Decimal(0),
+          status: 'BALANCE_VERIFIED',
+        },
+      });
+      await tx.retailerEscrowFloat.updateMany({
+        where: { id: config.id, activeTransferId: transferId },
+        data: { activeTransferId: null },
+      });
+    });
+
+    this.logger.log('[ESCROW_TRANSFER][STANDALONE][CREATED]', {
+      retailerMerchantId,
+      transferId,
+      merchantTransactionReference,
+      amount,
+    });
+    return retailerEscrowPayoutFlowService.dispatchB2bTransfer(transferId);
   }
 
   async handleTimeout(transferId: string, body: EscrowJsonRecord): Promise<EscrowJsonRecord> {

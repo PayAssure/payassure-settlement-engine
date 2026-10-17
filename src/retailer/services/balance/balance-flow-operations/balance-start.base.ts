@@ -3,6 +3,10 @@ import { retailerEscrowBalanceCallbackService } from '../retailer-escrow-balance
 import type { EscrowJsonRecord } from '../../retailer-escrow-transfer.helpers';
 
 export abstract class BalanceStartBase {
+  startStandaloneTransfer(retailerMerchantId: string, amount: number): Promise<EscrowJsonRecord> {
+    return retailerEscrowBalanceQueryService.startStandaloneTransfer(retailerMerchantId, amount);
+  }
+
   startForSettlement(request: {
     settlementId: string;
     merchantTransactionReference: string;

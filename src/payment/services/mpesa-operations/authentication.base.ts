@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../../common/database/prisma';
 import { getMpesaEnv } from '../../config/mpesa.env';
@@ -6,6 +7,10 @@ import { MpesaEnvironmentBase } from './environment.base';
 import { sanitizeMpesaResponsePayload } from './request-logging';
 
 export abstract class MpesaAuthenticationBase extends MpesaEnvironmentBase {
+  protected getAccessTokenFingerprint(token: string): string {
+    return createHash('sha256').update(token).digest('hex').slice(0, 12);
+  }
+
   protected async logRequest(entry: PaymentRequestLog): Promise<void> {
     try {
       await prisma.mpesaRequestLog.create({
@@ -82,6 +87,7 @@ export abstract class MpesaAuthenticationBase extends MpesaEnvironmentBase {
       consumerKeyLength: consumerKey?.length ?? 0,
       tokenReceived: true,
       tokenLength: token.length,
+      tokenFingerprint: this.getAccessTokenFingerprint(token),
     });
     return token;
   }

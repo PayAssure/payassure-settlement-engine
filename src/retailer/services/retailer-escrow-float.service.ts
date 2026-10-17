@@ -14,13 +14,13 @@ class RetailerEscrowFloatService {
         participant: {
           email: user.email,
           participantType: ParticipantType.RETAILER,
-          status: ParticipantStatus.ACTIVE,
+          status: { in: [ParticipantStatus.ACTIVE, ParticipantStatus.LIVE] },
         },
       },
       include: { participant: true },
     });
     if (!integration) {
-      throw new ForbiddenException({ statusCode: 403, message: 'Authenticated user does not belong to an active retailer', error: 'RETAILER_USER_MISMATCH' });
+      throw new ForbiddenException({ statusCode: 403, message: 'Authenticated user does not belong to an active or live retailer', error: 'RETAILER_USER_MISMATCH' });
     }
     return integration.merchantId;
   }
@@ -48,7 +48,7 @@ class RetailerEscrowFloatService {
     floatId: string,
     client: Prisma.TransactionClient = prisma,
   ): Promise<number> {
-    const [deposits, transfers] = await Promise.all([
+    const [deposits, transfers, reservedTransfers] = await Promise.all([
       client.retailerEscrowFloatDeposit.aggregate({
         where: { retailerEscrowFloatId: floatId, status: 'SUCCEEDED' },
         _sum: { amount: true },
@@ -57,8 +57,17 @@ class RetailerEscrowFloatService {
         where: { retailerEscrowFloatId: floatId, status: 'SUCCEEDED' },
         _sum: { amount: true },
       }),
+      client.retailerEscrowTransfer.aggregate({
+        where: {
+          retailerEscrowFloatId: floatId,
+          status: { in: ['BALANCE_PENDING', 'BALANCE_VERIFIED', 'WAITING_FOR_MPESA', 'TRANSFER_PENDING'] },
+        },
+        _sum: { amount: true },
+      }),
     ]);
-    return Number(deposits._sum.amount ?? 0) - Number(transfers._sum.amount ?? 0);
+    return Number(deposits._sum.amount ?? 0)
+      - Number(transfers._sum.amount ?? 0)
+      - Number(reservedTransfers._sum.amount ?? 0);
   }
 
   async setFloat(

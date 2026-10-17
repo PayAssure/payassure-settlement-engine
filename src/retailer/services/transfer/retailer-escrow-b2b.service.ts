@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { getRetailerEscrowMpesaConfig, getRetailerEscrowMpesaLogContext } from '../../config/retailer-escrow.env';
-import { resolveMpesaCallbackUrl } from '../../../payment/config/mpesa.env';
+import { getMpesaEnv, resolveMpesaCallbackUrl } from '../../../payment/config/mpesa.env';
 import { b2bService } from '../../../payment/services/b2b.service';
 
 class RetailerEscrowB2bService {
@@ -15,9 +15,9 @@ class RetailerEscrowB2bService {
     transferId?: string;
   }): Promise<Record<string, unknown>> {
     const env = getRetailerEscrowMpesaConfig();
-    const destinationShortcode = process.env.MPESA_RETAILER_PAYASSURE_SHORTCODE?.trim();
+    const destinationShortcode = getMpesaEnv().shortcode?.trim();
     if (!destinationShortcode) {
-      throw new Error('Missing required retailer M-Pesa configuration: MPESA_RETAILER_PAYASSURE_SHORTCODE');
+      throw new Error('Missing required M-Pesa configuration: MPESA_SHORTCODE');
     }
     const resultUrl = resolveMpesaCallbackUrl(env.callbackUrl, request.callbackPath, '/payments/callbacks/mpesa');
     const timeoutUrl = resolveMpesaCallbackUrl(env.callbackUrl, request.timeoutCallbackPath, '/payments/callbacks/mpesa');
@@ -28,10 +28,11 @@ class RetailerEscrowB2bService {
       amount: request.amount,
       retailerMpesaConfig: {
         ...getRetailerEscrowMpesaLogContext(env),
-        payassureShortcode: { variable: 'MPESA_RETAILER_PAYASSURE_SHORTCODE', value: destinationShortcode },
+        sourceShortcode: { variable: 'MPESA_RETAILER_SHORTCODE', value: env.shortcode },
+        destinationShortcode: { variable: 'MPESA_SHORTCODE', value: destinationShortcode },
       },
       request: {
-        partyA: env.partyA,
+        partyA: env.shortcode,
         partyB: destinationShortcode,
         initiatorName: env.initiatorName,
         resultUrl,
@@ -42,7 +43,7 @@ class RetailerEscrowB2bService {
     return b2bService.initiateB2B({
       amount: request.amount,
       recipientShortCode: destinationShortcode,
-      partyA: env.partyA,
+      partyA: env.shortcode,
       initiatorName: env.initiatorName,
       initiatorPassword: env.initiatorPassword,
       accountReference: request.merchantTransactionReference,

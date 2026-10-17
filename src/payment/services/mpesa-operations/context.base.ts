@@ -1,3 +1,3 @@
 export abstract class MpesaServiceContextBase {
-  protected abstract readonly logger: Pick<Console, 'warn' | 'error'>;
+  protected abstract readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
 }

@@ -228,7 +228,6 @@ test('retailer escrow initiation trusts the tracked remainder and reports the ex
   try {
     floatModel.findUnique = async () => float;
     floatModel.updateMany = async ({ where }: any) => {
-      assert.equal(where.activeTransferId, null);
       assert.equal('expectedRemainingBalance' in where, false);
       locked = true;
       return { count: 1 };
@@ -276,6 +275,168 @@ test('retailer escrow initiation trusts the tracked remainder and reports the ex
     settlementModel.update = original.settlementUpdate;
     retailerEscrowPayoutFlowService.dispatchB2bTransfer = original.dispatch;
     retailerEscrowFloatService.getAvailableBalance = original.getAvailableBalance;
+  }
+});
+
+test('retailer initiates B2B without checking the local ledger balance and gets generated identifiers', async () => {
+  const originalTransaction = (prisma as any).$transaction;
+  const floatModel = (prisma as any).retailerEscrowFloat;
+  const transferModel = (prisma as any).retailerEscrowTransfer;
+  const original = {
+    floatFindUnique: floatModel.findUnique,
+    floatUpdateMany: floatModel.updateMany,
+    transferCreate: transferModel.create,
+    dispatch: retailerEscrowPayoutFlowService.dispatchB2bTransfer,
+    getAvailableBalance: retailerEscrowFloatService.getAvailableBalance,
+  };
+  const float = { id: 'float-withdrawal-test', activeTransferId: 'already-running-transfer' };
+  let createdTransfer: any;
+
+  try {
+    floatModel.findUnique = async () => float;
+    floatModel.updateMany = async ({ where }: any) => {
+      assert.equal(where.id, float.id);
+      return { count: 1 };
+    };
+    transferModel.create = async ({ data }: any) => {
+      createdTransfer = data;
+      return { id: data.id, ...data };
+    };
+    retailerEscrowFloatService.getAvailableBalance = async () => {
+      throw new Error('Standalone B2B initiation must not inspect the local ledger balance');
+    };
+    (prisma as any).$transaction = async (callback: (tx: any) => Promise<unknown>) => callback(prisma);
+    retailerEscrowPayoutFlowService.dispatchB2bTransfer = async (transferId: string) => ({
+      accepted: true,
+      status: 'TRANSFER_PENDING',
+      transferId,
+      transactionReference: createdTransfer.merchantTransactionReference,
+    });
+
+    const started = await retailerEscrowBalanceQueryService.startStandaloneTransfer('retailer-withdrawal-test', 5000);
+
+    assert.equal(started.status, 'TRANSFER_PENDING');
+    assert.equal(started.transferId, createdTransfer.id);
+    assert.match(createdTransfer.id, /^[0-9a-f-]{36}$/i);
+    assert.equal(createdTransfer.settlementId, null);
+    assert.equal(createdTransfer.retailerMerchantId, 'retailer-withdrawal-test');
+    assert.equal(Number(createdTransfer.amount), 5000);
+    assert.equal(Number(createdTransfer.requiredBalance), 0);
+    assert.equal(createdTransfer.status, 'BALANCE_VERIFIED');
+    assert.match(createdTransfer.merchantTransactionReference, /^E[A-F0-9]{11}$/);
+    assert.equal(started.transactionReference, createdTransfer.merchantTransactionReference);
+  } finally {
+    (prisma as any).$transaction = originalTransaction;
+    floatModel.findUnique = original.floatFindUnique;
+    floatModel.updateMany = original.floatUpdateMany;
+    transferModel.create = original.transferCreate;
+    retailerEscrowPayoutFlowService.dispatchB2bTransfer = original.dispatch;
+    retailerEscrowFloatService.getAvailableBalance = original.getAvailableBalance;
+  }
+});
+
+test('available escrow balance reserves amounts from all active transfers', async () => {
+  const floatDepositModel = (prisma as any).retailerEscrowFloatDeposit;
+  const transferModel = (prisma as any).retailerEscrowTransfer;
+  const original = {
+    depositAggregate: floatDepositModel.aggregate,
+    transferAggregate: transferModel.aggregate,
+  };
+  const existingTransfers = [
+    { amount: 2500, status: 'TRANSFER_PENDING' },
+    { amount: 1500, status: 'BALANCE_VERIFIED' },
+    { amount: 500, status: 'SUCCEEDED' },
+    { amount: 200, status: 'FAILED' },
+  ];
+
+  try {
+    floatDepositModel.aggregate = async ({ where }: any) => {
+      assert.equal(where.status, 'SUCCEEDED');
+      return { _sum: { amount: 10000 } };
+    };
+    transferModel.aggregate = async ({ where }: any) => {
+      if (where.status === 'SUCCEEDED') {
+        return { _sum: { amount: 500 } };
+      }
+      assert.deepEqual(where.status.in, [
+        'BALANCE_PENDING',
+        'BALANCE_VERIFIED',
+        'WAITING_FOR_MPESA',
+        'TRANSFER_PENDING',
+      ]);
+      return {
+        _sum: {
+          amount: existingTransfers
+            .filter((transfer) => where.status.in.includes(transfer.status))
+            .reduce((sum, transfer) => sum + transfer.amount, 0),
+        },
+      };
+    };
+
+    assert.equal(await retailerEscrowFloatService.getAvailableBalance('float-reserve-test'), 5500);
+  } finally {
+    floatDepositModel.aggregate = original.depositAggregate;
+    transferModel.aggregate = original.transferAggregate;
+  }
+});
+
+test('standalone escrow transfer callback completes without settlement allocation', async () => {
+  const originalTransaction = (prisma as any).$transaction;
+  const transferModel = (prisma as any).retailerEscrowTransfer;
+  const floatModel = (prisma as any).retailerEscrowFloat;
+  const settlementModel = (prisma as any).settlement;
+  const original = {
+    transferFindUnique: transferModel.findUnique,
+    transferFindUniqueOrThrow: transferModel.findUniqueOrThrow,
+    transferUpdate: transferModel.update,
+    floatUpdateMany: floatModel.updateMany,
+    settlementFindUnique: settlementModel.findUnique,
+  };
+  const transfer: any = {
+    id: 'standalone-transfer-test',
+    settlementId: null,
+    retailerEscrowFloatId: 'float-standalone-test',
+    amount: 5000,
+    observedBalance: 7500,
+    status: 'TRANSFER_PENDING',
+  };
+  const float = { id: 'float-standalone-test', activeTransferId: transfer.id };
+  let settlementLookupCount = 0;
+
+  try {
+    transferModel.findUnique = async () => transfer;
+    transferModel.findUniqueOrThrow = async () => transfer;
+    transferModel.update = async ({ data }: any) => {
+      Object.assign(transfer, data);
+      return transfer;
+    };
+    floatModel.updateMany = async ({ where, data }: any) => {
+      if (where.activeTransferId === float.activeTransferId) Object.assign(float, data);
+      return float;
+    };
+    settlementModel.findUnique = async () => {
+      settlementLookupCount += 1;
+      return null;
+    };
+    (prisma as any).$transaction = async (callback: (tx: any) => Promise<unknown>) => callback(prisma);
+
+    const callbackResult = await retailerEscrowPayoutFlowService.handleTransferCallback(transfer.id, {
+      Result: { ResultCode: 0, ResultDesc: 'Transfer completed', TransactionID: 'MPESA-RECEIPT-1' },
+    });
+
+    assert.equal(callbackResult.status, 'SUCCEEDED');
+    assert.equal(callbackResult.standalone, true);
+    assert.equal(callbackResult.merchantTransactionReference, undefined);
+    assert.equal(float.activeTransferId, null);
+    assert.equal(transfer.status, 'SUCCEEDED');
+    assert.equal(settlementLookupCount, 0);
+  } finally {
+    (prisma as any).$transaction = originalTransaction;
+    transferModel.findUnique = original.transferFindUnique;
+    transferModel.findUniqueOrThrow = original.transferFindUniqueOrThrow;
+    transferModel.update = original.transferUpdate;
+    floatModel.updateMany = original.floatUpdateMany;
+    settlementModel.findUnique = original.settlementFindUnique;
   }
 });
 
@@ -334,7 +495,10 @@ test('retailer escrow clears the transfer lock only after confirmed B2B callback
       Object.assign(float, data);
       return float;
     };
-    floatModel.updateMany = async () => ({ count: 1 });
+    floatModel.updateMany = async ({ where, data }: any) => {
+      if (where.activeTransferId === float.activeTransferId) Object.assign(float, data);
+      return { count: 1 };
+    };
     settlementModel.findUnique = async () => settlement;
     settlementModel.findUniqueOrThrow = async () => settlement;
     settlementModel.update = async ({ data }: any) => {
@@ -360,7 +524,7 @@ test('retailer escrow clears the transfer lock only after confirmed B2B callback
 
     assert.equal(balanceResult.status, 'TRANSFER_PENDING');
     assert.equal(b2bAmount, 200);
-    assert.equal(float.activeTransferId, 'transfer-test-1', 'the lock remains while transfer success is unconfirmed');
+    assert.equal(float.activeTransferId, 'transfer-test-1', 'legacy active locks remain associated with the pending transfer');
 
     const transferResult = await retailerEscrowTransferService.handleTransferCallback('transfer-test-1', {
       Result: { ResultCode: 0, ResultDesc: 'Transfer completed' },

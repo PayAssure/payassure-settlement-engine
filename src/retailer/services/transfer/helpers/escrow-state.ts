@@ -28,11 +28,13 @@ export async function failEscrowTransfer(
       where: { id: transfer.retailerEscrowFloatId, activeTransferId: transferId },
       data: { activeTransferId: null },
     });
-    await updateEscrowSettlementMetadata(transfer.settlementId, {
-      escrowStatus: status,
-      escrowFailureReason: reason,
-      ...(observedBalance === undefined ? {} : { observedBalance }),
-    }, tx, SettlementStatus.FAILED);
+    if (transfer.settlementId) {
+      await updateEscrowSettlementMetadata(transfer.settlementId, {
+        escrowStatus: status,
+        escrowFailureReason: reason,
+        ...(observedBalance === undefined ? {} : { observedBalance }),
+      }, tx, SettlementStatus.FAILED);
+    }
   });
 }
 

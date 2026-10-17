@@ -19,6 +19,9 @@ class RetailerEscrowBalanceCallbackService {
       });
       return { received: true, duplicate: true, status: transfer.status };
     }
+    if (!transfer.settlementId) {
+      throw new Error(`Standalone escrow transfer ${transferId} cannot receive a balance-query callback`);
+    }
 
     const result = getEscrowResult(body);
     const resultCode = String(result.ResultCode ?? result.resultCode ?? '');
@@ -99,6 +102,9 @@ class RetailerEscrowBalanceCallbackService {
     });
 
     if (Number(transfer.mpesaAmount) > 0) {
+      if (!transfer.settlementId) {
+        throw new Error(`Standalone escrow transfer ${transferId} cannot use settlement M-Pesa funding`);
+      }
       return retailerEscrowMpesaFundingService.startFunding({
         id: transfer.id,
         settlementId: transfer.settlementId,

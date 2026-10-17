@@ -87,7 +87,9 @@ test('editing dailyFloat without location fields preserves the stored float meta
       dailyFloat: updateData.dailyFloat,
     });
     depositModel.aggregate = async () => ({ _sum: { amount: 9000 } });
-    transferModel.aggregate = async () => ({ _sum: { amount: 2000 } });
+    transferModel.aggregate = async ({ where }: any) => ({
+      _sum: { amount: where.status === 'SUCCEEDED' ? 2000 : 0 },
+    });
 
     const result = await retailerEscrowFloatService.setFloat('pay_retailer_001', 12000);
 

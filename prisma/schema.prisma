@@ -339,11 +339,12 @@ model RetailerEscrowReconciliation {
 
 model RetailerEscrowTransfer {
   id                              String             @id @default(cuid())
-  settlementId                    String
-  settlement                      Settlement         @relation("SettlementEscrowTransfers", fields: [settlementId], references: [id], onDelete: Cascade)
+  settlementId                    String?
+  settlement                      Settlement?        @relation("SettlementEscrowTransfers", fields: [settlementId], references: [id], onDelete: Cascade)
   retailerEscrowFloatId           String
   retailerEscrowFloat             RetailerEscrowFloat @relation("RetailerEscrowFloatTransfers", fields: [retailerEscrowFloatId], references: [id], onDelete: Restrict)
   retailerMerchantId              String
+  merchantTransactionReference    String?
   amount                          Decimal            @db.Decimal(18, 2)
   mpesaAmount                     Decimal            @default(0) @db.Decimal(18, 2)
   mpesaPayerPhone                 String?

@@ -40,33 +40,40 @@ class RetailerEscrowPayoutFlowService {
     await prisma.$transaction(async (tx) => {
       const current = await tx.retailerEscrowTransfer.findUniqueOrThrow({ where: { id: transfer.id } });
       if (current.status !== 'TRANSFER_PENDING') return;
-      await tx.retailerEscrowFloat.update({
-        where: { id: current.retailerEscrowFloatId },
+      await tx.retailerEscrowFloat.updateMany({
+        where: { id: current.retailerEscrowFloatId, activeTransferId: current.id },
         data: { activeTransferId: null },
       });
       await tx.retailerEscrowTransfer.update({
         where: { id: current.id },
         data: { status: 'SUCCEEDED', transferCallback: body as Prisma.InputJsonValue },
       });
-      await updateEscrowSettlementMetadata(current.settlementId, {
-        escrowStatus: 'SUCCEEDED',
-        cashAmount: Number(current.amount),
-        transferCallback: body,
-      }, tx);
+      if (current.settlementId) {
+        await updateEscrowSettlementMetadata(current.settlementId, {
+          escrowStatus: 'SUCCEEDED',
+          cashAmount: Number(current.amount),
+          transferCallback: body,
+        }, tx);
+      }
     });
 
-    const settlement = await prisma.settlement.findUnique({ where: { id: transfer.settlementId } });
+    const settlement = transfer.settlementId
+      ? await prisma.settlement.findUnique({ where: { id: transfer.settlementId } })
+      : null;
     this.logger.log('[ESCROW_TRANSFER][COMPLETE]', {
       settlementId: transfer.settlementId,
       transferId,
       status: 'SUCCEEDED',
       merchantTransactionReference: settlement?.merchantTransactionReference,
+      standalone: !transfer.settlementId,
     });
     return {
       received: true,
       accepted: true,
       status: 'SUCCEEDED',
       transferId: transfer.id,
+      standalone: !transfer.settlementId,
+      ...(transfer.merchantTransactionReference ? { transactionReference: transfer.merchantTransactionReference } : {}),
       merchantTransactionReference: settlement?.merchantTransactionReference,
     };
   }
@@ -82,18 +89,20 @@ class RetailerEscrowPayoutFlowService {
       transferId,
       status: 'TRANSFER_OUTCOME_UNKNOWN',
     });
-    await updateEscrowSettlementMetadata(transfer.settlementId, {
-      escrowStatus: 'TRANSFER_OUTCOME_UNKNOWN',
-      transferTimeoutAt: new Date().toISOString(),
-      transferTimeout: body,
-    });
+    if (transfer.settlementId) {
+      await updateEscrowSettlementMetadata(transfer.settlementId, {
+        escrowStatus: 'TRANSFER_OUTCOME_UNKNOWN',
+        transferTimeoutAt: new Date().toISOString(),
+        transferTimeout: body,
+      });
+    }
     return {
       received: true,
       accepted: true,
       status: 'TRANSFER_PENDING',
       outcome: 'UNKNOWN',
       transferId,
-      message: 'Transfer timeout received. The retailer float remains locked until the result callback confirms the outcome.',
+      message: 'Transfer timeout received. The transfer amount remains reserved until the result callback confirms the outcome.',
     };
   }
 
@@ -127,7 +136,9 @@ class RetailerEscrowPayoutFlowService {
     }
 
     await prisma.retailerEscrowTransfer.update({ where: { id: transferId }, data: { status: 'TRANSFER_PENDING' } });
-    await updateEscrowSettlementMetadata(transfer.settlementId, { escrowStatus: 'TRANSFER_PENDING' });
+    if (transfer.settlementId) {
+      await updateEscrowSettlementMetadata(transfer.settlementId, { escrowStatus: 'TRANSFER_PENDING' });
+    }
     this.logger.log('[ESCROW_TRANSFER][B2B_TRANSFER][DISPATCH_READY]', {
       settlementId: transfer.settlementId,
       transferId,
@@ -137,19 +148,25 @@ class RetailerEscrowPayoutFlowService {
       mpesaStatus: transfer.mpesaStatus,
     });
     try {
-      const settlement = await prisma.settlement.findUniqueOrThrow({ where: { id: transfer.settlementId } });
+      const settlement = transfer.settlementId
+        ? await prisma.settlement.findUniqueOrThrow({ where: { id: transfer.settlementId } })
+        : null;
+      const merchantTransactionReference = settlement?.merchantTransactionReference ?? transfer.merchantTransactionReference;
+      if (!merchantTransactionReference) {
+        throw new Error(`Escrow transfer ${transfer.id} has no merchant transaction reference`);
+      }
       this.logger.log('[ESCROW_TRANSFER][B2B_TRANSFER][START]', {
         settlementId: transfer.settlementId,
         transferId,
         amount: Number(transfer.amount),
-        merchantTransactionReference: settlement.merchantTransactionReference,
+        merchantTransactionReference,
       });
       const response = await retailerEscrowB2bService.transferToPayAssure({
         amount: Number(transfer.amount),
-        merchantTransactionReference: settlement.merchantTransactionReference,
+        merchantTransactionReference,
         callbackPath: `escrow-transfer/${transfer.id}`,
         timeoutCallbackPath: `escrow-transfer-timeout/${transfer.id}`,
-        settlementId: transfer.settlementId,
+        ...(transfer.settlementId ? { settlementId: transfer.settlementId } : {}),
         transferId: transfer.id,
       });
       if (response.success !== true) {
@@ -168,7 +185,13 @@ class RetailerEscrowPayoutFlowService {
         originatorConversationId: response.originatorConversationId,
         conversationId: response.conversationId,
       });
-      return { accepted: true, status: 'TRANSFER_PENDING', transferId, transferRequest: response };
+      return {
+        accepted: true,
+        status: 'TRANSFER_PENDING',
+        transferId,
+        transactionReference: merchantTransactionReference,
+        transferRequest: response,
+      };
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       this.logger.error('[ESCROW_TRANSFER][B2B_TRANSFER][FAILED]', {
@@ -177,7 +200,13 @@ class RetailerEscrowPayoutFlowService {
         error: reason,
       });
       await failEscrowTransfer(transferId, reason, 'FAILED');
-      return { accepted: false, status: 'FAILED', transferId, reason };
+      return {
+        accepted: false,
+        status: 'FAILED',
+        transferId,
+        ...(transfer.merchantTransactionReference ? { transactionReference: transfer.merchantTransactionReference } : {}),
+        reason,
+      };
     }
   }
 }
