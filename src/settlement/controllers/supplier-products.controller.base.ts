@@ -1,8 +1,52 @@
-import { Get, Param } from '@nestjs/common';
-import { ApiOperation, ApiParam, ApiResponse } from '@nestjs/swagger';
+import { ForbiddenException, Get, Param, Req, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { SupplierSettlementControllerBase } from './supplier-settlement.controller.base';
 
 export abstract class SupplierProductsControllerBase extends SupplierSettlementControllerBase {
+  @Get('directory')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'List registered suppliers',
+    description: 'Returns supplier business details, merchant IDs, integration status, and limited payout destination details. Payout identifiers are masked and API credentials are not returned. Administrators only.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Registered suppliers returned successfully.',
+    schema: {
+      example: {
+        success: true,
+        count: 1,
+        suppliers: [{
+          id: 'clx123supplier',
+          merchantId: 'pay_supplier_001',
+          businessName: 'Example Supplies Ltd',
+          businessType: 'LIMITED_COMPANY',
+          status: 'ACTIVE',
+          integration: { environment: 'production', isActive: true },
+          payment: {
+            type: 'MPESA',
+            accountName: 'Example Supplies',
+            provider: 'Safaricom',
+            status: 'VERIFIED',
+            isVerified: true,
+            phoneNumber: '****1234',
+          },
+        }],
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Authentication token is missing or invalid.' })
+  @ApiResponse({ status: 403, description: 'Only administrators can list registered suppliers.' })
+  async getRegisteredSuppliers(@Req() req: { user?: { role?: string } }) {
+    if (!['ADMIN', 'SUPER_ADMIN'].includes(req.user?.role ?? '')) {
+      throw new ForbiddenException('Only administrators can list registered suppliers');
+    }
+
+    return this.supplierDirectoryService.getRegisteredSuppliers();
+  }
+
   @Get('products/:supplierMerchantId')
   @ApiParam({ name: 'supplierMerchantId', example: 'pay_supplier_cement_001', description: 'Supplier merchant ID from the supplier integration credentials.' })
   @ApiOperation({

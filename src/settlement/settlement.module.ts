@@ -7,6 +7,7 @@ import { B2BPayoutIdempotencyService } from './services/b2b-payout-idempotency.s
 import { B2BPayoutRetryService } from './services/b2b-payout-retry.service';
 import { B2BPayoutRetryScheduler } from './services/b2b-payout-retry-scheduler.service';
 import { SupplierProductsService } from './supplier-products.service';
+import { SupplierDirectoryService } from './supplier-directory.service';
 
 @Module({
   controllers: [SettlementController, SupplierController],
@@ -17,6 +18,7 @@ import { SupplierProductsService } from './supplier-products.service';
     B2BPayoutRetryService,
     B2BPayoutRetryScheduler,
     SupplierProductsService,
+    SupplierDirectoryService,
   ],
   exports: [SettlementService, B2BPayoutIdempotencyService, B2BPayoutRetryService, B2BPayoutRetryScheduler],
 })
