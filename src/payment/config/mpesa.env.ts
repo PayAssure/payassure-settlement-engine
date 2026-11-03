@@ -10,6 +10,8 @@ export interface MpesaEnvConfig {
   initiatorName?: string;
   initiatorPassword?: string;
   callbackUrl?: string;
+  b2TillQueueTimeoutUrl?: string;
+  b2TillResultUrl?: string;
 }
 
 /**
@@ -52,6 +54,8 @@ export const getMpesaEnv = (): MpesaEnvConfig => ({
   initiatorName: process.env.MPESA_INITIATOR_NAME,
   initiatorPassword: process.env.MPESA_INITIATOR_PASSWORD,
   callbackUrl: process.env.MPESA_CALLBACK_URL,
+  b2TillQueueTimeoutUrl: process.env.MPESA_B2TILL_QUEUE_TIMEOUT_URL,
+  b2TillResultUrl: process.env.MPESA_B2TILL_RESULT_URL,
 });
 
 export function getMpesaCallbackUrl(suffix = ''): string {
@@ -85,4 +89,3 @@ export function getMpesaCallbackUrls(suffix = ''): {
   const callbackUrl = getMpesaCallbackUrl(suffix);
   return { QueueTimeOutURL: callbackUrl, ResultURL: callbackUrl };
 }
-

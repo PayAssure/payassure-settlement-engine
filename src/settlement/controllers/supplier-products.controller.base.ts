@@ -1,4 +1,4 @@
-import { ForbiddenException, Get, Param, Req, UseGuards } from '@nestjs/common';
+import { Get, Param, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { SupplierSettlementControllerBase } from './supplier-settlement.controller.base';
@@ -9,7 +9,7 @@ export abstract class SupplierProductsControllerBase extends SupplierSettlementC
   @ApiBearerAuth('access-token')
   @ApiOperation({
     summary: 'List registered suppliers',
-    description: 'Returns supplier business details, merchant IDs, integration status, and limited payout destination details. Payout identifiers are masked and API credentials are not returned. Administrators only.',
+    description: 'Available to any authenticated, active user; no administrator role is required. Returns supplier business details, merchant IDs, integration status, and limited payout destination details. Payout identifiers are masked and API credentials are not returned.',
   })
   @ApiResponse({
     status: 200,
@@ -38,12 +38,7 @@ export abstract class SupplierProductsControllerBase extends SupplierSettlementC
     },
   })
   @ApiResponse({ status: 401, description: 'Authentication token is missing or invalid.' })
-  @ApiResponse({ status: 403, description: 'Only administrators can list registered suppliers.' })
-  async getRegisteredSuppliers(@Req() req: { user?: { role?: string } }) {
-    if (!['ADMIN', 'SUPER_ADMIN'].includes(req.user?.role ?? '')) {
-      throw new ForbiddenException('Only administrators can list registered suppliers');
-    }
-
+  async getRegisteredSuppliers() {
     return this.supplierDirectoryService.getRegisteredSuppliers();
   }
 

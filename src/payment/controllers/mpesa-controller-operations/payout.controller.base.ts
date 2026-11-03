@@ -3,7 +3,8 @@ import { ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { mpesaService } from '../../services/mpesa.service';
 import { b2pochiService } from '../../services/b2pochi.service';
 import { b2cService } from '../../services/b2c.service';
-import { DispatchB2bPayoutDto, DispatchB2PochiPayoutDto, DispatchB2CPayoutDto } from '../../dto';
+import { b2TillService } from '../../services/b2till.service';
+import { DispatchB2bPayoutDto, DispatchB2TillPayoutDto, DispatchB2PochiPayoutDto, DispatchB2CPayoutDto } from '../../dto';
 import { MpesaBalanceControllerBase } from './balance.controller.base';
 
 export abstract class MpesaPayoutControllerBase extends MpesaBalanceControllerBase {
@@ -13,6 +14,17 @@ export abstract class MpesaPayoutControllerBase extends MpesaBalanceControllerBa
   @ApiResponse({ status: 400, description: 'Invalid payout request payload' })
   async b2b(@Body() body: DispatchB2bPayoutDto) {
     return mpesaService.dispatchB2bPayout(body);
+  }
+
+  @Post('mpesa/b2till')
+  @ApiOperation({
+    summary: 'Send an M-Pesa Buy Goods payment to a till',
+    description: 'Initiates a BusinessBuyGoods request. The API generates the security credential from the configured initiator password.',
+  })
+  @ApiResponse({ status: 200, description: 'B2Till payment dispatched successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid B2Till payment request payload' })
+  async b2till(@Body() body: DispatchB2TillPayoutDto) {
+    return b2TillService.initiateB2Till(body);
   }
 
   @Post('mpesa/b2pochi')

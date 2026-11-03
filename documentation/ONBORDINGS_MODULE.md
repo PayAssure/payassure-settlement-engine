@@ -21,7 +21,7 @@ The module exposes 12 routes:
 | `GET` | `/onbordings/me` | JWT bearer token |
 | `GET` | `/onbordings/:id` | JWT bearer token |
 | `PATCH` | `/onbordings/payment` | JWT bearer token |
-| `PATCH` | `/onbordings/:id` | JWT bearer token |
+| `PATCH` | `/onbordings/me` | JWT bearer token |
 | `DELETE` | `/onbordings/:id` | JWT bearer token |
 | `PATCH` | `/onbordings/:id/webhook` | JWT bearer token |
 | `PATCH` | `/onbordings/payment/activate` | JWT bearer token |
@@ -107,8 +107,8 @@ The creation payload accepts:
 | `settlementPreference` | string | No | For example, `DAILY`. |
 | `payment` | object | No | Payout destination; see payment payload below. |
 
-`PATCH /onbordings/:id` accepts the same fields as a partial payload. All fields
-are optional for that route.
+`PATCH /onbordings/me` accepts the same fields as a partial payload. All fields
+are optional for that route, and the participant is selected from the JWT email.
 
 ### Payment payload
 
@@ -545,12 +545,12 @@ Returns an `OnboardingResponseDto`. The payment is stored as
 - `404 Not Found`: authenticated user has no participant;
   `Onboarding participant not found for the authenticated user`.
 
-### 9. Update a participant
+### 9. Update the authenticated user's participant
 
-`PATCH /onbordings/:id`
+`PATCH /onbordings/me`
 
-Partially updates a participant. The route requires a JWT, but the service does
-not enforce ownership or role-based authorization for the target ID.
+Partially updates the participant associated with the email claim in the JWT.
+No participant ID is required or accepted.
 
 #### Request body
 
@@ -578,7 +578,10 @@ to `DRAFT` or `DOCUMENTS_SUBMITTED` from the resulting profile fields.
 - `400 Bad Request`: invalid participant or nested payment fields.
 - `401 Unauthorized`: missing or invalid JWT.
 - `403 Forbidden`: invalid payout destination rules.
-- `404 Not Found`: participant does not exist; message: `Participant not found`.
+- `401 Unauthorized`: the authenticated token has no email claim; message:
+  `Authenticated user email is required`.
+- `404 Not Found`: no participant matches the authenticated user's email;
+  message: `Onboarding participant not found for the authenticated user`.
 
 ### 10. Delete a participant
 

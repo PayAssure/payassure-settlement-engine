@@ -648,6 +648,61 @@
         ]
       }
     },
+    "/supplier/directory": {
+      "get": {
+        "operationId": "SupplierController_getRegisteredSuppliers",
+        "summary": "List registered suppliers",
+        "description": "Available to any authenticated, active user; no administrator role is required. Returns supplier business details, merchant IDs, integration status, and limited payout destination details. Payout identifiers are masked and API credentials are not returned.",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Registered suppliers returned successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "example": {
+                    "success": true,
+                    "count": 1,
+                    "suppliers": [
+                      {
+                        "id": "clx123supplier",
+                        "merchantId": "pay_supplier_001",
+                        "businessName": "Example Supplies Ltd",
+                        "businessType": "LIMITED_COMPANY",
+                        "status": "ACTIVE",
+                        "integration": {
+                          "environment": "production",
+                          "isActive": true
+                        },
+                        "payment": {
+                          "type": "MPESA",
+                          "accountName": "Example Supplies",
+                          "provider": "Safaricom",
+                          "status": "VERIFIED",
+                          "isVerified": true,
+                          "phoneNumber": "****1234"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication token is missing or invalid."
+          }
+        },
+        "tags": [
+          "supplier"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
     "/supplier/authenticate": {
       "post": {
         "operationId": "SupplierController_authenticate",
@@ -949,20 +1004,21 @@
         ]
       }
     },
-    "/onbordings/{id}": {
-      "get": {
-        "operationId": "OnbordingsController_findOne",
-        "summary": "Get an onboarding participant by id",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
+    "/onbordings/me": {
+      "patch": {
+        "operationId": "OnbordingsController_updateCurrentUser",
+        "summary": "Update the authenticated onboarding participant",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateOnboardingDto"
+              }
             }
           }
-        ],
+        },
         "responses": {
           "200": {
             "description": "",
@@ -985,7 +1041,7 @@
             }
           },
           "404": {
-            "description": "Participant not found.",
+            "description": "Onboarding participant not found for the authenticated user.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1003,10 +1059,12 @@
             "access-token": []
           }
         ]
-      },
-      "patch": {
-        "operationId": "OnbordingsController_update",
-        "summary": "Update an onboarding participant",
+      }
+    },
+    "/onbordings/{id}": {
+      "get": {
+        "operationId": "OnbordingsController_findOne",
+        "summary": "Get an onboarding participant by id",
         "parameters": [
           {
             "name": "id",
@@ -1017,16 +1075,6 @@
             }
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateOnboardingDto"
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
             "description": "",

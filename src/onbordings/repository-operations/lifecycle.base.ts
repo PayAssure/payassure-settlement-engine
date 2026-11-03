@@ -5,3 +5,4 @@ export abstract class OnbordingsRepositoryLifecycleBase extends OnbordingsIntegr
     await this.prisma.$disconnect();
   }
 }
+  

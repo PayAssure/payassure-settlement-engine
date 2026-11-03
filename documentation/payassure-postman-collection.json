@@ -530,7 +530,7 @@
       ]
     },
     {
-      "name": "PATCH /onbordings/{id}",
+      "name": "PATCH /onbordings/me",
       "item": [
         {
           "name": "Update an onboarding participant",
@@ -553,13 +553,13 @@
               }
             },
             "url": {
-              "raw": "{{baseUrl}}/onbordings/{id}",
+              "raw": "{{baseUrl}}/onbordings/me",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "onbordings",
-                "{id}"
+                "me"
               ]
             }
           },

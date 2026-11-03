@@ -1,4 +1,4 @@
-import { Body, Delete, Get, Param, Patch, UseGuards } from '@nestjs/common';
+import { Body, Delete, Get, Param, Patch, Request, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { ErrorResponseDto } from '../dto/error-response.dto';
@@ -18,15 +18,15 @@ export abstract class OnbordingsParticipantDetailsControllerBase extends Onbordi
     return this.service.findParticipantById(id);
   }
 
-  @Patch(':id')
+  @Patch('me')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
-  @ApiOperation({ summary: 'Update an onboarding participant' })
+  @ApiOperation({ summary: 'Update the authenticated onboarding participant' })
   @ApiResponse({ status: 200, type: OnboardingResponseDto })
   @ApiResponse({ status: 401, type: ErrorResponseDto, description: 'Authentication token is missing or invalid.' })
-  @ApiResponse({ status: 404, type: ErrorResponseDto, description: 'Participant not found.' })
-  async update(@Param('id') id: string, @Body() body: UpdateOnboardingDto): Promise<OnboardingResponseDto> {
-    return this.service.updateParticipant(id, body);
+  @ApiResponse({ status: 404, type: ErrorResponseDto, description: 'Onboarding participant not found for the authenticated user.' })
+  async updateCurrentUser(@Request() req: any, @Body() body: UpdateOnboardingDto): Promise<OnboardingResponseDto> {
+    return this.service.updateParticipantForAuthenticatedUser(req.user, body);
   }
 
   @Delete(':id')

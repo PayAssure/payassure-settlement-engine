@@ -61,6 +61,35 @@ test('updatePayment returns payment status without activation secret internals',
   assert.equal(response.payment?.verificationAttempts, undefined);
 });
 
+test('updateParticipantForAuthenticatedUser updates the participant found from the token email', async () => {
+  let updatedParticipantId: string | undefined;
+  const participant = {
+    id: 'participant-user-1',
+    participantType: 'RETAILER',
+    businessName: 'Test Merchant',
+    email: 'jane@example.com',
+    status: 'DRAFT',
+    integrations: [],
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const service = new OnbordingsService({
+    findParticipantByEmail: async (email: string) => email === 'jane@example.com' ? participant : null,
+    updateParticipant: async (id: string, data: any) => {
+      updatedParticipantId = id;
+      return { ...participant, ...data };
+    },
+  } as any);
+
+  const response = await service.updateParticipantForAuthenticatedUser(
+    { sub: 'user-1', email: 'jane@example.com' } as any,
+    { businessName: 'Updated Merchant' } as any,
+  );
+
+  assert.equal(updatedParticipantId, 'participant-user-1');
+  assert.equal(response.businessName, 'Updated Merchant');
+});
+
 test('findAllParticipants returns a public response without secrets or integration credentials', async () => {
   const service = new OnbordingsService({
     findAllParticipants: async () => [{

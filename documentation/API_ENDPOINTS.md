@@ -369,19 +369,18 @@ Base path: /onbordings
   - 401 Unauthorized
   - 404 Not Found: participant not found
 
-### 6) PATCH /onbordings/:id
-- Purpose: Update an onboarding participant.
+### 6) PATCH /onbordings/me
+- Purpose: Update the onboarding participant associated with the authenticated user.
 - Required headers:
   - Authorization: Bearer <jwt>
-- Path parameters:
-  - id: string
+- Path parameters: none. The participant is resolved from the decoded JWT email.
 - Request body: any updatable onboarding fields
 - Success response:
   - Status: 200 OK
   - Body: updated onboarding participant
 - Error responses:
   - 401 Unauthorized
-  - 404 Not Found: participant not found
+  - 404 Not Found: onboarding participant not found for the authenticated user
 
 ### 7) DELETE /onbordings/:id
 - Purpose: Delete an onboarding participant record.
@@ -817,7 +816,52 @@ Base path: /settlement
 
 Base path: /supplier
 
-### 1) POST /supplier/authenticate
+### 1) GET /supplier/directory
+- Purpose: List registered supplier participants for any authenticated user. Admin or super-admin privileges are not required.
+- Required headers:
+  - Authorization: Bearer `<JWT access token>` issued by `/auth/login` or `/auth/refresh`
+  - Accept: application/json (optional)
+- Request body: none
+- Success response:
+  - Status: 200 OK
+  - Body:
+    ```json
+    {
+      "success": true,
+      "count": 1,
+      "suppliers": [
+        {
+          "id": "clx123supplier",
+          "merchantId": "pay_supplier_001",
+          "businessName": "Example Supplies Ltd",
+          "businessType": "LIMITED_COMPANY",
+          "status": "ACTIVE",
+          "integration": {
+            "environment": "production",
+            "isActive": true
+          },
+          "payment": {
+            "type": "MPESA",
+            "accountName": "Example Supplies",
+            "provider": "Safaricom",
+            "status": "VERIFIED",
+            "isVerified": true,
+            "phoneNumber": "****1234"
+          }
+        }
+      ]
+    }
+    ```
+- Response fields:
+  - `count`: number of supplier records returned.
+  - `suppliers`: supplier records sorted by business name.
+  - Each supplier includes its ID, merchant ID (or `null` if no integration exists), business name and type, participant status, and latest integration environment/active status (or `null`).
+  - `payment` is `null` when no supported payout destination is configured. Otherwise it includes the payment type, account name, provider, verification status, and limited destination details. M-Pesa phone numbers and bank account numbers are masked; bank code and shortcode may be included.
+  - API keys, API secrets, activation secrets, and full payout identifiers are not returned.
+- Error responses:
+  - 401 Unauthorized: bearer token is missing, expired, revoked, or invalid. A valid token from any active registered user is accepted regardless of role.
+
+### 2) POST /supplier/authenticate
 - Purpose: Authenticate a supplier and obtain a supplier session token.
 - Required headers:
   - Authorization: Bearer <jwt>
@@ -830,7 +874,7 @@ Base path: /supplier
 - Error responses:
   - 401 Unauthorized
 
-### 2) GET /supplier/settlements
+### 3) GET /supplier/settlements
 - Purpose: List supplier settlements linked to the supplier session.
 - Required headers:
   - x-supplier-session: <token from /supplier/authenticate>
@@ -841,7 +885,7 @@ Base path: /supplier
 - Error responses:
   - 401 Unauthorized
 
-### 3) GET /supplier/products/:supplierMerchantId
+### 4) GET /supplier/products/:supplierMerchantId
 - Purpose: Return item-only product data from the mock retailer connections available to a supplier.
 - Required headers: none
 - Path parameters:
@@ -880,7 +924,7 @@ Base path: /supplier
 - Error responses:
   - 404 Not Found: no mock product catalog exists for the supplier
 
-### 4) GET /supplier/products/:supplierMerchantId/retailer/:retailerMerchantId
+### 5) GET /supplier/products/:supplierMerchantId/retailer/:retailerMerchantId
 - Purpose: Return only the items shared by one connected mock retailer with one supplier.
 - Required headers: none
 - Path parameters:
