@@ -6,7 +6,7 @@ This document lists the HTTP endpoints exposed by the settlement engine, what ea
 
 - Protected endpoints require a bearer JWT in the Authorization header.
 - Settlement endpoints that use the one-time settlement session require the x-settlement-session header.
-- Supplier lookup endpoints require the x-supplier-session header.
+- The supplier directory requires a bearer JWT; supplier settlement lookup requires the x-supplier-session header.
 - Internal confirmation endpoints require the following headers:
   - Authorization: Bearer <token>
   - x-payassure-signature
@@ -403,13 +403,15 @@ Base path: /onbordings
 - Path parameters:
   - id: string
 - Request body:
-  - webhookUrl: string
+  - webhookUrl: absolute HTTPS URL
 - Success response:
   - Status: 200 OK
   - Body: updated participant data
 - Error responses:
   - 401 Unauthorized
   - 404 Not Found: participant not found
+
+Configure one HTTPS receiver URL, such as `https://pos.example.com/webhook`, for each participant/integration that should receive events. If retailer and suppliers share a receiver, configure the same URL for each merchant; use `data.recipient.merchant_id` to route events internally. Integration-specific webhook URLs override the participant-level URL. See [WEBHOOK_INTEGRATION.md](./WEBHOOK_INTEGRATION.md) for the complete event schema, signature verification, idempotency requirements, retry behavior, and receiver implementation checklist.
 
 ### 9) PATCH /onbordings/:id/payment
 - Purpose: Update the payout destination for a participant.
@@ -832,13 +834,21 @@ Base path: /supplier
       "suppliers": [
         {
           "id": "clx123supplier",
+          "participantType": "SUPPLIER",
           "merchantId": "pay_supplier_001",
           "businessName": "Example Supplies Ltd",
           "businessType": "LIMITED_COMPANY",
+          "contactName": "Alex Example",
+          "email": "alex@example.com",
+          "phoneNumber": "+254700000123",
+          "physicalAddress": "Nairobi, Kenya",
           "status": "ACTIVE",
           "integration": {
+            "id": "clx123integration",
+            "merchantId": "pay_supplier_001",
             "environment": "production",
-            "isActive": true
+            "isActive": true,
+            "createdAt": "2026-11-03T03:26:53.655Z"
           },
           "payment": {
             "type": "MPESA",
@@ -847,7 +857,9 @@ Base path: /supplier
             "status": "VERIFIED",
             "isVerified": true,
             "phoneNumber": "****1234"
-          }
+          },
+          "createdAt": "2026-11-03T03:26:53.655Z",
+          "updatedAt": "2026-11-03T03:26:53.655Z"
         }
       ]
     }
@@ -855,8 +867,9 @@ Base path: /supplier
 - Response fields:
   - `count`: number of supplier records returned.
   - `suppliers`: supplier records sorted by business name.
-  - Each supplier includes its ID, merchant ID (or `null` if no integration exists), business name and type, participant status, and latest integration environment/active status (or `null`).
-  - `payment` is `null` when no supported payout destination is configured. Otherwise it includes the payment type, account name, provider, verification status, and limited destination details. M-Pesa phone numbers and bank account numbers are masked; bank code and shortcode may be included.
+  - Each supplier includes its participant type, business and contact details, status, timestamps, merchant ID (or `null` if no integration exists), and latest integration metadata (or `null`).
+  - The supplier contact `phoneNumber` is returned as stored. Payout identifiers within `payment` are masked: M-Pesa phone numbers and bank account numbers are masked; bank code and shortcode may be included.
+  - `payment` is `null` when no supported payout destination is configured. Otherwise it includes the payment type, account name, provider, verification status, and limited destination details.
   - API keys, API secrets, activation secrets, and full payout identifiers are not returned.
 - Error responses:
   - 401 Unauthorized: bearer token is missing, expired, revoked, or invalid. A valid token from any active registered user is accepted regardless of role.

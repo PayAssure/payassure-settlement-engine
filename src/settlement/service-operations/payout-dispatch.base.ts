@@ -94,6 +94,13 @@ export abstract class SettlementPayoutDispatchBase extends SettlementGatewayRequ
     }
 
     const payoutReference = payoutAttemptResult.payoutReference;
+    if (payoutAttemptResult.attemptCount > 1) {
+      await this.repository.notifyWebhookEvent?.(settlement.id, 'payment.settlement.retrying', {
+        party,
+        payout_reference: payoutReference,
+        attempt_count: payoutAttemptResult.attemptCount,
+      });
+    }
     const callbackIdentifier = (globalThis as any)?.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const callbackUrl = this.getB2bPayoutCallbackUrl(callbackIdentifier);
     const recipientPhoneNumber = recipient.phoneNumber ?? recipient.payerPhoneNumber ?? null;

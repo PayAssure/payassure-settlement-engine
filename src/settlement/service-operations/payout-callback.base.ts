@@ -121,6 +121,14 @@ export abstract class SettlementPayoutCallbackBase extends SettlementPayoutDispa
     };
     const nextStatus = isSuccess ? 'PROCESSING' : 'FAILED';
     await this.repository.updateSettlementStatus(settlement.id, nextStatus, { metadata: updatedMetadata });
+    if (!isSuccess) {
+      await this.repository.notifyWebhookEvent?.(settlement.id, 'payment.settlement.partially_failed', {
+        party,
+        payout_status: status,
+        failure_reason: data.resultDescription ?? data.failureReason ?? null,
+        payout_reference: data.reference ?? null,
+      });
+    }
     return { success: true, status: nextStatus, settlementId: settlement.id, payoutCallback };
   }
 }

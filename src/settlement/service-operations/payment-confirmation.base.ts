@@ -90,6 +90,14 @@ export abstract class SettlementPaymentConfirmationBase extends SettlementPayout
     await this.repository.updateSettlementStatus(settlement.id, 'PENDING_PROCESSING', {
       metadata: { ...existingMetadata, paymentConfirmation, allocationPlan },
     });
+    await this.repository.notifyWebhookEvent?.(settlement.id, 'payment.collection.succeeded', {
+      status: 'PAID',
+      provider: paymentConfirmation.provider,
+      provider_reference: paymentConfirmation.providerReference,
+      amount: paymentConfirmation.paidAmount,
+      currency: settlement.currency,
+    });
+    await this.repository.notifyWebhookEvent?.(settlement.id, 'payment.settlement.started');
     const dispatchResults: Array<any> = [];
     try {
       for (const supplier of supplierAllocations) {

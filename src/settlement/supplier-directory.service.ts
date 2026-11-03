@@ -3,17 +3,26 @@ import { Prisma, PrismaClient } from '@prisma/client';
 
 const supplierDirectorySelect = {
   id: true,
+  participantType: true,
   businessName: true,
   businessType: true,
+  contactName: true,
+  email: true,
+  phoneNumber: true,
+  physicalAddress: true,
   status: true,
+  createdAt: true,
+  updatedAt: true,
   payment: true,
   integrations: {
     orderBy: { createdAt: 'desc' },
     take: 1,
     select: {
+      id: true,
       merchantId: true,
       environment: true,
       isActive: true,
+      createdAt: true,
     },
   },
 } satisfies Prisma.OnboardingParticipantSelect;
@@ -43,14 +52,22 @@ export function toSupplierDirectoryEntry(supplier: SupplierDirectoryRecord) {
 
   return {
     id: supplier.id,
+    participantType: supplier.participantType,
     merchantId: integration?.merchantId ?? null,
     businessName: supplier.businessName,
     businessType: supplier.businessType,
+    contactName: supplier.contactName,
+    email: supplier.email,
+    phoneNumber: supplier.phoneNumber,
+    physicalAddress: supplier.physicalAddress,
     status: supplier.status,
     integration: integration
       ? {
+          id: integration.id,
+          merchantId: integration.merchantId,
           environment: integration.environment,
           isActive: integration.isActive,
+          createdAt: integration.createdAt,
         }
       : null,
     payment: paymentType
@@ -72,6 +89,8 @@ export function toSupplierDirectoryEntry(supplier: SupplierDirectoryRecord) {
             : {}),
         }
       : null,
+    createdAt: supplier.createdAt,
+    updatedAt: supplier.updatedAt,
   };
 }
 

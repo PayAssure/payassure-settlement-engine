@@ -3,6 +3,7 @@ import type { SessionRepository } from '../repository/session/session.repository
 import type { IntegrationRepository } from '../repository/integration/integration.repository';
 import type { SettlementRecordRepository } from '../repository/settlement/settlement.repository';
 import type { TransactionRepository } from '../repository/transaction/transaction.repository';
+import type { SettlementWebhookDeliveryService } from '../services/settlement-webhook-delivery.service';
 
 export abstract class SettlementRepositoryContextBase {
   protected abstract readonly prisma: PrismaClient;
@@ -10,4 +11,5 @@ export abstract class SettlementRepositoryContextBase {
   protected abstract readonly integrations: IntegrationRepository;
   protected abstract readonly settlements: SettlementRecordRepository;
   protected abstract readonly transactions: TransactionRepository;
+  protected abstract readonly webhooks: SettlementWebhookDeliveryService;
 }

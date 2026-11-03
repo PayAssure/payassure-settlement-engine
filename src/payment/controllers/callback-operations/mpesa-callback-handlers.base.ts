@@ -5,6 +5,7 @@ import { paymentRecordService } from '../../services/payment-record.service';
 import { retailerEscrowTransferService } from '../../../retailer';
 import { parseStkCallback } from '../../utils/mpesa-callback.util';
 import { toPayoutCallback } from './payout-callback.parser';
+import { recordFailedCollection } from './record-failed-collection';
 import { EscrowBalanceCallbacksBase } from './escrow-balance-callbacks.base';
 
 export abstract class MpesaCallbackHandlersBase extends EscrowBalanceCallbacksBase {
@@ -103,6 +104,41 @@ export abstract class MpesaCallbackHandlersBase extends EscrowBalanceCallbacksBa
           transaction: transactionResult,
           note: 'M-Pesa transaction recorded but no settlement reference to process',
         });
+      }
+      const failedMerchantTransactionReference =
+        (req.body as any)?.Body?.gatewayPayload?.merchantTransactionReference ??
+        resolvedMerchantTransactionReference;
+      if (failedMerchantTransactionReference) {
+        try {
+          const settlementResult = await recordFailedCollection(
+            this.settlementService,
+            String(failedMerchantTransactionReference),
+            parsed,
+          );
+          return res.status(200).json({
+            received: true,
+            accepted: true,
+            timestamp,
+            parsed,
+            transaction: transactionResult,
+            settlement: settlementResult,
+          });
+        } catch (settlementError) {
+          const errorMsg = settlementError instanceof Error ? settlementError.message : String(settlementError);
+          this.logger.error('[PAYMENT][CALLBACK] failed-payment settlement update failed', {
+            timestamp,
+            merchantTransactionReference: failedMerchantTransactionReference,
+            error: errorMsg,
+          });
+          return res.status(200).json({
+            received: true,
+            accepted: true,
+            timestamp,
+            parsed,
+            transaction: transactionResult,
+            settlementError: errorMsg,
+          });
+        }
       }
       return res.status(200).json({ received: true, accepted: true, timestamp, parsed, transaction: transactionResult });
     } catch (error) {

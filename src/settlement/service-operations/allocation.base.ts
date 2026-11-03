@@ -114,6 +114,14 @@ export abstract class SettlementAllocationBase extends SettlementPaymentCallback
       lastSplitAt: timestamp,
     };
     await this.repository.updateSettlementStatus(settlement.id, SettlementStatus.PROCESSING, { metadata: updatedMetadata });
+    await this.repository.notifyWebhookEvent?.(settlement.id, 'payment.collection.succeeded', {
+      status: 'PAID',
+      provider: paymentCallbackRecord.provider,
+      provider_reference: paymentCallbackRecord.providerReference,
+      amount: paymentCallbackRecord.amount,
+      currency: paymentCallbackRecord.currency,
+    });
+    await this.repository.notifyWebhookEvent?.(settlement.id, 'payment.settlement.started');
     const dispatchResults = { suppliers: [] as any[], retailer: null as any, errors: [] as any[] };
     for (const supplier of supplierAllocations) {
       if (!supplier.merchantId || supplier.amount <= 0) continue;

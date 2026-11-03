@@ -12,6 +12,6 @@ export class CreateIntegrationDto {
   @ApiPropertyOptional({ example: 'https://example.com/webhook' })
   @Transform(({ value }) => (value === null ? undefined : value))
   @IsOptional()
-  @IsUrl()
+  @IsUrl({ protocols: ['https'], require_protocol: true })
   webhookUrl?: string;
 }

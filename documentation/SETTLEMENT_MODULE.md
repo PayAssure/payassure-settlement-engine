@@ -8,6 +8,7 @@ The module coordinates retailer payment collection, escrow verification, supplie
 
 - `/settlement`: retailer authentication, initiation, payment confirmation, tracking, reconciliation, payout operations, and health checks.
 - `/supplier`: supplier authentication, settlement lookup, and read-only mock retailer product lookup.
+- Outbound retailer/supplier settlement notifications are sent to their configured webhook URLs. See [WEBHOOK_INTEGRATION.md](./WEBHOOK_INTEGRATION.md) for the shared `/webhook` setup, merchant-ID routing, signature verification, event contract, and retry behavior.
 
 ## Credentials And Headers
 

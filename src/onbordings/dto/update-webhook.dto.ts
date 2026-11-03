@@ -5,6 +5,6 @@ import { IsUrl } from 'class-validator';
 export class UpdateWebhookDto {
   @ApiProperty({ example: 'https://example.com/webhook' })
   @Transform(({ value }) => (value === null ? undefined : value))
-  @IsUrl()
+  @IsUrl({ protocols: ['https'], require_protocol: true })
   webhookUrl!: string;
 }

@@ -5,6 +5,7 @@ import { paymentRecordService } from '../../services/payment-record.service';
 import { retailerEscrowTransferService } from '../../../retailer';
 import { parseStkCallback } from '../../utils/mpesa-callback.util';
 import { toPayoutCallback } from './payout-callback.parser';
+import { recordFailedCollection } from './record-failed-collection';
 import { CallbackContextBase } from './callback-context.base';
 
 export abstract class IdentifierCallbackBase extends CallbackContextBase {
@@ -100,6 +101,39 @@ export abstract class IdentifierCallbackBase extends CallbackContextBase {
           transaction: result,
           note: 'M-Pesa transaction recorded but no settlement reference found for split and payout',
         });
+      }
+      if (resolvedMerchantTransactionReference) {
+        try {
+          const settlementResult = await recordFailedCollection(
+            this.settlementService,
+            String(resolvedMerchantTransactionReference),
+            parsed,
+          );
+          return res.status(200).json({
+            received: true,
+            accepted: true,
+            timestamp,
+            parsed,
+            transaction: result,
+            settlement: settlementResult,
+          });
+        } catch (settlementError) {
+          const errorMsg = settlementError instanceof Error ? settlementError.message : String(settlementError);
+          this.logger.error('[PAYMENT][CALLBACK] failed-payment settlement update failed', {
+            timestamp,
+            callbackIdentifier,
+            merchantTransactionReference: resolvedMerchantTransactionReference,
+            error: errorMsg,
+          });
+          return res.status(200).json({
+            received: true,
+            accepted: true,
+            timestamp,
+            parsed,
+            transaction: result,
+            settlementError: errorMsg,
+          });
+        }
       }
       return res.status(200).json({ received: true, accepted: true, timestamp, parsed, transaction: result });
     } catch (error) {

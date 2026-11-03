@@ -5,6 +5,7 @@ import { IntegrationRepository } from './repository/integration/integration.repo
 import { SettlementRecordRepository } from './repository/settlement/settlement.repository';
 import { TransactionRepository } from './repository/transaction/transaction.repository';
 import { SettlementRepositoryLifecycleBase } from './repository-facade/lifecycle.base';
+import { SettlementWebhookDeliveryService } from './services/settlement-webhook-delivery.service';
 
 @Injectable()
 export class SettlementRepository extends SettlementRepositoryLifecycleBase implements OnModuleDestroy {
@@ -13,4 +14,5 @@ export class SettlementRepository extends SettlementRepositoryLifecycleBase impl
   readonly integrations = new IntegrationRepository(this.prisma);
   readonly settlements = new SettlementRecordRepository(this.prisma);
   readonly transactions = new TransactionRepository(this.prisma);
+  protected readonly webhooks = new SettlementWebhookDeliveryService(this.prisma);
 }

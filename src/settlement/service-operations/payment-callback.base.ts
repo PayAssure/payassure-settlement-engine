@@ -20,9 +20,22 @@ export abstract class SettlementPaymentCallbackBase extends SettlementPaymentCon
     };
     const existingMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
     if (!['SUCCESS', 'PAID', 'COMPLETED'].includes(String(paymentCallback.status).trim().toUpperCase())) {
+      if (this.hasConfirmedCustomerPayment(settlement, existingMetadata)) {
+        this.logger.warn(`[PAYMENT][CALLBACK] ignored late failure for already-confirmed settlement ${settlement.id}`);
+        return {
+          success: true,
+          status: settlement.status,
+          message: 'A late payment failure notification was ignored because customer payment is already confirmed.',
+          settlementId: settlement.id,
+        };
+      }
       await this.repository.updateSettlementStatus(settlement.id, 'FAILED', {
         metadata: { ...existingMetadata, paymentCallback },
         failedAt: new Date(),
+      });
+      await this.repository.notifyWebhookEvent?.(settlement.id, 'payment.collection.failed', {
+        status: 'FAILED',
+        reason: 'Customer payment failed',
       });
       return {
         success: false,
@@ -92,6 +105,14 @@ export abstract class SettlementPaymentCallbackBase extends SettlementPaymentCon
         allocationPlan,
       },
     });
+    await this.repository.notifyWebhookEvent?.(settlement.id, 'payment.collection.succeeded', {
+      status: 'PAID',
+      provider: paymentCallback.provider,
+      provider_reference: paymentCallback.providerReference,
+      amount: paymentCallback.amount,
+      currency: paymentCallback.currency,
+    });
+    await this.repository.notifyWebhookEvent?.(settlement.id, 'payment.settlement.started');
     return {
       success: true,
       status: 'PENDING_PROCESSING',

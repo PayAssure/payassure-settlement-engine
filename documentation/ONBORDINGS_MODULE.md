@@ -622,11 +622,16 @@ Updates the participant's webhook URL.
 
 ```json
 {
-  "webhookUrl": "https://merchant.example.com/payassure/webhook"
+  "webhookUrl": "https://pos.example.com/webhook"
 }
 ```
 
-`webhookUrl` must be a valid URL.
+`webhookUrl` must be an absolute HTTPS URL. If one receiver handles multiple
+merchant IDs, configure the same URL for each participant; PayAssure includes
+the target merchant ID in every event so your receiver can route internally.
+An integration-level webhook URL takes precedence over this participant URL.
+See [WEBHOOK_INTEGRATION.md](./WEBHOOK_INTEGRATION.md) for signature checking,
+event formats, delivery behavior, and end-to-end integration guidance.
 
 #### Success: `200 OK`
 
@@ -634,7 +639,7 @@ Returns the updated `OnboardingResponseDto`.
 
 #### Errors
 
-- `400 Bad Request`: `webhookUrl` is missing or is not a valid URL.
+- `400 Bad Request`: `webhookUrl` is missing or is not an absolute HTTPS URL.
 - `401 Unauthorized`: missing or invalid JWT.
 - `404 Not Found`: participant does not exist; message: `Participant not found`.
 
