@@ -24,6 +24,9 @@ export abstract class SettlementPayoutCallbackBase extends SettlementPayoutDispa
         if (settlement) break;
       }
     }
+    if (!settlement && payoutAttempt?.settlementId) {
+      settlement = await this.repository.findSettlementById(payoutAttempt.settlementId);
+    }
     if (!settlement && !payoutAttempt) {
       this.logger.warn('[B2B][CALLBACK][UNMATCHED] callback acknowledged without settlement or payout attempt', {
         callbackIdentifier: callbackIdentifier ?? null,
@@ -54,7 +57,20 @@ export abstract class SettlementPayoutCallbackBase extends SettlementPayoutDispa
     const payoutStatus = String(data.status || 'FAILED').toUpperCase();
     const isSuccess = payoutStatus === 'SUCCESS' || payoutStatus === 'PAID';
     const status = isSuccess ? 'PAID' : 'FAILED';
-    if (data.callbackIdentifier || data.callbackToken) {
+    if (payoutAttempt?.idempotencyKey) {
+      try {
+        await this.idempotencyService.markCallbackReceived(payoutAttempt.idempotencyKey, data);
+        this.logger.log('[B2B][CALLBACK] Marked payout attempt callback as received', {
+          payoutReference: data.reference,
+          payoutStatus: status,
+        });
+      } catch (error) {
+        this.logger.warn('[B2B][CALLBACK] Failed to update payout attempt callback tracking', {
+          payoutReference: data.reference,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else if (data.callbackIdentifier || data.callbackToken) {
       const callbackRef = data.callbackIdentifier ?? data.callbackToken;
       try {
         await this.idempotencyService.markCallbackReceived(callbackRef, data);
@@ -65,19 +81,6 @@ export abstract class SettlementPayoutCallbackBase extends SettlementPayoutDispa
       } catch (error) {
         this.logger.warn('[B2B][CALLBACK] Failed to update idempotency tracking', {
           callbackIdentifier: callbackRef,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    } else if (payoutAttempt?.idempotencyKey) {
-      try {
-        await this.idempotencyService.markCallbackReceived(payoutAttempt.idempotencyKey, data);
-        this.logger.log('[B2B][CALLBACK] Marked payout reference callback as received in idempotency tracking', {
-          payoutReference: data.reference,
-          payoutStatus: status,
-        });
-      } catch (error) {
-        this.logger.warn('[B2B][CALLBACK] Failed to update payout reference idempotency tracking', {
-          payoutReference: data.reference,
           error: error instanceof Error ? error.message : String(error),
         });
       }
@@ -121,6 +124,9 @@ export abstract class SettlementPayoutCallbackBase extends SettlementPayoutDispa
     };
     const nextStatus = isSuccess ? 'PROCESSING' : 'FAILED';
     await this.repository.updateSettlementStatus(settlement.id, nextStatus, { metadata: updatedMetadata });
+    if (isSuccess && existingMetadata.escrowFunding?.payoutSource === 'CENTRAL_ACCOUNT') {
+      await this.finalizeDirectCashLedger(settlement.id);
+    }
     if (!isSuccess) {
       await this.repository.notifyWebhookEvent?.(settlement.id, 'payment.settlement.partially_failed', {
         party,
@@ -130,5 +136,47 @@ export abstract class SettlementPayoutCallbackBase extends SettlementPayoutDispa
       });
     }
     return { success: true, status: nextStatus, settlementId: settlement.id, payoutCallback };
+  }
+
+  private async finalizeDirectCashLedger(settlementId: string): Promise<void> {
+    const currentSettlement = await this.prisma.settlement.findUnique({
+      where: { id: settlementId },
+      select: { metadata: true },
+    });
+    const metadata = currentSettlement?.metadata && typeof currentSettlement.metadata === 'object'
+      ? currentSettlement.metadata as Record<string, any>
+      : {};
+    const escrowFunding = metadata.escrowFunding && typeof metadata.escrowFunding === 'object'
+      ? metadata.escrowFunding as Record<string, any>
+      : {};
+    if (escrowFunding.payoutSource !== 'CENTRAL_ACCOUNT') return;
+
+    const splitRecords = Array.isArray(metadata.splitRecords) ? metadata.splitRecords : [];
+    const expectedPayoutCount = Number(splitRecords.at(-1)?.expectedPayoutCount ?? 0);
+    if (expectedPayoutCount <= 0) return;
+
+    const transfer = escrowFunding.transferId
+      ? await this.prisma.retailerEscrowTransfer.findUnique({ where: { id: escrowFunding.transferId } })
+      : await this.prisma.retailerEscrowTransfer.findUnique({ where: { settlementId } });
+    if (!transfer || transfer.status !== 'BALANCE_VERIFIED') return;
+
+    const attempts = await this.prisma.b2BPayoutAttempt.findMany({
+      where: { settlementId },
+      select: { status: true },
+    });
+    if (attempts.length < expectedPayoutCount || attempts.some((attempt: { status: string }) => attempt.status !== 'COMPLETED')) return;
+
+    await this.prisma.retailerEscrowTransfer.updateMany({
+      where: { id: transfer.id, status: 'BALANCE_VERIFIED' },
+      data: {
+        status: 'SUCCEEDED',
+        transferCallback: {
+          source: 'CENTRAL_ACCOUNT_PAYOUT_CALLBACKS',
+          expectedPayoutCount,
+          confirmedPayoutCount: attempts.length,
+          confirmedAt: new Date().toISOString(),
+        },
+      },
+    });
   }
 }

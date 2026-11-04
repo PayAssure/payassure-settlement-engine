@@ -281,8 +281,6 @@ model RetailerEscrowFloat {
   merchantId               String                   @unique
   currency                 String                   @default("KES")
   dailyFloat               Decimal                  @db.Decimal(18, 2)
-  tillNumber               String?
-  storeNumber              String?
   activeTransferId         String?
   transfers                RetailerEscrowTransfer[] @relation("RetailerEscrowFloatTransfers")
   deposits                 RetailerEscrowFloatDeposit[] @relation("RetailerEscrowFloatDeposits")

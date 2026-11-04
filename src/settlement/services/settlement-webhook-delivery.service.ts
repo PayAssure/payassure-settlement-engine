@@ -63,6 +63,7 @@ export class SettlementWebhookDeliveryService {
       });
       const eventId = randomUUID();
       const createdAt = new Date().toISOString();
+      const cashFunding = this.cashFunding(settlement.metadata, settlement.currency);
       const baseData = {
         settlement: {
           id: settlement.id,
@@ -72,6 +73,7 @@ export class SettlementWebhookDeliveryService {
           currency: settlement.currency,
           status: settlement.status,
         },
+        ...(cashFunding ? { cash_funding: cashFunding } : {}),
         details,
       };
       await Promise.all(participants.map((participant) => {
@@ -197,6 +199,7 @@ export class SettlementWebhookDeliveryService {
       'x-payassure-signature': `t=${timestamp},v1=${signature}`,
     };
 
+    const endpoint = `${url.origin}${url.pathname}`;
     for (let attempt = 1; attempt <= 3; attempt++) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
@@ -210,13 +213,21 @@ export class SettlementWebhookDeliveryService {
         });
         await response.body?.cancel();
         if (!response.ok) {
-          throw new Error(`Webhook returned HTTP ${response.status}`);
+          const error = `Webhook returned HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`;
+          if (response.status < 500 && ![408, 425, 429].includes(response.status)) {
+            this.logger.error(
+              `Webhook delivery rejected for merchant ${participant.merchantId}, endpoint ${endpoint}, event ${eventId} (${eventType}); not retrying non-retryable response`,
+              error,
+            );
+            return;
+          }
+          throw new Error(error);
         }
         return;
       } catch (error) {
         if (attempt === 3) {
           this.logger.error(
-            `Webhook delivery failed for merchant ${participant.merchantId}, event ${eventId} (${eventType}) after ${attempt} attempts`,
+            `Webhook delivery failed for merchant ${participant.merchantId}, endpoint ${endpoint}, event ${eventId} (${eventType}) after ${attempt} attempts`,
             this.errorMessage(error),
           );
           return;
@@ -234,7 +245,66 @@ export class SettlementWebhookDeliveryService {
       : {};
   }
 
+  private cashFunding(metadataValue: unknown, currency: string) {
+    const metadata = this.asRecord(metadataValue);
+    const escrowFunding = this.asRecord(metadata.escrowFunding);
+    const amount = Number(escrowFunding.cashAmount);
+    if (escrowFunding.payoutSource !== 'CENTRAL_ACCOUNT' || !Number.isFinite(amount) || amount <= 0) return undefined;
+    return {
+      amount,
+      currency,
+      source: 'RETAILER_VIRTUAL_BALANCE',
+    };
+  }
+
   private errorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
+    if (!(error instanceof Error)) return String(error);
+    const cause = 'cause' in error ? error.cause : undefined;
+    if (cause === undefined) return error.message;
+    return `${error.message}; cause: ${this.describeCause(cause)}`;
+  }
+
+  private describeCause(cause: unknown, depth = 0): string {
+    if (depth >= 3) return '[cause depth limit reached]';
+    if (cause instanceof Error) {
+      const details = cause as Error & {
+        code?: unknown;
+        errno?: unknown;
+        syscall?: unknown;
+        hostname?: unknown;
+        address?: unknown;
+        port?: unknown;
+      };
+      const fields = [
+        details.name,
+        details.message,
+        ...(['code', 'errno', 'syscall', 'hostname', 'address', 'port'] as const)
+          .map((key) => details[key])
+          .filter((value): value is string | number => typeof value === 'string' || typeof value === 'number'),
+      ].filter(Boolean);
+      const nestedCause = 'cause' in details ? details.cause : undefined;
+      if (nestedCause !== undefined) fields.push(`cause=${this.describeCause(nestedCause, depth + 1)}`);
+      const nestedErrors = 'errors' in details && Array.isArray(details.errors)
+        ? details.errors as unknown[]
+        : [];
+      if (nestedErrors.length > 0) {
+        fields.push(`errors=[${nestedErrors.map((entry) => this.describeCause(entry, depth + 1)).join('; ')}]`);
+      }
+      return fields.join(' ') || details.name;
+    }
+    if (cause && typeof cause === 'object') {
+      const details = cause as Record<string, unknown>;
+      const fields = ['code', 'errno', 'syscall', 'hostname', 'address', 'port', 'message']
+        .flatMap((key) => {
+          const value = details[key];
+          return typeof value === 'string' || typeof value === 'number' ? [`${key}=${value}`] : [];
+        });
+      if (details.cause !== undefined) fields.push(`cause=${this.describeCause(details.cause, depth + 1)}`);
+      if (Array.isArray(details.errors) && details.errors.length > 0) {
+        fields.push(`errors=[${details.errors.map((entry) => this.describeCause(entry, depth + 1)).join('; ')}]`);
+      }
+      return fields.join(' ') || Object.prototype.toString.call(cause);
+    }
+    return String(cause);
   }
 }

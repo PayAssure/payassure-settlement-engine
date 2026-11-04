@@ -1,9 +1,8 @@
-import { Get, NotFoundException, Param, Put, Body, Req, Post, UseGuards } from '@nestjs/common';
+import { Get, Param, Put, Body, Req, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { retailerEscrowTransferService, retailerFloatDepositService } from '../../retailer';
 import { retailerEscrowReconciliationService } from '../../retailer';
-import { retailerEscrowBalanceService } from '../../retailer';
 import { RetailerEscrowFloatDto } from '../dto/retailer-escrow-float.dto';
 import { RetailerEscrowTransferDto } from '../dto/retailer-escrow-transfer.dto';
 import { RetailerFloatDepositDto } from '../dto/retailer-float-deposit.dto';
@@ -29,35 +28,88 @@ export abstract class RetailerFloatControllerBase extends EscrowReadControllerBa
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
   @ApiOperation({ summary: 'Get the authenticated retailer escrow float configuration', description: 'The retailer merchant ID is resolved from the authenticated bearer token.' })
-  @ApiResponse({ status: 200, description: 'Daily float and current expected remaining balance' })
+  @ApiResponse({
+    status: 200,
+    description: 'Daily float configuration and database-derived balance; no till or store fields are returned.',
+    schema: {
+      example: {
+        merchantId: 'pay_retailer_001',
+        currency: 'KES',
+        dailyFloat: 10000,
+        depositedBalance: 12500,
+        paidOutBalance: 2000,
+        reservedBalance: 1500,
+        availableBalance: 9000,
+        updatedAt: '2026-11-04T12:19:29.795Z',
+      },
+    },
+  })
   @ApiResponse({ status: 401, description: 'Missing or invalid bearer token' })
   @ApiResponse({ status: 403, description: 'Authenticated user does not belong to this retailer' })
+  @ApiResponse({ status: 404, description: 'Retailer float configuration not found' })
   async getRetailerFloat(@Req() request: any) {
     const merchantId = await retailerEscrowTransferService.getAuthenticatedRetailerMerchantId(request.user);
     return retailerEscrowTransferService.getFloat(merchantId);
+  }
+
+  @Get('retailer/float/balance')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Get the authenticated retailer virtual balance from the database',
+    description: 'Returns successful deposits, completed payouts, reserved transfers, and available balance from PayAssure records. This does not query Safaricom.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Database-derived retailer virtual balance; this endpoint does not query Safaricom.',
+    schema: {
+      example: {
+        merchantId: 'pay_retailer_001',
+        currency: 'KES',
+        depositedBalance: 12500,
+        paidOutBalance: 2000,
+        reservedBalance: 1500,
+        availableBalance: 9000,
+        asOf: '2026-11-04T12:19:29.795Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Missing or invalid bearer token' })
+  @ApiResponse({ status: 403, description: 'Authenticated user does not belong to this retailer' })
+  @ApiResponse({ status: 404, description: 'Retailer float configuration not found' })
+  async getRetailerVirtualBalance(@Req() request: any) {
+    const merchantId = await retailerEscrowTransferService.getAuthenticatedRetailerMerchantId(request.user);
+    return retailerEscrowTransferService.getBalance(merchantId);
   }
 
   @Post('retailer/float/balance')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
   @ApiOperation({
-    summary: 'Check the authenticated retailer escrow account balance',
-    description: 'Submits a general M-Pesa Account Balance query for the authenticated retailer account. Safaricom returns the balance asynchronously to the retailer escrow balance callback.',
+    summary: 'Get the authenticated retailer virtual balance from the database',
+    description: 'Returns the authenticated retailer’s successful deposits, completed payouts, reserved transfers, and available balance from PayAssure records. This compatibility POST route does not query Safaricom.',
   })
-  @ApiResponse({ status: 201, description: 'Retailer escrow account balance query submitted; the actual balance is delivered asynchronously to the callback' })
+  @ApiResponse({
+    status: 201,
+    description: 'Database-derived balance for the authenticated retailer; no M-Pesa Account Balance request is made.',
+    schema: {
+      example: {
+        merchantId: 'pay_retailer_001',
+        currency: 'KES',
+        depositedBalance: 12500,
+        paidOutBalance: 2000,
+        reservedBalance: 1500,
+        availableBalance: 9000,
+        asOf: '2026-11-04T12:19:29.795Z',
+      },
+    },
+  })
   @ApiResponse({ status: 401, description: 'Missing or invalid bearer token' })
   @ApiResponse({ status: 403, description: 'Authenticated user does not belong to this retailer' })
   @ApiResponse({ status: 404, description: 'Retailer float configuration not found' })
   async checkRetailerFloatBalance(@Req() request: any) {
     const merchantId = await retailerEscrowTransferService.getAuthenticatedRetailerMerchantId(request.user);
-    if (!await retailerEscrowTransferService.hasFloatConfig(merchantId)) {
-      throw new NotFoundException(`Escrow float is not configured for retailer ${merchantId}`);
-    }
-    return retailerEscrowBalanceService.queryBalance(
-      'retailer-escrow-balance',
-      'retailer-escrow-balance-timeout',
-      { retailerMerchantId: merchantId },
-    );
+    return retailerEscrowTransferService.getBalance(merchantId);
   }
 
   @Put('retailers/:merchantId/float')
@@ -65,14 +117,15 @@ export abstract class RetailerFloatControllerBase extends EscrowReadControllerBa
   @ApiBearerAuth('access-token')
   @ApiOperation({
     summary: 'Add or edit a retailer escrow float configuration',
-    description: 'Configures daily float metadata and location. Available balance is derived only from successful deposit and settlement callbacks and cannot be set through this endpoint.',
+    description: 'Configures daily float metadata only. Till and store fields are not used. Available balance is derived only from successful deposit and settlement callbacks and cannot be set through this endpoint.',
   })
+  @ApiBody({ type: RetailerEscrowFloatDto })
   @ApiResponse({ status: 200, description: 'Retailer float configuration saved' })
   @ApiResponse({ status: 403, description: 'Only administrators can edit retailer float configuration' })
   @ApiResponse({ status: 409, description: 'A transfer is in progress for this retailer' })
   async setRetailerFloat(@Param('merchantId') merchantId: string, @Body() body: RetailerEscrowFloatDto, @Req() request: any) {
     assertAdministrator(request.user);
-    return retailerEscrowTransferService.setFloat(merchantId, body.dailyFloat, body.tillNumber, body.storeNumber);
+    return retailerEscrowTransferService.setFloat(merchantId, body.dailyFloat);
   }
 
   @Post('retailer/float/deposits')
@@ -80,9 +133,26 @@ export abstract class RetailerFloatControllerBase extends EscrowReadControllerBa
   @ApiBearerAuth('access-token')
   @ApiOperation({
     summary: 'Initiate a retailer escrow float deposit',
-    description: 'Starts an STK Push using the authenticated retailer M-Pesa credentials. The expected float balance changes only after a successful M-Pesa callback.',
+    description: 'Starts a PayBill STK Push using the authenticated retailer M-Pesa credentials. MPESA_RETAILER_SHORTCODE is sent as BusinessShortCode and PartyB; the normalized payer phone is sent as PartyA and PhoneNumber. The expected float balance changes only after a successful M-Pesa callback.',
   })
-  @ApiResponse({ status: 201, description: 'Retailer float deposit STK Push submitted' })
+  @ApiBody({ type: RetailerFloatDepositDto })
+  @ApiResponse({
+    status: 201,
+    description: 'Retailer PayBill STK Push submitted; this does not credit the virtual balance until callback confirmation.',
+    schema: {
+      example: {
+        depositId: 'clx_float_deposit_001',
+        merchantId: 'pay_retailer_001',
+        amount: 5000,
+        payerPhoneNumber: '254791614036',
+        status: 'SUBMITTED',
+        merchantRequestId: 'ws_CO_001',
+        checkoutRequestId: 'ws_CO_001',
+        responseCode: '0',
+        responseDescription: 'Success. Request accepted for processing',
+      },
+    },
+  })
   @ApiResponse({ status: 400, description: 'Invalid amount or payer phone number' })
   @ApiResponse({ status: 401, description: 'Missing or invalid bearer token' })
   @ApiResponse({ status: 403, description: 'Authenticated user does not belong to this retailer' })

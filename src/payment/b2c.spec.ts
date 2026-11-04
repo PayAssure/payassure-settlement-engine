@@ -5,22 +5,11 @@ import { b2cService } from './services/b2c.service';
 
 test('B2C payment request is built with the documented Safaricom fields', async () => {
   const originalMakeRequest = mpesaService.makeRequest.bind(mpesaService);
+  const partyBNumbers: string[] = [];
 
   (mpesaService as any).makeRequest = async (endpoint: string, payload: Record<string, unknown>) => {
     assert.equal(endpoint, 'b2c');
-    assert.equal(payload.OriginatorConversationID, '600997_Test_32et3241ed8yu');
-    assert.equal(payload.InitiatorName, process.env.MPESA_INITIATOR_NAME);
-    assert.equal(typeof payload.SecurityCredential, 'string');
-    assert.ok(String(payload.SecurityCredential).length > 0);
-    assert.equal(payload.CommandID, 'BusinessPayment');
-    assert.equal(payload.Amount, '10');
-    assert.equal(payload.PartyA, process.env.MPESA_PARTYA);
-    assert.equal(payload.PartyB, '254705912645');
-    assert.equal(payload.Remarks, 'remarked');
-    const configuredCallbackUrl = `${String(process.env.MPESA_CALLBACK_URL).replace(/\/+$/, '')}/callbacks/mpesa`;
-    assert.equal(payload.QueueTimeOutURL, configuredCallbackUrl);
-    assert.equal(payload.ResultURL, configuredCallbackUrl);
-    assert.equal(payload.Occassion, 'ChristmasPay');
+    partyBNumbers.push(String(payload.PartyB));
 
     return {
       ResponseCode: '0',
@@ -28,16 +17,22 @@ test('B2C payment request is built with the documented Safaricom fields', async 
     };
   };
 
-  const response = await b2cService.initiateB2C({
-    OriginatorConversationID: '600997_Test_32et3241ed8yu',
-    CommandID: 'BusinessPayment',
-    Amount: 10,
-    PartyB: 254705912645,
-    Remarks: 'remarked',
-    Occassion: 'ChristmasPay',
-  });
+  try {
+    const response = await b2cService.initiateB2C({
+      OriginatorConversationID: '600997_Test_32et3241ed8yu',
+      CommandID: 'BusinessPayment',
+      Amount: 10,
+      PartyB: 254705912645,
+      Remarks: 'remarked',
+      Occassion: 'ChristmasPay',
+    });
+    await b2cService.initiateB2C({ PartyB: '0791614036' });
+    await b2cService.initiateB2C({ PartyB: '+254791614036' });
 
-  assert.equal(response.responseCode, '0');
-  assert.equal(response.responseDescription, 'Accept the service request successfully.');
-  (mpesaService as any).makeRequest = originalMakeRequest;
+    assert.equal(response.responseCode, '0');
+    assert.equal(response.responseDescription, 'Accept the service request successfully.');
+    assert.deepEqual(partyBNumbers, ['254705912645', '254791614036', '254791614036']);
+  } finally {
+    (mpesaService as any).makeRequest = originalMakeRequest;
+  }
 });

@@ -14,7 +14,11 @@ export abstract class RetailerFloatOperationsBase {
     return retailerEscrowFloatService.getFloat(merchantId);
   }
 
-  setFloat(merchantId: string, dailyFloat: number, tillNumber?: string, storeNumber?: string): Promise<EscrowJsonRecord> {
-    return retailerEscrowFloatService.setFloat(merchantId, dailyFloat, tillNumber, storeNumber);
+  getBalance(merchantId: string): Promise<EscrowJsonRecord> {
+    return retailerEscrowFloatService.getBalance(merchantId);
+  }
+
+  setFloat(merchantId: string, dailyFloat: number): Promise<EscrowJsonRecord> {
+    return retailerEscrowFloatService.setFloat(merchantId, dailyFloat);
   }
 }

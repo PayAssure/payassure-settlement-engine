@@ -3,7 +3,7 @@ import assert = require('node:assert/strict');
 import { prisma } from '../../common/database/prisma';
 import { retailerEscrowFloatService } from './retailer-escrow-float.service';
 
-test('creates and returns retailer float till and store identifiers', async () => {
+test('creates and returns a retailer float without unused till and store identifiers', async () => {
   const integrationModel = (prisma as any).integration;
   const floatModel = (prisma as any).retailerEscrowFloat;
   const depositModel = (prisma as any).retailerEscrowFloatDeposit;
@@ -26,22 +26,20 @@ test('creates and returns retailer float till and store identifiers', async () =
         merchantId: data.merchantId,
         currency: 'KES',
         dailyFloat: data.dailyFloat,
-        tillNumber: data.tillNumber,
-        storeNumber: data.storeNumber,
         updatedAt: new Date('2026-10-01T00:00:00.000Z'),
       };
     };
     depositModel.aggregate = async () => ({ _sum: { amount: null } });
     transferModel.aggregate = async () => ({ _sum: { amount: null } });
 
-    const result = await retailerEscrowFloatService.setFloat('pay_retailer_001', 10000, 'TILL-001', 'STORE-001');
+    const result = await retailerEscrowFloatService.setFloat('pay_retailer_001', 10000);
 
     assert.equal('expectedRemainingBalance' in createdData, false);
-    assert.equal(createdData.tillNumber, 'TILL-001');
-    assert.equal(createdData.storeNumber, 'STORE-001');
+    assert.equal('tillNumber' in createdData, false);
+    assert.equal('storeNumber' in createdData, false);
     assert.equal(result.availableBalance, 0);
-    assert.equal(result.tillNumber, 'TILL-001');
-    assert.equal(result.storeNumber, 'STORE-001');
+    assert.equal('tillNumber' in result, false);
+    assert.equal('storeNumber' in result, false);
   } finally {
     integrationModel.findUnique = original.integrationFindUnique;
     floatModel.findUnique = original.floatFindUnique;
@@ -51,7 +49,7 @@ test('creates and returns retailer float till and store identifiers', async () =
   }
 });
 
-test('editing dailyFloat without location fields preserves the stored float metadata', async () => {
+test('editing dailyFloat updates configuration without unused location fields', async () => {
   const integrationModel = (prisma as any).integration;
   const floatModel = (prisma as any).retailerEscrowFloat;
   const depositModel = (prisma as any).retailerEscrowFloatDeposit;
@@ -69,8 +67,6 @@ test('editing dailyFloat without location fields preserves the stored float meta
     merchantId: 'pay_retailer_001',
     currency: 'KES',
     dailyFloat: 10000,
-    tillNumber: 'TILL-001',
-    storeNumber: 'STORE-001',
     activeTransferId: null,
   };
   let updateData: any;
@@ -93,16 +89,65 @@ test('editing dailyFloat without location fields preserves the stored float meta
 
     const result = await retailerEscrowFloatService.setFloat('pay_retailer_001', 12000);
 
-    assert.equal(updateData.tillNumber, undefined);
-    assert.equal(updateData.storeNumber, undefined);
+    assert.deepEqual(Object.keys(updateData), ['dailyFloat']);
     assert.equal(result.availableBalance, 7000);
-    assert.equal(result.tillNumber, 'TILL-001');
-    assert.equal(result.storeNumber, 'STORE-001');
+    assert.equal('tillNumber' in result, false);
+    assert.equal('storeNumber' in result, false);
   } finally {
     integrationModel.findUnique = original.integrationFindUnique;
     floatModel.findUnique = original.floatFindUnique;
     floatModel.updateMany = original.floatUpdateMany;
     floatModel.findUniqueOrThrow = original.floatFindUniqueOrThrow;
+    depositModel.aggregate = original.depositAggregate;
+    transferModel.aggregate = original.transferAggregate;
+  }
+});
+
+test('virtual balance reports confirmed deposits, completed payouts, and active reservations separately', async () => {
+  const floatModel = (prisma as any).retailerEscrowFloat;
+  const depositModel = (prisma as any).retailerEscrowFloatDeposit;
+  const transferModel = (prisma as any).retailerEscrowTransfer;
+  const original = {
+    floatFindUnique: floatModel.findUnique,
+    depositAggregate: depositModel.aggregate,
+    transferAggregate: transferModel.aggregate,
+  };
+  const aggregateCalls: Array<{ model: string; where: any }> = [];
+
+  try {
+    floatModel.findUnique = async () => ({
+      id: 'float-balance-test',
+      merchantId: 'pay_retailer_balance',
+      currency: 'KES',
+    });
+    depositModel.aggregate = async ({ where }: any) => {
+      aggregateCalls.push({ model: 'deposit', where });
+      return { _sum: { amount: 12500 } };
+    };
+    transferModel.aggregate = async ({ where }: any) => {
+      aggregateCalls.push({ model: 'transfer', where });
+      return { _sum: { amount: where.status === 'SUCCEEDED' ? 2000 : 1500 } };
+    };
+
+    const result = await retailerEscrowFloatService.getBalance('pay_retailer_balance');
+
+    assert.equal(result.merchantId, 'pay_retailer_balance');
+    assert.equal(result.currency, 'KES');
+    assert.equal(result.depositedBalance, 12500);
+    assert.equal(result.paidOutBalance, 2000);
+    assert.equal(result.reservedBalance, 1500);
+    assert.equal(result.availableBalance, 9000);
+    assert.equal(typeof result.asOf, 'string');
+    assert.deepEqual(aggregateCalls.find(({ model }) => model === 'deposit')?.where, {
+      retailerEscrowFloatId: 'float-balance-test',
+      status: 'SUCCEEDED',
+    });
+    assert.deepEqual(aggregateCalls.filter(({ model }) => model === 'transfer').map(({ where }) => where.status), [
+      'SUCCEEDED',
+      { in: ['BALANCE_PENDING', 'BALANCE_VERIFIED', 'WAITING_FOR_MPESA', 'TRANSFER_PENDING'] },
+    ]);
+  } finally {
+    floatModel.findUnique = original.floatFindUnique;
     depositModel.aggregate = original.depositAggregate;
     transferModel.aggregate = original.transferAggregate;
   }

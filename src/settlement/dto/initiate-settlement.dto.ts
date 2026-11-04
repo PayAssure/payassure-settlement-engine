@@ -18,7 +18,7 @@ export class PaymentMethodDto {
   @IsOptional()
   payerPhoneNumber?: string = '';
 
-  @ApiPropertyOptional({ example: 'Safaricom', description: 'Payment collection provider. Required only for MPESA. CASH is treated as an escrow-backed collection.' })
+  @ApiPropertyOptional({ example: 'Safaricom', description: 'Payment collection provider. Required only for MPESA. CASH is funded from the retailer DB balance and paid out from the centralized account.' })
   @IsString()
   @IsOptional()
   provider?: 'MPESA' | 'CASH' | 'ESCROW' = 'MPESA';
@@ -41,7 +41,7 @@ export class PaymentMethodAllocationDto {
   @Min(0.01)
   amount: number = 0;
 
-  @ApiPropertyOptional({ example: 'ESCROW', description: 'Provider used for the payment allocation. CASH uses the escrow-backed flow.' })
+  @ApiPropertyOptional({ example: 'ESCROW', description: 'Provider used for the payment allocation. CASH uses the retailer DB balance; no retailer-to-platform transfer is made.' })
   @IsString()
   @IsOptional()
   provider?: 'MPESA' | 'CASH' | 'ESCROW' | 'BANK' = 'CASH';

@@ -183,7 +183,7 @@ Base path: /escrow
   - Body: array of reconciliation records
 
 ### 5) GET /escrow/retailer/float
-- Purpose: Return the authenticated retailer's current float configuration and callback-derived available balance.
+- Purpose: Return the authenticated retailer's float configuration and DB-derived virtual-balance breakdown.
 - Required headers:
   - Authorization: Bearer <jwt from /auth/login>
 - Path parameters: none. The merchant ID is resolved from the authenticated bearer token.
@@ -196,12 +196,14 @@ Base path: /escrow
       "merchantId": "pay_retailer_001",
       "currency": "KES",
       "dailyFloat": 10000,
-      "availableBalance": 8000,
-      "tillNumber": "TILL-001",
-      "storeNumber": "STORE-001",
+      "depositedBalance": 12500,
+      "paidOutBalance": 2000,
+      "reservedBalance": 1500,
+      "availableBalance": 9000,
       "updatedAt": "2026-09-28T19:30:00.000Z"
     }
     ```
+- This endpoint reads PayAssure records and does not query Safaricom's shared physical account. For field definitions, request examples, and error cases, see [CASH_SETTLEMENT_FLOW.md](./CASH_SETTLEMENT_FLOW.md#retailer-escrow-api-detailed-endpoint-contracts).
 - Error responses:
   - 401 Unauthorized: missing or invalid bearer token.
   - 403 Forbidden: authenticated user is not an active retailer integration owner.
@@ -220,7 +222,9 @@ Base path: /escrow
     "payerPhoneNumber": "254700000000"
   }
   ```
-- The request uses `MPESA_RETAILER_CONSUMER_KEY`, `MPESA_RETAILER_CONSUMER_SECRET`, `MPESA_RETAILER_SHORTCODE`, and `MPESA_RETAILER_PASSKEY`. It does not use the shared customer STK credentials.
+- The request uses `MPESA_RETAILER_CONSUMER_KEY`, `MPESA_RETAILER_CONSUMER_SECRET`, `MPESA_RETAILER_SHORTCODE`, and `MPESA_RETAILER_PASSKEY`. It uses PayBill (`CustomerPayBillOnline`), with the normalized payer phone as `PartyA`/`PhoneNumber` and the shortcode as `PartyB`. It does not use the shared customer STK credentials.
+- `AccountReference` and `TransactionDesc` are set to the authenticated retailer's registered business name. The deposit ID and callback token are kept in the server-side callback linkage.
+- For the complete PayBill field mapping, request/response field definitions, callback lifecycle, and error cases, see [CASH_SETTLEMENT_FLOW.md](./CASH_SETTLEMENT_FLOW.md#retailer-escrow-api-detailed-endpoint-contracts).
 - Success response:
   - Status: 201 Created
   - Body includes `depositId`, `merchantId`, `amount`, `status`, `merchantRequestId`, `checkoutRequestId`, and the gateway response fields.
@@ -236,29 +240,46 @@ Base path: /escrow
   - 404 Not Found: retailer integration or float configuration not found.
 
 ### 7) POST /escrow/retailer/float/balance
-- Purpose: Request the live balance of the authenticated retailer's escrow account through the retailer M-Pesa Account Balance flow.
+- Purpose: Return the authenticated retailer's virtual balance from PayAssure's database.
 - Required headers:
   - Authorization: ****** from /auth/login>
 - Authorization: the JWT user must belong to an active retailer integration. The merchant ID is resolved from the token.
 - Path parameters and request body: none.
-- The request follows the standard Account Balance flow using the `MPESA_RETAILER_*` credentials and callback configuration. It sets `IdentifierType` to `2` for the retailer account (the standard endpoint defaults to `4`) and requires the retailer to have a float configuration.
+- This compatibility POST route returns the same retailer-specific DB ledger balance as `GET /escrow/retailer/float/balance`. It does not call Safaricom or query the shared physical account.
 - Success response:
-  - Status: 201 Created
-  - Body: the immediate M-Pesa Account Balance API acknowledgment, including `OriginatorConversationID`, `ConversationID`, `ResponseCode`, and `ResponseDescription`.
-- The actual account balance is returned asynchronously by Safaricom to the retailer balance callback. No reconciliation ID or retailer-supplied account ID is required.
+  - Status: 201 Created (NestJS POST default)
+  - Body:
+    ```json
+    {
+      "merchantId": "pay_retailer_001",
+      "currency": "KES",
+      "depositedBalance": 12500,
+      "paidOutBalance": 2000,
+      "reservedBalance": 1500,
+      "availableBalance": 9000,
+      "asOf": "2026-11-04T12:19:29.795Z"
+    }
+    ```
 - Error responses:
   - 401 Unauthorized: missing or invalid bearer token.
   - 403 Forbidden: authenticated user is not an active retailer integration owner.
   - 404 Not Found: retailer float configuration not found.
+- See [CASH_SETTLEMENT_FLOW.md](./CASH_SETTLEMENT_FLOW.md#retailer-escrow-api-detailed-endpoint-contracts) for the full balance contract and response field definitions.
+
+### POST /payments/mpesa/escrow-balance
+- Purpose: Return the authenticated retailer's virtual balance from the database for compatibility with existing clients.
+- Required headers: `Authorization: Bearer <access-token>`.
+- The retailer is resolved from the authenticated user. This endpoint does not query Safaricom or return the balance of the shared physical account.
+- It returns the same response shape as `GET /escrow/retailer/float/balance`.
 
 ### 8) POST /payments/callbacks/mpesa/retailer-escrow-balance
-- Purpose: Receive Safaricom's asynchronous result for the general retailer account balance query.
+- Purpose: Acknowledge legacy/in-flight Safaricom results for retailer account-balance queries. New retailer balance checks do not initiate this provider query.
 - Required headers: none; this callback is called by Safaricom.
 - Path parameters and request body: no path parameters; request body is the Account Balance callback payload.
-- Processing behavior: the callback is logged and acknowledged. The actual account balance appears in the `Result.ResultParameters.ResultParameter` entry with key `AccountBalance`.
+- Processing behavior: the callback is logged and acknowledged; it does not update a retailer's virtual balance. Retailer virtual balances are derived from that retailer's successful deposit and transfer records.
 
 ### 9) POST /payments/callbacks/mpesa/retailer-escrow-balance-timeout
-- Purpose: Receive Safaricom's asynchronous timeout notification for the general retailer account balance query.
+- Purpose: Acknowledge a legacy/in-flight Safaricom timeout for a retailer account-balance query.
 - Required headers: none; this callback is called by Safaricom.
 - Processing behavior: the timeout is logged and acknowledged.
 

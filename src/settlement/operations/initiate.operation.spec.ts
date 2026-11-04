@@ -97,3 +97,42 @@ test('failed customer payment does not create supplier settlements', async () =>
     paymentModule.initiateCustomerPayment = originalInitiateCustomerPayment;
   }
 });
+
+test('cash settlement allocates after the DB balance has been reserved', async () => {
+  const fixture = makeInitiationFixture({ type: 'CASH', provider: 'ESCROW', amount: 10_000 });
+  const paymentModule = customerPayment as any;
+  const originalInitiateCustomerPayment = paymentModule.initiateCustomerPayment;
+  const originalHasFloatConfig = retailerEscrowTransferService.hasFloatConfig;
+  let allocationCalled = false;
+  paymentModule.initiateCustomerPayment = async () => ({
+    success: true,
+    cashAllocationReady: true,
+    settlement: { settlementId: 'settlement-1', status: 'PENDING_PROCESSING' },
+    message: 'DB balance reserved',
+  });
+  retailerEscrowTransferService.hasFloatConfig = async () => true;
+
+  try {
+    const response = await initiateOperation(
+      {},
+      fixture.repository,
+      fixture.logger,
+      'token',
+      fixture.data as any,
+      ['KES'],
+      async ({ merchantTransactionReference }) => {
+        allocationCalled = true;
+        assert.equal(merchantTransactionReference, fixture.data.merchantTransactionReference);
+        assert.deepEqual(fixture.created, ['parent', 'supplier']);
+        return { success: true, status: 'PROCESSING', message: 'Payouts dispatched' };
+      },
+    );
+
+    assert.equal(allocationCalled, true);
+    assert.equal(response.success, true);
+    assert.equal(response.settlement.status, 'PROCESSING');
+  } finally {
+    paymentModule.initiateCustomerPayment = originalInitiateCustomerPayment;
+    retailerEscrowTransferService.hasFloatConfig = originalHasFloatConfig;
+  }
+});

@@ -580,6 +580,145 @@ test('splitAndAllocateFunds persists payment callback metadata before B2B payout
   assert.equal(updatedMetadata.paymentCallback.providerReference, 'RCP-3001');
 });
 
+test('splitAndAllocateFunds waits for the customer MPESA callback in mixed cash funding', async () => {
+  let dispatchCalled = false;
+  const repository = {
+    findSettlementByReference: async () => ({
+      id: 'settlement-mixed-funding',
+      status: 'PENDING_PROCESSING',
+      metadata: {
+        fundingPlan: {
+          cashAmount: 40,
+          mpesaAmount: 60,
+          mpesaStatus: 'WAITING_FOR_CUSTOMER',
+        },
+      },
+      amount: 100,
+      businessId: 'retailer-1',
+      currency: 'KES',
+      reference: 'REF-MIXED-FUNDING',
+      paymentPayload: {
+        suppliers: [{ supplierMerchantId: 'SUP-3001', supplierTotalAmount: 80, retailerTotalAmount: 20, platformFee: 0 }],
+      },
+    }),
+    updateSettlementStatus: async () => ({ id: 'settlement-mixed-funding' }),
+  };
+  const service = new SettlementService(repository as any, mockIdempotencyService, mockRetryService);
+  (service as any).prisma = { retailerEscrowTransfer: { findUnique: async () => null } };
+  (service as any).dispatchB2bPayouts = async () => {
+    dispatchCalled = true;
+    return { success: true };
+  };
+
+  const response = await service.splitAndAllocateFunds({
+    merchantTransactionReference: 'TXN-MIXED-FUNDING',
+    mpesaReceipt: 'RCP-MIXED-1',
+    resultCode: 0,
+  });
+
+  assert.equal(response.status, 'PENDING_PROCESSING');
+  assert.match(response.message, /waiting for the customer M-Pesa payment callback/i);
+  assert.equal(dispatchCalled, false);
+});
+
+test('splitAndAllocateFunds dispatches central-account payouts for cash with a DB-verified reservation', async () => {
+  const dispatchedParties: string[] = [];
+  const repository = {
+    findSettlementByReference: async () => ({
+      id: 'settlement-cash-direct',
+      status: 'PENDING_PROCESSING',
+      metadata: {
+        fundingPlan: { cashAmount: 2, mpesaAmount: 0, mpesaStatus: 'NOT_REQUIRED' },
+        escrowFunding: { payoutSource: 'CENTRAL_ACCOUNT', transferId: 'cash-transfer-1' },
+      },
+      amount: 2,
+      businessId: 'retailer-1',
+      currency: 'KES',
+      reference: 'REF-CASH-DIRECT',
+      paymentPayload: {
+        suppliers: [{ supplierMerchantId: 'SUP-3001', supplierTotalAmount: 1, retailerTotalAmount: 1, platformFee: 0 }],
+      },
+    }),
+    updateSettlementStatus: async (_id: string, status: string, updates: any) => ({ id: 'settlement-cash-direct', status, ...updates }),
+  };
+  const service = new SettlementService(repository as any, mockIdempotencyService, mockRetryService);
+  (service as any).prisma = {
+    retailerEscrowTransfer: {
+      findUnique: async () => ({ status: 'BALANCE_VERIFIED', mpesaAmount: 0 }),
+    },
+  };
+  (service as any).resolveRetailerMerchantId = async () => 'retailer-merchant';
+  (service as any).dispatchB2bPayouts = async ({ party }: { party: string }) => {
+    dispatchedParties.push(party);
+    return { success: true, status: 'SUBMITTED' };
+  };
+
+  const response = await service.splitAndAllocateFunds({
+    merchantTransactionReference: 'TXN-CASH-DIRECT',
+    resultCode: 0,
+  });
+
+  assert.equal(response.success, true);
+  assert.deepEqual(dispatchedParties, ['SUPPLIER', 'RETAILER']);
+  assert.equal(response.splitRecord.expectedPayoutCount, 2);
+});
+
+test('cash reservation is finalized only after callbacks confirm every expected payout', async () => {
+  let confirmedPayoutCount = 1;
+  let finalized = false;
+  const service = new SettlementService({
+    findSettlementByReference: async () => ({
+      id: 'settlement-cash-callback',
+      reference: 'REF-CASH-CALLBACK',
+      metadata: {
+        escrowFunding: { payoutSource: 'CENTRAL_ACCOUNT', transferId: 'cash-transfer-callback' },
+        splitRecords: [{ expectedPayoutCount: 2 }],
+      },
+    }),
+    findSettlementById: async () => ({
+      id: 'settlement-cash-callback',
+      reference: 'REF-CASH-CALLBACK',
+      metadata: {
+        escrowFunding: { payoutSource: 'CENTRAL_ACCOUNT', transferId: 'cash-transfer-callback' },
+        splitRecords: [{ expectedPayoutCount: 2 }],
+      },
+    }),
+    updateSettlementStatus: async () => ({}),
+  } as any, mockIdempotencyService, mockRetryService);
+  (service as any).idempotencyService = {
+    getPayoutAttemptByReference: async () => ({
+      idempotencyKey: 'payout-key',
+      settlementId: 'settlement-cash-callback',
+    }),
+    markCallbackReceived: async () => {},
+  };
+  (service as any).prisma = {
+    settlement: {
+      findUnique: async () => ({
+        metadata: {
+          escrowFunding: { payoutSource: 'CENTRAL_ACCOUNT', transferId: 'cash-transfer-callback' },
+          splitRecords: [{ expectedPayoutCount: 2 }],
+        },
+      }),
+    },
+    retailerEscrowTransfer: {
+      findUnique: async () => ({ id: 'cash-transfer-callback', status: 'BALANCE_VERIFIED' }),
+      updateMany: async () => { finalized = true; return { count: 1 }; },
+    },
+    b2BPayoutAttempt: {
+      findMany: async () => Array.from({ length: confirmedPayoutCount }, () => ({ status: 'COMPLETED' })),
+    },
+  };
+  (service as any).resolveSupplierMerchantId = () => 'supplier-1';
+
+  await service.handleB2bPayoutCallback({ reference: 'payout-1', party: 'SUPPLIER', status: 'SUCCESS' });
+  assert.equal(finalized, false);
+
+  confirmedPayoutCount = 2;
+  await service.handleB2bPayoutCallback({ reference: 'payout-2', party: 'RETAILER', status: 'SUCCESS' });
+  assert.equal(finalized, true);
+});
+
 test('handlePaymentCallback transitions a settlement into pending processing using participant payout records instead of payer payload details', async () => {
   let updatedStatus: any = null;
   let updatedPayload: any = null;

@@ -14,7 +14,7 @@ export abstract class SettlementInitiationControllerBase extends SettlementAuthe
   @ApiHeader({ name: 'x-settlement-session', description: 'Settlement session token obtained from settlement authenticate. This is not a bearer token.', required: true })
   @ApiOperation({
     summary: 'Initiate a settlement request',
-    description: 'Submit settlement payload using both a user access token and a settlement session token. The access token must be sent as a bearer Authorization header and the settlement session token must be sent in the x-settlement-session header.',
+    description: 'Submit settlement payload using both a user access token and a settlement session token. CASH funding is checked and reserved against the retailer DB balance, then supplier and retailer payouts are dispatched from the centralized account without a retailer-to-platform B2B transfer. Mixed CASH/MPESA requests wait for the customer M-Pesa callback before checking and reserving the cash portion.',
   })
   @ApiBody({
     description: 'Canonical retailer settlement initiation payload. The retailer supplies supplierAmount and retailerAmount; PayAssure calculates and equally deducts the configured platform fee from both allocations. Do not send platformFee, provider, callbackUrl, or transactionDate.',

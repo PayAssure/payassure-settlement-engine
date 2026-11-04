@@ -10,4 +10,5 @@ export interface SettlementInitiationContext {
   integrationId: string;
   retailerMerchantId: string;
   primarySettlement: any;
+  allocateCashSettlement?: (data: { merchantTransactionReference: string }) => Promise<any>;
 }

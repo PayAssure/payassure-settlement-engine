@@ -17,6 +17,21 @@ export abstract class SettlementAllocationBase extends SettlementPaymentCallback
       this.logger.error('[SETTLEMENT][SPLIT] payment payload not found', { timestamp, settlementId: settlement.id });
       throw new BadRequestException({ statusCode: 400, message: 'Settlement payment payload not found', error: 'INVALID_SETTLEMENT_PAYLOAD' });
     }
+    const existingMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
+    const fundingPlan = existingMetadata.fundingPlan && typeof existingMetadata.fundingPlan === 'object'
+      ? existingMetadata.fundingPlan as Record<string, any>
+      : {};
+    const escrowFunding = existingMetadata.escrowFunding && typeof existingMetadata.escrowFunding === 'object'
+      ? existingMetadata.escrowFunding as Record<string, any>
+      : {};
+    const directCentralPayout = escrowFunding.payoutSource === 'CENTRAL_ACCOUNT';
+    if (data.customerMpesaPaymentConfirmed === true && Number(fundingPlan.mpesaAmount ?? 0) > 0) {
+      fundingPlan.mpesaStatus = 'SUCCESS';
+      existingMetadata.fundingPlan = fundingPlan;
+      await this.repository.updateSettlementStatus(settlement.id, SettlementStatus.PENDING_PROCESSING, {
+        metadata: existingMetadata,
+      });
+    }
     const escrowTransfer = await this.prisma.retailerEscrowTransfer.findUnique({ where: { settlementId: settlement.id } });
     if (escrowTransfer) {
       if (['FAILED', 'BALANCE_MISMATCH'].includes(escrowTransfer.status)) {
@@ -26,11 +41,11 @@ export abstract class SettlementAllocationBase extends SettlementPaymentCallback
           message: escrowTransfer.failureReason ?? 'Retailer escrow funding failed; settlement allocation was blocked.',
         };
       }
-      if (escrowTransfer.status !== 'SUCCEEDED') {
+      if (escrowTransfer.status !== 'SUCCEEDED' && !(directCentralPayout && escrowTransfer.status === 'BALANCE_VERIFIED')) {
         return {
           success: true,
           status: SettlementStatus.PENDING_PROCESSING,
-          message: 'Settlement allocation is waiting for retailer escrow balance verification and B2B transfer confirmation.',
+          message: 'Settlement allocation is waiting for retailer escrow balance verification and transfer confirmation.',
           escrowTransferStatus: escrowTransfer.status,
         };
       }
@@ -43,6 +58,18 @@ export abstract class SettlementAllocationBase extends SettlementPaymentCallback
           mpesaFundingStatus: escrowTransfer.mpesaStatus,
         };
       }
+    }
+    if (
+      Number(fundingPlan.cashAmount ?? 0) > 0
+      && Number(fundingPlan.mpesaAmount ?? 0) > 0
+      && fundingPlan.mpesaStatus !== 'SUCCESS'
+    ) {
+      return {
+        success: true,
+        status: SettlementStatus.PENDING_PROCESSING,
+        message: 'Settlement allocation is waiting for the customer M-Pesa payment callback.',
+        mpesaFundingStatus: fundingPlan.mpesaStatus ?? 'WAITING_FOR_CUSTOMER',
+      };
     }
     const suppliers = Array.isArray(paymentPayload.suppliers) ? paymentPayload.suppliers : [];
     if (suppliers.length === 0) {
@@ -72,12 +99,11 @@ export abstract class SettlementAllocationBase extends SettlementPaymentCallback
       }
     }
     const supplierAllocations = Array.from(supplierGroups.values());
-    const existingMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
     const paymentCallbackRecord = {
       merchantTransactionReference: data.merchantTransactionReference,
       status: 'SUCCESS',
-      provider: 'M-PESA',
-      providerReference: data.mpesaReceipt ?? data.mpesaCheckoutRequestId ?? data.mpesaMerchantRequestId ?? null,
+      provider: Number(fundingPlan.mpesaAmount ?? 0) > 0 ? 'M-PESA' : 'RETAILER_ESCROW_LEDGER',
+      providerReference: data.mpesaReceipt ?? data.mpesaCheckoutRequestId ?? data.mpesaMerchantRequestId ?? escrowFunding.transferId ?? null,
       amount: Number(settlement.amount ?? 0),
       currency: settlement.currency ?? 'KES',
       metadata: {
@@ -86,6 +112,7 @@ export abstract class SettlementAllocationBase extends SettlementPaymentCallback
         mpesaMerchantRequestId: data.mpesaMerchantRequestId ?? null,
         resultCode: data.resultCode ?? null,
         resultDesc: data.resultDesc ?? null,
+        ...(directCentralPayout ? { payoutSource: 'CENTRAL_ACCOUNT', escrowTransferId: escrowFunding.transferId ?? null } : {}),
       },
       receivedAt: timestamp,
     };
@@ -100,6 +127,7 @@ export abstract class SettlementAllocationBase extends SettlementPaymentCallback
       resultDesc: data.resultDesc ?? null,
       totalAmount: Number(settlement.amount),
       currency: settlement.currency ?? 'KES',
+      expectedPayoutCount: supplierAllocations.filter((supplier) => supplier.amount > 0).length + (retailerAmount > 0 ? 1 : 0),
       allocations: {
         suppliers: supplierAllocations.map((supplier) => ({ merchantId: supplier.merchantId, amount: supplier.amount, status: 'PENDING_PAYOUT' })),
         retailer: { merchantId: resolvedRetailerMerchantId, amount: retailerAmount, status: 'PENDING_PAYOUT' },

@@ -5,7 +5,6 @@ export interface RetailerEscrowMpesaConfig {
   shortcode: string;
   passkey: string;
   partyA: string;
-  partyB?: string;
   initiatorName: string;
   initiatorPassword: string;
   callbackUrl: string;
@@ -29,7 +28,6 @@ export function getRetailerEscrowMpesaConfig(): RetailerEscrowMpesaConfig {
     shortcode,
     passkey: readRequired('PASSKEY'),
     partyA: process.env[`${prefix}PARTY_A`]?.trim() || shortcode,
-    partyB: process.env[`${prefix}PARTY_B`]?.trim(),
     initiatorName: readRequired('INITIATOR_NAME'),
     initiatorPassword: readRequired('INITIATOR_PASSWORD'),
     callbackUrl: readRequired('CALLBACK_URL'),
@@ -59,10 +57,6 @@ export function getRetailerEscrowMpesaLogContext(config: RetailerEscrowMpesaConf
     partyA: {
       variable: partyAOverride ? 'MPESA_RETAILER_PARTY_A' : 'MPESA_RETAILER_SHORTCODE (fallback)',
       value: config.partyA,
-    },
-    partyB: {
-      variable: 'MPESA_RETAILER_PARTY_B',
-      value: config.partyB ?? '[MISSING]',
     },
     initiatorName: { variable: 'MPESA_RETAILER_INITIATOR_NAME', value: config.initiatorName },
     initiatorPassword: {

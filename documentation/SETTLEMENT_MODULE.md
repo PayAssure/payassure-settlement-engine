@@ -150,6 +150,8 @@ The retailer POS/ERP owns the commercial facts. It sends the supplier and retail
 - Payment method amounts must equal `amount`.
 - Supported customer funding methods are `CASH`, `MPESA`, and legacy methods supported by the existing DTO during migration.
 - `phoneNumber` is required for an `MPESA` funding method.
+- M-Pesa recipient numbers may be provided as `0791614036`, `+254791614036`, or `254791614036`; payouts are sent in Safaricom format as `254791614036`.
+- MPESA funding is collected directly from the customer. In mixed CASH/MPESA settlements, retailer escrow is used only for the CASH amount, and its transfer starts after the MPESA collection succeeds.
 - `supplierMerchantId` must resolve to an active supplier with a verified payout destination.
 - `supplierAmount` and `retailerAmount` are supplied by the retailer system.
 - `platformFee` must not be supplied by the client.

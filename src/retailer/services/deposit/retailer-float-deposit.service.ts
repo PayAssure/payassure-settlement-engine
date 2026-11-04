@@ -26,6 +26,10 @@ class RetailerFloatDepositService extends MpesaStkOperationsBase {
     if (!integration.isActive || integration.participant.status !== ParticipantStatus.ACTIVE) {
       throw new ForbiddenException('An active retailer integration is required to initiate a float deposit');
     }
+    const businessName = integration.participant.businessName.trim();
+    if (!businessName) {
+      throw new ConflictException(`Retailer ${merchantId} does not have a business name configured`);
+    }
 
     const float = await prisma.retailerEscrowFloat.findUnique({ where: { merchantId } });
     if (!float) {
@@ -33,12 +37,6 @@ class RetailerFloatDepositService extends MpesaStkOperationsBase {
     }
 
     const config = getRetailerEscrowMpesaConfig();
-    if (!config.partyB) {
-      throw new Error('Missing required retailer M-Pesa configuration: MPESA_RETAILER_PARTY_B');
-    }
-    if (config.partyB === config.shortcode) {
-      throw new Error('MPESA_RETAILER_PARTY_B must differ from MPESA_RETAILER_SHORTCODE for Buy Goods STK Push');
-    }
 
     const callbackToken = randomUUID();
     const deposit = await prisma.retailerEscrowFloatDeposit.create({
@@ -65,14 +63,14 @@ class RetailerFloatDepositService extends MpesaStkOperationsBase {
       BusinessShortCode: config.shortcode,
       Password: this.buildPassword(config.shortcode, config.passkey, timestamp),
       Timestamp: timestamp,
-      TransactionType: 'CustomerBuyGoodsOnline',
+      TransactionType: 'CustomerPayBillOnline',
       Amount: amount,
       PartyA: deposit.payerPhone,
-      PartyB: config.partyB,
+      PartyB: config.shortcode,
       PhoneNumber: deposit.payerPhone,
       CallBackURL: callbackUrl.toString(),
-      AccountReference: `FLOAT-${deposit.id}`,
-      TransactionDesc: `Retailer escrow float deposit ${deposit.id}`,
+      AccountReference: businessName,
+      TransactionDesc: businessName,
     };
     const credentials: MpesaRequestCredentials = {
       environment: config.environment,

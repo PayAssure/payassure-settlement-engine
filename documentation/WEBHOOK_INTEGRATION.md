@@ -78,6 +78,11 @@ Example event:
       "currency": "KES",
       "status": "FAILED"
     },
+    "cash_funding": {
+      "amount": 100,
+      "currency": "KES",
+      "source": "RETAILER_VIRTUAL_BALANCE"
+    },
     "details": {
       "party": "SUPPLIER",
       "payout_status": "FAILED",
@@ -108,6 +113,12 @@ determine whether customer funds were collected. Payout attempts are reported
 separately in `data.payouts`. Supplier deliveries contain only that supplier's
 payout attempts; retailer deliveries can contain all payout attempts for that
 settlement. Payout records currently describe retailer and supplier payouts.
+
+`data.cash_funding` is included only after a positive cash amount has been
+reserved from the retailer's database-backed virtual balance for payout. It
+reports the amount used and its source, not the retailer's remaining or
+available float balance. It is omitted for settlements with no cash funding
+and while a mixed settlement is still waiting for its customer M-Pesa callback.
 
 ## 3. Verify the signature
 
@@ -211,7 +222,9 @@ callbacks have arrived.
 
 For each configured endpoint, PayAssure makes a synchronous HTTPS request with
 a five-second request timeout. A transport error or non-2xx response is retried
-up to three total attempts with a short backoff. Redirects are rejected.
+up to three total attempts with a short backoff, except non-retryable 4xx
+responses (such as `404` and `405`), which are logged and stopped immediately.
+`408`, `425`, `429`, and 5xx responses remain retryable. Redirects are rejected.
 Delivery failures are logged and do not roll back payment or settlement state.
 
 The current sender retries within the request execution only; it does not
@@ -219,6 +232,20 @@ persist a webhook outbox or guarantee delivery after a process crash. Your
 system must use idempotent event handling and should reconcile important
 transactions through the settlement status/history APIs if it does not receive
 events. A later, separate notification for a state change has a new event ID.
+
+### Diagnosing delivery failures
+
+| Log result | Likely cause | What to check |
+| --- | --- | --- |
+| `Webhook returned HTTP 405` | The URL is reachable, but its route does not accept `POST`. | Implement `POST` on the configured path; check proxy or web-server method rules. PayAssure does not retry this permanent response. |
+| `Webhook returned HTTP 404` | The configured path does not exist on the receiver. | Correct the full webhook URL, including its route path, for the affected merchant integration or participant. PayAssure does not retry this permanent response. |
+| `fetch failed` | The receiver could not be reached or its TLS connection failed. | Use the logged endpoint origin and nested cause (for example DNS code) to check DNS, public network access, TLS certificate/hostname, firewall and server availability from the PayAssure host. |
+
+These are receiver/configuration failures, not settlement payout failures. The
+settlement continues independently of webhook delivery. Return a `2xx` only
+after accepting the event; then inspect the receiver's request logs using the
+event ID and recipient merchant ID if processing did not occur. PayAssure
+prefers an integration-specific `webhookUrl` over the participant-level URL.
 
 ## 7. Integration checklist
 

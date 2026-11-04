@@ -19,6 +19,11 @@ export class PaymentRecordService {
     return merchantReference || null;
   }
 
+  private extractStoredEscrowTransferId(record: Record<string, any> | null | undefined): string | null {
+    const gatewayPayload = record?.gatewayPayloadJson as Record<string, any> | undefined;
+    return typeof gatewayPayload?.escrowTransferId === 'string' ? gatewayPayload.escrowTransferId : null;
+  }
+
   private extractMerchantTransactionReference(payload: Record<string, unknown>): string | null {
     const gatewayPayload = (payload?.Body as Record<string, unknown> | undefined)?.gatewayPayload as Record<string, unknown> | undefined;
     const merchantReference =
@@ -95,6 +100,7 @@ export class PaymentRecordService {
         checkoutRequestId: updatedTransaction.checkoutRequestId,
         status: updatedTransaction.status,
         merchantTransactionReference: updatedTransaction.merchantTransactionReference ?? resolvedMerchantTransactionReference ?? fallbackMerchantTransactionReference,
+        escrowTransferId: this.extractStoredEscrowTransferId(existingTransaction),
         processingLogs: updatedTransaction.processingLogs,
       };
     }
@@ -120,6 +126,7 @@ export class PaymentRecordService {
       checkoutRequestId: updatedTransaction.checkoutRequestId,
       status: updatedTransaction.status,
       merchantTransactionReference: updatedTransaction.merchantTransactionReference ?? resolvedMerchantTransactionReference ?? fallbackMerchantTransactionReference,
+      escrowTransferId: this.extractStoredEscrowTransferId(existingTransaction),
       processingLogs: updatedTransaction.processingLogs,
     };
   }

@@ -5,10 +5,13 @@ import { getGatewayAccountReference } from './get-gateway-account-reference';
 import { sendStkPushRequest, sendStkPushRequestWithRetry } from './stk-push-with-retry';
 import { buildSettlementResult } from '../helpers/build-settlement-result';
 
-export async function initiateMpesaCustomerPayment(context: SettlementInitiationContext) {
+export async function initiateMpesaCustomerPayment(
+  context: SettlementInitiationContext,
+  funding?: { amount: number; payerPhoneNumber: string },
+) {
   const { data, repository, logger, session, primarySettlement, retailerMerchantId } = context;
-  const mobileNumber = String(data.paymentMethod?.payerPhoneNumber ?? '').trim();
-  const amount = Number(data.totalAmount);
+  const mobileNumber = String(funding?.payerPhoneNumber ?? data.paymentMethod?.payerPhoneNumber ?? '').trim();
+  const amount = Number(funding?.amount ?? data.totalAmount);
   const accountReference = getGatewayAccountReference();
   const transactionDesc = buildTransactionDescription(data);
   const gatewayRequestPayload = {
@@ -17,7 +20,12 @@ export async function initiateMpesaCustomerPayment(context: SettlementInitiation
     currency: data.currency,
     settlementMethod: data.settlementMethod,
     description: data.description,
-    paymentMethod: { ...data.paymentMethod, payerPhoneNumber: mobileNumber, phoneNumber: undefined },
+    paymentMethod: {
+      ...data.paymentMethod,
+      ...(funding ? { type: 'MPESA', provider: 'MPESA', amount } : {}),
+      payerPhoneNumber: mobileNumber,
+      phoneNumber: undefined,
+    },
     transactionDate: data.transactionDate,
     metadata: data.metadata,
     suppliers: data.suppliers,

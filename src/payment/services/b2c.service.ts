@@ -19,7 +19,7 @@ class B2CService {
       CommandID: request.CommandID || 'BusinessPayment',
       Amount: String(request.Amount ?? request.amount ?? 0),
       PartyA: String(partyA),
-      PartyB: String(request.PartyB ?? request.partyB ?? request.recipientPhone ?? ''),
+      PartyB: mpesaService.formatPhoneNumber(String(request.PartyB ?? request.partyB ?? request.recipientPhone ?? '')),
       Remarks: request.Remarks || request.remarks || 'B2C payment',
       QueueTimeOutURL: callbackUrl,
       ResultURL: callbackUrl,

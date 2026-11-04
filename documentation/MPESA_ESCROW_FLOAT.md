@@ -43,8 +43,6 @@ Successful response:
   "currency": "KES",
   "dailyFloat": 10000,
   "availableBalance": 8000,
-  "tillNumber": "TILL-001",
-  "storeNumber": "STORE-001",
   "updatedAt": "2026-09-28T19:30:00.000Z"
 }
 ```
@@ -66,30 +64,16 @@ Request fields:
 | Field | Type | Required | Rules |
 | --- | --- | --- | --- |
 | `dailyFloat` | number | Yes | Must be finite and greater than or equal to `0`. |
-| `tillNumber` | string | No | Retailer till identifier. |
-| `storeNumber` | string | No | Retailer store identifier. |
 
 Initial setup:
 
 ```json
 {
-  "dailyFloat": 10000,
-  "tillNumber": "TILL-001",
-  "storeNumber": "STORE-001"
+  "dailyFloat": 10000
 }
 ```
 
 Creating a float configuration does not create available funds. Retailers must complete an STK deposit to establish a balance.
-
-Explicitly reset both values:
-
-```json
-{
-  "dailyFloat": 10000,
-  "tillNumber": "TILL-001",
-  "storeNumber": "STORE-001"
-}
-```
 
 The endpoint cannot set or reset available funds. Unknown `expectedRemainingBalance` request fields are rejected by request validation.
 
@@ -101,8 +85,6 @@ Successful response:
   "currency": "KES",
   "dailyFloat": 10000,
   "availableBalance": 8000,
-  "tillNumber": "TILL-001",
-  "storeNumber": "STORE-001",
   "updatedAt": "2026-09-28T19:35:00.000Z"
 }
 ```
@@ -119,14 +101,13 @@ The active-transfer restriction prevents an administrator from changing the expe
 
 ## 3. M-Pesa configuration
 
-Configure one dedicated `MPESA_RETAILER_*` set for the retailer account. These credentials are used for retailer float-deposit STK Push, retailer Account Balance queries, and retailer-to-PayAssure B2B transfer. Retailer Account Balance queries use `IdentifierType` 2 instead of the standard Account Balance API's default of 4.
+Configure the `MPESA_RETAILER_*` values for the approved centralized PayBill account used by escrow deposits and transfers. Retailer Account Balance queries use `IdentifierType` 2 instead of the standard Account Balance API's default of 4.
 
 ```dotenv
 MPESA_RETAILER_ENVIRONMENT=production
 MPESA_RETAILER_CONSUMER_KEY=<retailer-consumer-key>
 MPESA_RETAILER_CONSUMER_SECRET=<retailer-consumer-secret>
 MPESA_RETAILER_SHORTCODE=<retailer-shortcode>
-MPESA_RETAILER_PARTY_B=<retailer-buy-goods-till>
 MPESA_RETAILER_PASSKEY=<retailer-stk-passkey>
 MPESA_RETAILER_PARTY_A=<retailer-party-a>
 MPESA_RETAILER_INITIATOR_NAME=<retailer-initiator>
@@ -137,8 +118,8 @@ MPESA_RETAILER_PAYASSURE_SHORTCODE=<payassure-receiving-shortcode>
 
 Details:
 
-- `MPESA_RETAILER_PARTY_A` is optional and defaults to `MPESA_RETAILER_SHORTCODE`.
-- `MPESA_RETAILER_PARTY_B` is required for retailer float-deposit STK Push and must be the Buy Goods Till number, different from `MPESA_RETAILER_SHORTCODE`.
+- `MPESA_RETAILER_PARTY_A` is optional and defaults to `MPESA_RETAILER_SHORTCODE`; it is used for account-balance/B2B operations, not as the deposit STK payer.
+- Float-deposit STK Push uses PayBill: `MPESA_RETAILER_SHORTCODE` is `BusinessShortCode` and `PartyB`; the normalized payer phone number is both `PartyA` and `PhoneNumber`. The transaction type is `CustomerPayBillOnline`. No separate `MPESA_RETAILER_PARTY_B` is required.
 - `MPESA_RETAILER_PASSKEY` is required for retailer float-deposit STK Push.
 - Retailer Account Balance and escrow B2B use the existing `ProductionCertificate.cer` certificate.
 - `MPESA_RETAILER_CALLBACK_URL` must be publicly reachable by Safaricom. The application appends the callback paths below.
@@ -170,7 +151,8 @@ Rules:
 
 - `amount` must be a positive integer KES amount.
 - `payerPhoneNumber` must be a valid Kenyan phone number.
-- The STK request uses `MPESA_RETAILER_CONSUMER_KEY`, `MPESA_RETAILER_CONSUMER_SECRET`, `MPESA_RETAILER_SHORTCODE`, `MPESA_RETAILER_PARTY_B`, and `MPESA_RETAILER_PASSKEY`.
+- The STK request uses `MPESA_RETAILER_CONSUMER_KEY`, `MPESA_RETAILER_CONSUMER_SECRET`, `MPESA_RETAILER_SHORTCODE`, and `MPESA_RETAILER_PASSKEY`. `payerPhoneNumber` is normalized and sent as both `PartyA` and `PhoneNumber`; the PayBill shortcode is sent as both `BusinessShortCode` and `PartyB` with `CustomerPayBillOnline`.
+- The retailer's registered business name is sent as both `AccountReference` and `TransactionDesc`; internal deposit IDs are not shown in these customer-facing fields.
 - The retailer Account Balance request uses the `MPESA_RETAILER_*` credentials, shortcode/party A, initiator, and callback configuration, with `IdentifierType` set to `2`.
 - The callback is isolated from normal settlement payment callbacks, so a float deposit cannot trigger settlement splitting.
 - Creating the request or receiving an STK acceptance does not add available funds.

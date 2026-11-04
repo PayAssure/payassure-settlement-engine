@@ -5,10 +5,10 @@ import type { SettlementInitiationContext } from '../context';
 
 export async function startLiveEscrowBalanceCheck(
   context: SettlementInitiationContext,
-  amounts: { cashAmount: number; mpesaAmount: number; mpesaPayerPhoneNumber: string; hasLiveEscrowFloat: boolean },
+  amounts: { cashAmount: number; hasLiveEscrowFloat: boolean },
 ) {
   const { data, repository, logger, primarySettlement, retailerMerchantId } = context;
-  const { cashAmount, mpesaAmount, mpesaPayerPhoneNumber, hasLiveEscrowFloat } = amounts;
+  const { cashAmount, hasLiveEscrowFloat } = amounts;
 
   if (!hasLiveEscrowFloat) {
     const reason = `Retailer escrow daily float is not configured for ${retailerMerchantId}; CASH settlement was blocked.`;
@@ -36,15 +36,15 @@ export async function startLiveEscrowBalanceCheck(
     ...(data.metadata ?? {}),
     fundingPlan: {
       cashAmount,
-      mpesaAmount,
-      mpesaStatus: mpesaAmount > 0 ? 'WAITING_FOR_ESCROW_LEDGER' : 'NOT_REQUIRED',
+      mpesaAmount: 0,
+      mpesaStatus: 'NOT_REQUIRED',
     },
     escrowFunding: {
       provider: 'MPESA_ESCROW',
       status: 'LEDGER_CHECK_PENDING',
       retailerMerchantId,
       cashAmount,
-      mpesaAmount,
+      mpesaAmount: 0,
     },
   };
   await repository.updateSettlementStatus(primarySettlement.id, SettlementStatus.PENDING_PROCESSING, {
@@ -56,7 +56,6 @@ export async function startLiveEscrowBalanceCheck(
       settlementId: primarySettlement.id,
       retailerMerchantId,
       cashAmount,
-      mpesaAmount,
       provider: 'MPESA_RETAILER_ESCROW',
     });
     const balanceCheck = await retailerEscrowTransferService.startForSettlement({
@@ -64,10 +63,9 @@ export async function startLiveEscrowBalanceCheck(
       merchantTransactionReference: data.merchantTransactionReference,
       retailerMerchantId,
       cashAmount,
-      mpesaAmount,
-      mpesaPayerPhone: mpesaPayerPhoneNumber || undefined,
+      mpesaAmount: 0,
     });
-    logger.log('[CASH_FLOW][ESCROW_BALANCE_CHECK][REQUESTED]', {
+    logger.log('[CASH_FLOW][ESCROW_BALANCE_CHECK][VERIFIED]', {
       settlementId: primarySettlement.id,
       transferId: balanceCheck.transferId,
       retailerMerchantId,
@@ -76,11 +74,12 @@ export async function startLiveEscrowBalanceCheck(
     });
     return {
       success: true,
+      cashAllocationReady: true,
       settlement: buildSettlementResult(context, {
         status: SettlementStatus.PENDING_PROCESSING,
-        estimatedProcessingTime: 'Awaiting M-Pesa funding or escrow transfer callback',
+        estimatedProcessingTime: 'Awaiting payout callbacks',
       }),
-      message: 'Retailer escrow ledger balance verified. CASH transfer and settlement splitting will proceed after any M-Pesa funding and escrow transfer callbacks are confirmed.',
+      message: 'Retailer escrow ledger balance verified. Settlement payouts are being dispatched directly from the centralized account.',
       escrowFunding: initialMetadata.escrowFunding,
       balanceCheck,
     };

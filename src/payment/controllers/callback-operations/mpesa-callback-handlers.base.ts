@@ -7,6 +7,7 @@ import { parseStkCallback } from '../../utils/mpesa-callback.util';
 import { toPayoutCallback } from './payout-callback.parser';
 import { recordFailedCollection } from './record-failed-collection';
 import { EscrowBalanceCallbacksBase } from './escrow-balance-callbacks.base';
+import { startMixedCashEscrowAfterMpesa } from './start-mixed-cash-escrow';
 
 export abstract class MpesaCallbackHandlersBase extends EscrowBalanceCallbacksBase {
   @Post('callbacks/mpesa')
@@ -30,7 +31,8 @@ export abstract class MpesaCallbackHandlersBase extends EscrowBalanceCallbacksBa
         (req.body as any)?.Body?.gatewayPayload?.merchantTransactionReference ??
         (req.body as any)?.merchantTransactionReference ??
         transactionResult?.merchantTransactionReference ?? null;
-      if (resolvedMerchantTransactionReference) {
+      const escrowTransferId = (req.body as any)?.Body?.gatewayPayload?.escrowTransferId ?? transactionResult?.escrowTransferId;
+      if (resolvedMerchantTransactionReference && escrowTransferId) {
         try {
           await retailerEscrowTransferService.handleMpesaFundingCallback(
             String(resolvedMerchantTransactionReference),
@@ -63,8 +65,10 @@ export abstract class MpesaCallbackHandlersBase extends EscrowBalanceCallbacksBa
         const merchantTransactionReference = gatewayPayload?.merchantTransactionReference ?? resolvedMerchantTransactionReference ?? null;
         if (merchantTransactionReference) {
           try {
+            await startMixedCashEscrowAfterMpesa(String(merchantTransactionReference), this.logger);
             const splitResult = await this.settlementService.splitAndAllocateFunds({
               merchantTransactionReference,
+              customerMpesaPaymentConfirmed: true,
               mpesaReceipt: parsed.receipt ?? undefined,
               mpesaCheckoutRequestId: parsed.checkoutRequestId ?? undefined,
               mpesaMerchantRequestId: parsed.merchantRequestId ?? undefined,

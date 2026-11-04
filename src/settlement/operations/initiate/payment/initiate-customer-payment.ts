@@ -1,70 +1,68 @@
 import { retailerEscrowTransferService } from '../../../../retailer';
-import { MockBankEscrowProvider } from '../../../../escrow-intelligence/providers/mock-bank-escrow.provider';
 import type { SettlementInitiationContext } from '../context';
 import { normalizePaymentMethods } from './normalize-payment-methods';
 import { initiateMpesaCustomerPayment } from './initiate-mpesa-customer-payment';
 import { startLiveEscrowBalanceCheck } from './start-live-escrow-balance-check';
+import { buildSettlementResult } from '../helpers/build-settlement-result';
+import { SettlementStatus } from '@prisma/client';
 
 export async function initiateCustomerPayment(context: SettlementInitiationContext) {
-  const { data, logger, businessId, integrationId, retailerMerchantId } = context;
+  const { data, logger, retailerMerchantId, repository, primarySettlement } = context;
   const settlementFundingMethods = normalizePaymentMethods(data);
+  const cashAmount = settlementFundingMethods
+    .filter((method) => String(method.type ?? '').trim().toUpperCase() === 'CASH')
+    .reduce((sum, method) => sum + Number(method.amount ?? 0), 0);
+  const mpesaFundingMethod = settlementFundingMethods.find((method) => String(method.type ?? '').trim().toUpperCase() === 'MPESA');
+  const mpesaAmount = settlementFundingMethods
+    .filter((method) => String(method.type ?? '').trim().toUpperCase() === 'MPESA')
+    .reduce((sum, method) => sum + Number(method.amount ?? 0), 0);
+  const mpesaPayerPhoneNumber = String(
+    mpesaFundingMethod?.payerPhoneNumber
+      ?? mpesaFundingMethod?.phoneNumber
+      ?? data.paymentMethod?.payerPhoneNumber
+      ?? data.paymentMethod?.phoneNumber
+      ?? '',
+  ).trim();
 
-  if (settlementFundingMethods.length > 0 && settlementFundingMethods.some((method) => (
-    ['CASH', 'ESCROW'].includes(String(method.type ?? '').trim().toUpperCase())
-  ))) {
-    const escrowCustomerId = retailerMerchantId || businessId;
-    const cashAmount = settlementFundingMethods
-      .filter((method) => String(method.type ?? '').trim().toUpperCase() === 'CASH')
-      .reduce((sum, method) => sum + Number(method.amount ?? 0), 0);
-    const mpesaAmount = settlementFundingMethods
-      .filter((method) => String(method.type ?? '').trim().toUpperCase() === 'MPESA')
-      .reduce((sum, method) => sum + Number(method.amount ?? 0), 0);
-    const retailerOutstandingBalance = Number(data.totalAmount ?? 0)
-      - (data.suppliers ?? []).reduce((sum, supplier) => sum + Number(
-        (Array.isArray(supplier.items) ? supplier.items : []).reduce((itemTotal, item) => itemTotal + Number(item.supplierAmount ?? 0), 0)
-        || Number(supplier.supplierTotalAmount ?? 0),
-      ), 0)
-      - Number((data.suppliers ?? []).reduce((sum, supplier) => sum + Number(supplier.platformFee ?? 0), 0));
-
-    logger.warn('[CASH_FLOW][MULTI_FUNDING_SUMMARY]', {
-      businessId,
-      integrationId,
-      retailerMerchantId,
-      escrowCustomerId,
-      merchantTransactionReference: data.merchantTransactionReference,
-      totalAmount: Number(data.totalAmount ?? 0),
-      fundingMethods: settlementFundingMethods,
-      cashAmount,
-      mpesaAmount,
-      retailerOutstandingBalance,
-      supplierCount: data.suppliers?.length ?? 0,
-      transactionDate: data.transactionDate,
-    });
-
-    const mpesaFundingMethod = settlementFundingMethods.find((method) => String(method.type ?? '').trim().toUpperCase() === 'MPESA');
-    const mpesaPayerPhoneNumber = String(
-      mpesaFundingMethod?.payerPhoneNumber
-        ?? mpesaFundingMethod?.phoneNumber
-        ?? data.paymentMethod?.payerPhoneNumber
-        ?? data.paymentMethod?.phoneNumber
-        ?? '',
-    ).trim();
+  if (cashAmount > 0) {
     const hasLiveEscrowFloat = await retailerEscrowTransferService.hasFloatConfig(retailerMerchantId);
-
-    if (cashAmount > 0) {
-      return startLiveEscrowBalanceCheck(context, {
+    if (mpesaAmount > 0) {
+      const fundingPlan = {
         cashAmount,
         mpesaAmount,
-        mpesaPayerPhoneNumber,
-        hasLiveEscrowFloat,
+        mpesaStatus: 'WAITING_FOR_CUSTOMER',
+        cashStatus: 'WAITING_FOR_MPESA',
+        retailerMerchantId,
+      };
+      data.metadata = { ...(data.metadata ?? {}), fundingPlan };
+      if (!hasLiveEscrowFloat) {
+        return startLiveEscrowBalanceCheck(context, { cashAmount, hasLiveEscrowFloat });
+      }
+      await repository.updateSettlementStatus(primarySettlement.id, SettlementStatus.PENDING_PROCESSING, {
+        metadata: data.metadata,
       });
+      const paymentResult = await initiateMpesaCustomerPayment(context, {
+        amount: mpesaAmount,
+        payerPhoneNumber: mpesaPayerPhoneNumber,
+      });
+      if (paymentResult) return paymentResult;
+      return {
+        success: true,
+        settlement: buildSettlementResult(context, {
+          status: SettlementStatus.PENDING_PROCESSING,
+          estimatedProcessingTime: 'Awaiting M-Pesa collection callback',
+        }),
+        message: 'M-Pesa customer collection started. The retailer cash balance will be checked and reserved after the successful collection callback.',
+      };
     }
-
-    await new MockBankEscrowProvider().getCustomerEscrowBalance(escrowCustomerId);
+    return startLiveEscrowBalanceCheck(context, { cashAmount, hasLiveEscrowFloat });
   }
 
-  if (data.paymentMethod?.type?.toUpperCase() === 'MPESA') {
-    return initiateMpesaCustomerPayment(context);
+  if (mpesaFundingMethod) {
+    return initiateMpesaCustomerPayment(context, {
+      amount: mpesaAmount,
+      payerPhoneNumber: mpesaPayerPhoneNumber,
+    });
   }
 
   return undefined;

@@ -34,6 +34,7 @@ export async function initiateOperation(
   token: string,
   data: InitiateSettlementDto,
   supportedCurrencies: string[],
+  allocateCashSettlement?: SettlementInitiationContext['allocateCashSettlement'],
 ) {
   const session = await validateAndGetSession(token, repository, logger);
   const integration = await repository.findIntegrationById(session.integrationId);
@@ -89,6 +90,7 @@ export async function initiateOperation(
       integrationId,
       retailerMerchantId,
       primarySettlement,
+      allocateCashSettlement,
     };
     const deferredPaymentResult = await initiateCustomerPayment(context);
     if (deferredPaymentResult && !deferredPaymentResult.success) return deferredPaymentResult;
@@ -97,6 +99,32 @@ export async function initiateOperation(
       ...context,
       internalMerchantTransactionReference,
     });
+
+    if (
+      deferredPaymentResult
+      && 'cashAllocationReady' in deferredPaymentResult
+      && deferredPaymentResult.cashAllocationReady
+    ) {
+      if (!context.allocateCashSettlement) {
+        throw new Error('Cash settlement allocator is not configured');
+      }
+      const cashAllocation = await context.allocateCashSettlement({
+        merchantTransactionReference: data.merchantTransactionReference,
+      });
+      return {
+        success: cashAllocation.success,
+        message: cashAllocation.message ?? 'Cash settlement allocation and payouts have been started.',
+        settlement: {
+          ...deferredPaymentResult.settlement,
+          status: cashAllocation.status,
+          estimatedProcessingTime: 'Awaiting payout callbacks',
+        },
+        ...('escrowFunding' in deferredPaymentResult ? { escrowFunding: deferredPaymentResult.escrowFunding } : {}),
+        ...('balanceCheck' in deferredPaymentResult ? { balanceCheck: deferredPaymentResult.balanceCheck } : {}),
+        cashAllocation,
+        children: allocations.childSettlements,
+      };
+    }
 
     if (deferredPaymentResult) return deferredPaymentResult;
 

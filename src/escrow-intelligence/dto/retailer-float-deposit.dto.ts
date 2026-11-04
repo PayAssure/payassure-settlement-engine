@@ -9,7 +9,10 @@ export class RetailerFloatDepositDto {
   @IsPositive()
   amount!: number;
 
-  @ApiProperty({ example: '254700000000', description: 'Phone number that will receive the M-Pesa STK prompt.' })
+  @ApiProperty({
+    example: '254791614036',
+    description: 'Kenyan payer phone number that receives the STK prompt; sent to Safaricom as PartyA and PhoneNumber.',
+  })
   @IsPhoneNumber('KE')
   payerPhoneNumber!: string;
 }

@@ -32,15 +32,24 @@ class RetailerEscrowFloatService {
   async getFloat(merchantId: string): Promise<EscrowJsonRecord> {
     const config = await prisma.retailerEscrowFloat.findUnique({ where: { merchantId } });
     if (!config) throw new NotFoundException(`Escrow float is not configured for retailer ${merchantId}`);
-    const availableBalance = await this.getAvailableBalance(config.id);
+    const balance = await this.getBalanceSummary(config.id);
     return {
       merchantId: config.merchantId,
       currency: config.currency,
       dailyFloat: Number(config.dailyFloat),
-      availableBalance,
-      tillNumber: config.tillNumber,
-      storeNumber: config.storeNumber,
+      ...balance,
       updatedAt: config.updatedAt,
+    };
+  }
+
+  async getBalance(merchantId: string): Promise<EscrowJsonRecord> {
+    const config = await prisma.retailerEscrowFloat.findUnique({ where: { merchantId } });
+    if (!config) throw new NotFoundException(`Escrow float is not configured for retailer ${merchantId}`);
+    return {
+      merchantId: config.merchantId,
+      currency: config.currency,
+      ...await this.getBalanceSummary(config.id),
+      asOf: new Date().toISOString(),
     };
   }
 
@@ -48,6 +57,13 @@ class RetailerEscrowFloatService {
     floatId: string,
     client: Prisma.TransactionClient = prisma,
   ): Promise<number> {
+    return (await this.getBalanceSummary(floatId, client)).availableBalance;
+  }
+
+  private async getBalanceSummary(
+    floatId: string,
+    client: Prisma.TransactionClient = prisma,
+  ): Promise<{ depositedBalance: number; paidOutBalance: number; reservedBalance: number; availableBalance: number }> {
     const [deposits, transfers, reservedTransfers] = await Promise.all([
       client.retailerEscrowFloatDeposit.aggregate({
         where: { retailerEscrowFloatId: floatId, status: 'SUCCEEDED' },
@@ -65,16 +81,20 @@ class RetailerEscrowFloatService {
         _sum: { amount: true },
       }),
     ]);
-    return Number(deposits._sum.amount ?? 0)
-      - Number(transfers._sum.amount ?? 0)
-      - Number(reservedTransfers._sum.amount ?? 0);
+    const depositedBalance = Number(deposits._sum.amount ?? 0);
+    const paidOutBalance = Number(transfers._sum.amount ?? 0);
+    const reservedBalance = Number(reservedTransfers._sum.amount ?? 0);
+    return {
+      depositedBalance,
+      paidOutBalance,
+      reservedBalance,
+      availableBalance: depositedBalance - paidOutBalance - reservedBalance,
+    };
   }
 
   async setFloat(
     merchantId: string,
     dailyFloat: number,
-    tillNumber?: string,
-    storeNumber?: string,
   ): Promise<EscrowJsonRecord> {
     if (!Number.isFinite(dailyFloat) || dailyFloat < 0) {
       throw new Error('dailyFloat must be a non-negative number');
@@ -94,8 +114,6 @@ class RetailerEscrowFloatService {
         where: { id: existing.id, activeTransferId: null },
         data: {
           dailyFloat: new Prisma.Decimal(dailyFloat),
-          ...(tillNumber === undefined ? {} : { tillNumber: tillNumber.trim() || null }),
-          ...(storeNumber === undefined ? {} : { storeNumber: storeNumber.trim() || null }),
         },
       });
       if (updated.count !== 1) {
@@ -107,8 +125,6 @@ class RetailerEscrowFloatService {
         data: {
           merchantId,
           dailyFloat: new Prisma.Decimal(dailyFloat),
-          tillNumber: tillNumber?.trim() || null,
-          storeNumber: storeNumber?.trim() || null,
         },
       });
     }
@@ -119,8 +135,6 @@ class RetailerEscrowFloatService {
       currency: config.currency,
       dailyFloat: Number(config.dailyFloat),
       availableBalance,
-      tillNumber: config.tillNumber,
-      storeNumber: config.storeNumber,
       updatedAt: config.updatedAt,
     };
   }

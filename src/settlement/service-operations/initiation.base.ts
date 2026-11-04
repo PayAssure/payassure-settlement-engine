@@ -5,6 +5,14 @@ import { SettlementAuthenticationBase } from './authentication.base';
 
 export abstract class SettlementInitiationBase extends SettlementAuthenticationBase {
   async initiateSettlement(token: string, data: InitiateSettlementDto): Promise<SettlementResponseDto> {
-    return initiateOperation(this.prisma, this.repository, this.logger, token, data, this.SUPPORTED_CURRENCIES);
+    return initiateOperation(
+      this.prisma,
+      this.repository,
+      this.logger,
+      token,
+      data,
+      this.SUPPORTED_CURRENCIES,
+      ({ merchantTransactionReference }) => this.splitAndAllocateFunds({ merchantTransactionReference }),
+    );
   }
 }

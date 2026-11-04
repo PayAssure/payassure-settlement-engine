@@ -113,6 +113,7 @@ class RetailerEscrowBalanceQueryService {
       cashAmount: request.cashAmount,
       mpesaAmount: request.mpesaAmount,
       availableBalance,
+      ...(request.mpesaAmount === 0 ? { payoutSource: 'CENTRAL_ACCOUNT' } : {}),
     });
     this.logger.log('[ESCROW_TRANSFER][FLOAT_LOCK][ACQUIRED]', {
       settlementId: request.settlementId,
@@ -147,7 +148,21 @@ class RetailerEscrowBalanceQueryService {
       });
     }
 
-    return retailerEscrowPayoutFlowService.dispatchB2bTransfer(created.id);
+    this.logger.log('[ESCROW_TRANSFER][CENTRAL_ACCOUNT_PAYOUT][READY]', {
+      settlementId: request.settlementId,
+      transferId: created.id,
+      retailerMerchantId: request.retailerMerchantId,
+      amount: request.cashAmount,
+      availableBalance,
+      b2bCollectionSkipped: true,
+    });
+    return {
+      accepted: true,
+      status: 'BALANCE_VERIFIED',
+      transferId: created.id,
+      availableBalance,
+      payoutSource: 'CENTRAL_ACCOUNT',
+    };
   }
 
   async startStandaloneTransfer(retailerMerchantId: string, amount: number): Promise<EscrowJsonRecord> {

@@ -15,7 +15,7 @@ test('retailer float deposit uses retailer STK credentials and does not update b
     depositUpdate: depositModel.update,
     makeRequest: (retailerFloatDepositService as any).makeRequest,
   };
-  const previous = new Map(['MPESA_RETAILER_ENVIRONMENT', 'MPESA_RETAILER_CONSUMER_KEY', 'MPESA_RETAILER_CONSUMER_SECRET', 'MPESA_RETAILER_SHORTCODE', 'MPESA_RETAILER_PARTY_B', 'MPESA_RETAILER_PASSKEY', 'MPESA_RETAILER_CALLBACK_URL'].map((name) => [name, process.env[name]]));
+  const previous = new Map(['MPESA_RETAILER_ENVIRONMENT', 'MPESA_RETAILER_CONSUMER_KEY', 'MPESA_RETAILER_CONSUMER_SECRET', 'MPESA_RETAILER_SHORTCODE', 'MPESA_RETAILER_PASSKEY', 'MPESA_RETAILER_CALLBACK_URL'].map((name) => [name, process.env[name]]));
   let floatUpdated = false;
   let createdDeposit: any;
 
@@ -24,10 +24,12 @@ test('retailer float deposit uses retailer STK credentials and does not update b
     process.env.MPESA_RETAILER_CONSUMER_KEY = 'retailer-key';
     process.env.MPESA_RETAILER_CONSUMER_SECRET = 'retailer-secret';
     process.env.MPESA_RETAILER_SHORTCODE = '600001';
-    process.env.MPESA_RETAILER_PARTY_B = '1775167';
     process.env.MPESA_RETAILER_PASSKEY = 'retailer-passkey';
     process.env.MPESA_RETAILER_CALLBACK_URL = 'https://example.test/payments';
-    integrationModel.findUnique = async () => ({ isActive: true, participant: { participantType: 'RETAILER', status: 'ACTIVE' } });
+    integrationModel.findUnique = async () => ({
+      isActive: true,
+      participant: { participantType: 'RETAILER', status: 'ACTIVE', businessName: 'Acme Retailers Ltd' },
+    });
     floatModel.findUnique = async () => ({ id: 'float-1' });
     depositModel.create = async ({ data }: any) => {
       createdDeposit = { id: 'deposit-1', ...data };
@@ -47,8 +49,12 @@ test('retailer float deposit uses retailer STK credentials and does not update b
 
     assert.equal(result.status, 'SUBMITTED');
     assert.equal(payload.BusinessShortCode, '600001');
-    assert.equal(payload.TransactionType, 'CustomerBuyGoodsOnline');
-    assert.equal(payload.PartyB, '1775167');
+    assert.equal(payload.TransactionType, 'CustomerPayBillOnline');
+    assert.equal(payload.PartyA, '254700000000');
+    assert.equal(payload.PhoneNumber, '254700000000');
+    assert.equal(payload.PartyB, '600001');
+    assert.equal(payload.AccountReference, 'Acme Retailers Ltd');
+    assert.equal(payload.TransactionDesc, 'Acme Retailers Ltd');
     const callbackUrl = new URL(payload.CallBackURL);
     assert.match(callbackUrl.pathname, /retailer-float-deposit\/deposit-1$/);
     assert.equal(callbackUrl.searchParams.get('token'), createdDeposit.callbackToken);
@@ -62,40 +68,6 @@ test('retailer float deposit uses retailer STK credentials and does not update b
     depositModel.create = original.depositCreate;
     depositModel.update = original.depositUpdate;
     (retailerFloatDepositService as any).makeRequest = original.makeRequest;
-    for (const [name, value] of previous) {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
-  }
-});
-
-test('retailer float deposit rejects a Buy Goods Till equal to the shortcode', async () => {
-  const integrationModel = (prisma as any).integration;
-  const floatModel = (prisma as any).retailerEscrowFloat;
-  const original = {
-    integrationFindUnique: integrationModel.findUnique,
-    floatFindUnique: floatModel.findUnique,
-  };
-  const previous = new Map(['MPESA_RETAILER_ENVIRONMENT', 'MPESA_RETAILER_CONSUMER_KEY', 'MPESA_RETAILER_CONSUMER_SECRET', 'MPESA_RETAILER_SHORTCODE', 'MPESA_RETAILER_PARTY_B', 'MPESA_RETAILER_PASSKEY', 'MPESA_RETAILER_CALLBACK_URL'].map((name) => [name, process.env[name]]));
-
-  try {
-    process.env.MPESA_RETAILER_ENVIRONMENT = 'sandbox';
-    process.env.MPESA_RETAILER_CONSUMER_KEY = 'retailer-key';
-    process.env.MPESA_RETAILER_CONSUMER_SECRET = 'retailer-secret';
-    process.env.MPESA_RETAILER_SHORTCODE = '600001';
-    process.env.MPESA_RETAILER_PARTY_B = '600001';
-    process.env.MPESA_RETAILER_PASSKEY = 'retailer-passkey';
-    process.env.MPESA_RETAILER_CALLBACK_URL = 'https://example.test/payments';
-    integrationModel.findUnique = async () => ({ isActive: true, participant: { participantType: 'RETAILER', status: 'ACTIVE' } });
-    floatModel.findUnique = async () => ({ id: 'float-1' });
-
-    await assert.rejects(
-      () => retailerFloatDepositService.initiate('pay_retailer_001', 5000, '0700000000'),
-      /MPESA_RETAILER_PARTY_B must differ from MPESA_RETAILER_SHORTCODE/,
-    );
-  } finally {
-    integrationModel.findUnique = original.integrationFindUnique;
-    floatModel.findUnique = original.floatFindUnique;
     for (const [name, value] of previous) {
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;

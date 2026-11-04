@@ -207,7 +207,7 @@ test('retailer M-Pesa request retries once with the replacement OAuth token when
   }
 });
 
-test('retailer escrow initiation trusts the tracked remainder and reports the exact shortfall', async () => {
+test('cash settlement reserves the DB balance without dispatching a retailer-to-platform B2B transfer', async () => {
   const originalTransaction = (prisma as any).$transaction;
   const floatModel = (prisma as any).retailerEscrowFloat;
   const transferModel = (prisma as any).retailerEscrowTransfer;
@@ -241,8 +241,8 @@ test('retailer escrow initiation trusts the tracked remainder and reports the ex
       return 10000;
     };
     (prisma as any).$transaction = async (callback: (tx: any) => Promise<unknown>) => callback(prisma);
-    retailerEscrowPayoutFlowService.dispatchB2bTransfer = async (transferId: string) => {
-      return { accepted: true, status: 'TRANSFER_PENDING', transferId };
+    retailerEscrowPayoutFlowService.dispatchB2bTransfer = async () => {
+      throw new Error('Cash settlement must not dispatch a retailer-to-platform B2B transfer');
     };
 
     const started = await retailerEscrowBalanceQueryService.startForSettlement({
@@ -252,9 +252,12 @@ test('retailer escrow initiation trusts the tracked remainder and reports the ex
       cashAmount: 2000,
       mpesaAmount: 0,
     });
-    assert.equal(started.status, 'TRANSFER_PENDING');
+    assert.equal(started.status, 'BALANCE_VERIFIED');
+    assert.equal(started.payoutSource, 'CENTRAL_ACCOUNT');
+    assert.equal(started.availableBalance, 10000);
     assert.equal(locked, true);
     assert.equal(Number(createdTransfer.requiredBalance), 10000);
+    assert.equal(createdTransfer.status, 'BALANCE_VERIFIED');
 
     await assert.rejects(
       () => retailerEscrowBalanceQueryService.startForSettlement({

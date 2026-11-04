@@ -27,15 +27,26 @@ export abstract class PayoutRetryStateBase extends PayoutAttemptStatusBase {
   async markCallbackReceived(idempotencyKey: string, callbackData: Record<string, any>): Promise<void> {
     const attempt = await this.prisma.b2BPayoutAttempt.findUnique({ where: { idempotencyKey } });
     if (!attempt) throw new NotFoundException(`Payout attempt not found: ${idempotencyKey}`);
+    const callbackStatus = String(callbackData.status ?? '').trim().toUpperCase();
+    const resultCode = callbackData.resultCode ?? callbackData.ResultCode ?? callbackData.Result?.ResultCode;
+    const hasResultCode = resultCode !== undefined && resultCode !== null && String(resultCode).trim() !== '';
+    const status = ['SUCCESS', 'PAID', 'COMPLETED'].includes(callbackStatus)
+      || (!['FAILED', 'FAILURE'].includes(callbackStatus) && hasResultCode && Number(resultCode) === 0)
+      ? 'COMPLETED'
+      : 'FAILED';
     await this.prisma.b2BPayoutAttempt.update({
       where: { id: attempt.id },
       data: {
-        status: 'COMPLETED',
+        status,
         callbackReceived: true,
         callbackReceivedAt: new Date(),
         metadata: { ...(typeof attempt.metadata === 'object' ? attempt.metadata : {}), callbackData },
       },
     });
-    this.logger.log('[IDEMPOTENCY] Callback received for payout', { idempotencyKey, payoutReference: attempt.payoutReference });
+    this.logger.log('[IDEMPOTENCY] Callback received for payout', {
+      idempotencyKey,
+      payoutReference: attempt.payoutReference,
+      status,
+    });
   }
 }
