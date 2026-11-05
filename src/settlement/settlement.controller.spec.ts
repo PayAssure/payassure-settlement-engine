@@ -12,6 +12,26 @@ test('payment confirmation endpoint is exposed at settlements/payment-confirmati
   assert.equal(normalizedPath, 'payment-confirmation');
 });
 
+test('logs and returns the settlement initiation response unchanged', async () => {
+  const expectedResponse = {
+    success: true,
+    settlement: { settlementId: 'settlement-1', status: 'PROCESSING' },
+  };
+  const controller = new SettlementController({
+    initiateSettlement: async () => expectedResponse,
+  } as any);
+  const logged: unknown[][] = [];
+  (controller as any).logger = {
+    log: (...args: unknown[]) => logged.push(args),
+  };
+  const request = { merchantTransactionReference: 'ORDER-1' };
+
+  const response = await controller.initiateSettlement(request as any, 'session-token');
+
+  assert.equal(response, expectedResponse);
+  assert.deepEqual(logged[1], ['[SETTLEMENT_INITIATION_RESPONSE]', expectedResponse]);
+});
+
 test('signature helper derives the signature from the configured secret without using the request body', () => {
   const secret = 'shared-secret';
   const expected = crypto.createHmac('sha256', secret).update('').digest('hex');

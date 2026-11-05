@@ -424,7 +424,7 @@ Base path: /onbordings
 - Path parameters:
   - id: string
 - Request body:
-  - webhookUrl: absolute HTTPS URL
+  - webhookUrl: absolute HTTP or HTTPS URL
 - Success response:
   - Status: 200 OK
   - Body: updated participant data
@@ -432,7 +432,7 @@ Base path: /onbordings
   - 401 Unauthorized
   - 404 Not Found: participant not found
 
-Configure one HTTPS receiver URL, such as `https://pos.example.com/webhook`, for each participant/integration that should receive events. If retailer and suppliers share a receiver, configure the same URL for each merchant; use `data.recipient.merchant_id` to route events internally. Integration-specific webhook URLs override the participant-level URL. See [WEBHOOK_INTEGRATION.md](./WEBHOOK_INTEGRATION.md) for the complete event schema, signature verification, idempotency requirements, retry behavior, and receiver implementation checklist.
+Configure an absolute HTTP or HTTPS receiver URL, such as `http://localhost:3010/webhook`, on the retailer integration or its participant fallback. HTTP is intended for development; use HTTPS in production. Settlement webhooks are sent only to the retailer; supplier integrations do not receive them. The integration-specific webhook URL overrides the participant-level URL. See [WEBHOOK_INTEGRATION.md](./WEBHOOK_INTEGRATION.md) for the complete event schema, signature verification, idempotency requirements, retry behavior, and receiver implementation checklist.
 
 ### 9) PATCH /onbordings/:id/payment
 - Purpose: Update the payout destination for a participant.

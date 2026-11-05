@@ -45,7 +45,9 @@ export abstract class SettlementInitiationControllerBase extends SettlementAuthe
     @Headers('x-settlement-session') settlementSessionToken: string,
   ): Promise<SettlementResponseDto> {
     this.logger.log('[SETTLEMENT_REQUEST_PAYLOAD]', body);
-    return this.settlementService.initiateSettlement(settlementSessionToken, body);
+    const response = await this.settlementService.initiateSettlement(settlementSessionToken, body);
+    this.logger.log('[SETTLEMENT_INITIATION_RESPONSE]', response);
+    return response;
   }
 
   @Post('payment-callback')

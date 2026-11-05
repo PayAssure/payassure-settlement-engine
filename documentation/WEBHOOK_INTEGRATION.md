@@ -1,18 +1,19 @@
 # PayAssure Webhook Integration
 
-This guide describes the outbound settlement webhooks PayAssure sends to retailer
-and supplier integrations. A merchant hosts one receiver endpoint, for example
-`https://pos.example.com/webhook`, and configures that same URL for each
-merchant integration that should receive events. PayAssure sends the merchant
-ID in each event so the receiver can route it internally. There is no separate
-PayAssure inbound route named `/webhook`; this is the HTTPS URL on your system
-that PayAssure calls.
+This guide describes the outbound settlement webhooks PayAssure sends to the
+retailer integration. Suppliers do not receive settlement webhooks. The retailer
+hosts a receiver endpoint, for example `https://pos.example.com/webhook`, and
+configures its URL on the retailer integration. There is no separate PayAssure
+inbound route named `/webhook`; this is the HTTPS URL on your system that
+PayAssure calls.
 
 ## 1. Configure the receiver URL
 
-Implement `POST /webhook` on your public HTTPS server. The URL must be absolute
-and use HTTPS. Configure the complete URL, including `/webhook`, for each
-participant that should receive events.
+Implement `POST /webhook` on the receiver. Configure the complete absolute
+URL, including `/webhook`, for the retailer integration. Both HTTP and HTTPS
+URLs are accepted for development; use HTTPS in production because HTTP does
+not encrypt the event or signature in transit. A `localhost` URL points to the
+machine/container running PayAssure, not necessarily the developer's computer.
 
 Use the authenticated onboarding API to set a participant's fallback URL:
 
@@ -24,33 +25,25 @@ Content-Type: application/json
 
 ```json
 {
-  "webhookUrl": "https://pos.example.com/webhook"
+  "webhookUrl": "http://localhost:3010/webhook"
 }
 ```
 
-When PayAssure resolves the callback destination, an integration-specific
-`webhookUrl` takes precedence over the participant URL. If the integration has
-no webhook URL, the participant URL is used. Therefore, for a shared endpoint,
-set the same URL on every integration that has its own override, or leave that
-override unset and configure the participant URL. Use the merchant ID for the
-specific integration when associating credentials with your receiver.
+When PayAssure resolves the callback destination, the retailer
+integration-specific `webhookUrl` takes precedence over the participant URL.
+If the integration has no webhook URL, the retailer participant URL is used.
+PayAssure signs events with the retailer integration's API secret.
 
-Generate or retrieve the merchant credentials through the authenticated
-`POST /onbordings/generate-keys` and `GET /onbordings/keys` routes. Keep each
-integration's merchant ID and API secret in a secure server-side credential
-store, keyed by merchant ID. Do not put an API secret in browser/mobile code,
-expose it in logs, or use one merchant's secret to verify another merchant's
-event.
+Generate or retrieve the retailer credentials through the authenticated
+`POST /onbordings/generate-keys` and `GET /onbordings/keys` routes. Keep the
+retailer's merchant ID and API secret in a secure server-side credential store.
+Do not put the API secret in browser/mobile code or expose it in logs.
 
 ## 2. Delivery request
 
-PayAssure sends one `POST` to each configured retailer/supplier endpoint for an
-event. A shared receiver can therefore receive separate deliveries for the
-retailer and one or more suppliers at the same URL. Identify the destination
-account using `data.recipient.merchant_id`; do not infer it from the route,
-settlement reference, or event header. The event ID is shared by the separate
-recipient deliveries created for the same settlement notification; the
-recipient merchant ID distinguishes them.
+PayAssure sends one `POST` to the configured retailer endpoint for an event.
+Supplier endpoints are not called. `data.recipient.merchant_id` identifies the
+retailer account.
 
 Headers:
 
@@ -90,8 +83,8 @@ Example event:
       "payout_reference": "PAYOUT-001"
     },
     "recipient": {
-      "merchant_id": "pay_supplier_001",
-      "participant_type": "SUPPLIER"
+      "merchant_id": "pay_retailer_001",
+      "participant_type": "RETAILER"
     },
     "payouts": [
       {
@@ -110,9 +103,8 @@ Example event:
 `settlement.status` is PayAssure's overall settlement lifecycle status; it is
 not the customer collection outcome. Use the `payment.collection.*` event to
 determine whether customer funds were collected. Payout attempts are reported
-separately in `data.payouts`. Supplier deliveries contain only that supplier's
-payout attempts; retailer deliveries can contain all payout attempts for that
-settlement. Payout records currently describe retailer and supplier payouts.
+separately in `data.payouts`. The retailer delivery can contain payout attempts
+for both retailer and suppliers; no webhook is sent to suppliers.
 
 `data.cash_funding` is included only after a positive cash amount has been
 reserved from the retailer's database-backed virtual balance for payout. It
@@ -186,14 +178,11 @@ changing payment or settlement records.
 ## 4. Idempotency and HTTP response
 
 Store processed events durably with a unique constraint on the pair
-`(recipient merchant ID, event ID)`. Do not deduplicate on event ID alone:
-separate merchants can receive the same event ID for the same settlement
-notification at a shared receiver. After signature verification, check `id`
+`(recipient merchant ID, event ID)`. After signature verification, check `id`
 (or `x-payassure-event-id`) together with `data.recipient.merchant_id` before
 applying any business action. If that pair has already been processed, return a
-successful `2xx` response without applying it again. This is especially
-important for retries: PayAssure keeps the same event ID for retries of that
-recipient's delivery.
+successful `2xx` response without applying it again. PayAssure keeps the same
+event ID for retries.
 
 Return `2xx` only after the event has been durably accepted or queued for
 processing. If your service cannot accept it, return a non-2xx response so
@@ -220,8 +209,8 @@ callbacks have arrived.
 
 ## 6. Retry and delivery behavior
 
-For each configured endpoint, PayAssure makes a synchronous HTTPS request with
-a five-second request timeout. A transport error or non-2xx response is retried
+For the retailer endpoint, PayAssure makes a synchronous HTTP or HTTPS request with a
+five-second request timeout. A transport error or non-2xx response is retried
 up to three total attempts with a short backoff, except non-retryable 4xx
 responses (such as `404` and `405`), which are logged and stopped immediately.
 `408`, `425`, `429`, and 5xx responses remain retryable. Redirects are rejected.
@@ -237,22 +226,23 @@ events. A later, separate notification for a state change has a new event ID.
 
 | Log result | Likely cause | What to check |
 | --- | --- | --- |
-| `Webhook returned HTTP 405` | The URL is reachable, but its route does not accept `POST`. | Implement `POST` on the configured path; check proxy or web-server method rules. PayAssure does not retry this permanent response. |
-| `Webhook returned HTTP 404` | The configured path does not exist on the receiver. | Correct the full webhook URL, including its route path, for the affected merchant integration or participant. PayAssure does not retry this permanent response. |
-| `fetch failed` | The receiver could not be reached or its TLS connection failed. | Use the logged endpoint origin and nested cause (for example DNS code) to check DNS, public network access, TLS certificate/hostname, firewall and server availability from the PayAssure host. |
+| `Webhook returned HTTP 405` | The URL is reachable, but its route does not accept `POST`. | Implement `POST` on the retailer's configured path; check proxy or web-server method rules. PayAssure does not retry this permanent response. |
+| `Webhook returned HTTP 404` | The configured path does not exist on the receiver. | Correct the full webhook URL, including its route path, on the retailer integration or participant. PayAssure does not retry this permanent response. |
+| `fetch failed` | The receiver could not be reached or its HTTP/TLS connection failed. | Use the logged full retailer URL and nested cause (for example DNS code) to check DNS, network access, TLS certificate/hostname for HTTPS, firewall and server availability from the PayAssure host. |
 
 These are receiver/configuration failures, not settlement payout failures. The
 settlement continues independently of webhook delivery. Return a `2xx` only
 after accepting the event; then inspect the receiver's request logs using the
-event ID and recipient merchant ID if processing did not occur. PayAssure
-prefers an integration-specific `webhookUrl` over the participant-level URL.
+event ID and retailer merchant ID if processing did not occur. PayAssure prefers
+the retailer integration's `webhookUrl` over the participant-level URL.
+Delivery logs include the full retailer URL.
 
 ## 7. Integration checklist
 
-- [ ] Expose one public HTTPS receiver at `/webhook`.
-- [ ] Configure the full receiver URL for every retailer/supplier integration
-      that needs events; use the same URL if all accounts share the receiver.
-- [ ] Store each merchant ID and its integration API secret securely.
+- [ ] Expose a receiver accepting `POST` at `/webhook`.
+- [ ] Configure the full receiver URL on the retailer integration or its
+      participant fallback. Prefer HTTPS outside development.
+- [ ] Store the retailer merchant ID and integration API secret securely.
 - [ ] Preserve the raw request body and verify HMAC and timestamp before trusting
       any event fields.
 - [ ] Route only after verification, using `data.recipient.merchant_id`.
