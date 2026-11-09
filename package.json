@@ -6,7 +6,7 @@
     "build": "prisma generate && tsc -p tsconfig.json",
     "lint": "tsc --noEmit -p tsconfig.json",
     "dev": "prisma generate && ts-node-dev --respawn --transpile-only src/main.ts",
-    "start": "node dist/main.js",
+    "start": "node dist/src/main.js",
     "test": "node --test -r ts-node/register src/**/*.spec.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev --name init",
