@@ -361,7 +361,7 @@ services:
 ```ini
 # /etc/systemd/system/payassure.service
 [Service]
-ExecStart=/usr/bin/node /app/dist/src/main.js
+ExecStart=/usr/bin/npm --prefix /app run start
 Restart=on-failure
 RestartSec=5s
 

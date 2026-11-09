@@ -455,7 +455,7 @@ Enhanced integration security:
 prisma migrate dev --name "migration_name"
 
 # Apply migrations
-prisma migrate deploy
+npm run migrate:deploy
 
 # Reset database (development only)
 prisma migrate reset
@@ -463,6 +463,8 @@ prisma migrate reset
 # Check migration status
 prisma migrate status
 ```
+
+The production start command applies pending migrations before launching the server. Ensure `DATABASE_URL` points to the intended PostgreSQL database. If the database was previously initialized outside Prisma Migrate, check and baseline its migration history before deploying; do not use `prisma migrate reset` on production data.
 
 ## Performance Optimization
 
