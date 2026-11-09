@@ -107,7 +107,7 @@ test('successful float deposit callback marks the deposit successful once and ig
     const duplicate = await retailerFloatDepositService.handleCallback('deposit-2', callback, 'deposit-token-2');
 
     assert.equal(first.status, 'SUCCEEDED');
-    assert.equal(duplicate.duplicate, true);
+    assert.equal('duplicate' in duplicate ? duplicate.duplicate : undefined, true);
     assert.equal(deposit.status, 'SUCCEEDED');
   } finally {
     (prisma as any).$transaction = originalTransaction;
