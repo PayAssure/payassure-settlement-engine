@@ -30,6 +30,7 @@ enum ParticipantStatus {
   VERIFIED             // KYC/KYB verification completed
   PILOT                // Testing integration phase
   LIVE                 // Production ready
+  ACTIVE               // Profile, payment, and integration are ready
   REJECTED             // Verification failed
 }
 ```
@@ -43,9 +44,13 @@ DOCUMENTS_SUBMITTED
   │   ↓
   │   PILOT 
   │   ↓
-  │   LIVE (Terminal)
+  │   LIVE
   │
   └→ REJECTED (Terminal)
+
+DOCUMENTS_SUBMITTED / VERIFIED / PILOT / LIVE
+  └→ ACTIVE when profile fields, verified payment, and integration credentials
+     are all present (REJECTED participants are excluded)
 ```
 
 ### UserRole
@@ -225,7 +230,9 @@ par003  | RETAILER        | Tech Shop         | DRAFT    | tech@shop.com   | 202
 
 **Business Rules**:
 - `businessName` is required and minimum 2 characters
-- Status progression must follow: DRAFT → DOCUMENTS_SUBMITTED → VERIFIED → PILOT → LIVE
+- Status progression must follow the onboarding workflow; a complete profile,
+  verified payment, and generated integration credentials automatically set
+  status to ACTIVE
 - Cannot skip status levels
 - REJECTED is terminal status
 - Each participant tracks onboarding progress

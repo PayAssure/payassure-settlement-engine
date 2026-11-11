@@ -9,8 +9,10 @@ export abstract class OnbordingsApiKeysBase extends OnbordingsParticipantUpdates
     const existingIntegration = participant.integrations?.[0];
     if (existingIntegration) {
       if (existingIntegration.apiKey && existingIntegration.apiSecret) {
+        await this.repository.activateParticipantIfReady(participant.id);
+        const participantWithIntegration = await this.repository.findParticipantById(participant.id);
         const credentials = { merchantId: existingIntegration.merchantId, apiKey: existingIntegration.apiKey, apiSecret: existingIntegration.apiSecret };
-        return this.toResponse(participant, credentials, 'API keys were not generated because they already exist. Use the existing credentials.');
+        return this.toResponse(participantWithIntegration, credentials, 'API keys were not generated because they already exist. Use the existing credentials.');
       }
       const regenerated = await this.repository.regenerateIntegrationCredentials(existingIntegration.id);
       const participantWithIntegration = await this.repository.findParticipantById(participant.id);

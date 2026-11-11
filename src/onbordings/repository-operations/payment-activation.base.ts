@@ -37,11 +37,12 @@ export abstract class OnbordingsPaymentActivationBase extends OnbordingsParticip
       verifiedAt: new Date().toISOString(),
       verificationAttempts: payment.verificationAttempts ?? 0,
     };
-    return this.prisma.onboardingParticipant.update({
+    await this.prisma.onboardingParticipant.update({
       where: { id },
       data: { payment: verifiedPayment as Prisma.InputJsonValue },
       include: { integrations: { orderBy: { createdAt: 'desc' }, take: 1 } },
     });
+    return this.activateParticipantIfReady(id);
   }
 
   async deleteParticipant(id: string) {

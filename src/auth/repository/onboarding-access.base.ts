@@ -50,13 +50,19 @@ export abstract class AuthOnboardingAccessBase extends AuthUserManagementBase {
     }
 
     const existingIntegration = participant.integrations?.[0];
-    if (!existingIntegration || participant.status === ParticipantStatus.LIVE || participant.status === ParticipantStatus.ACTIVE) {
+    if (
+      !existingIntegration?.apiKey
+      || !existingIntegration.apiSecret
+      || participant.status === ParticipantStatus.REJECTED
+      || participant.status === ParticipantStatus.LIVE
+      || participant.status === ParticipantStatus.ACTIVE
+    ) {
       return;
     }
 
     await this.prisma.onboardingParticipant.update({
       where: { id: participant.id },
-      data: { status: ParticipantStatus.LIVE },
+      data: { status: ParticipantStatus.ACTIVE },
     });
   }
 }

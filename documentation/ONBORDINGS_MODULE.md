@@ -55,6 +55,12 @@ When a participant is created or updated, the service checks these fields:
 Later onboarding, payment verification, and integration workflows may update
 status outside the routes described here.
 
+When the required profile fields are complete, the payment destination is
+verified, and integration API credentials exist, the participant is
+automatically moved to `ACTIVE`. This applies whether credentials or payment
+verification are completed first. A rejected participant is not automatically
+activated.
+
 ## Common Validation and Error Format
 
 The application uses a global whitelist validation pipe. Unknown request-body
@@ -283,6 +289,9 @@ If credentials already exist, no new credentials are generated and the message
 is `API keys were not generated because they already exist. Use the existing credentials.`
 If the integration exists but its credentials are missing, they are regenerated
 and the message is `API keys were generated and persisted because previous credentials were missing.`
+If the payment destination is already verified and the required profile fields
+are complete, generating or reusing credentials also changes the participant
+status to `ACTIVE`.
 
 #### Errors
 
@@ -682,6 +691,10 @@ from the authenticated JWT email; no participant ID is supplied.
 ```
 
 The response strips the stored activation-secret hash and expiry timestamp.
+When the required profile fields are complete and integration credentials
+already exist, successful payment activation also changes the participant
+status to `ACTIVE`. Otherwise, status changes to `ACTIVE` once both payment
+verification and credential generation are complete.
 
 #### Errors
 

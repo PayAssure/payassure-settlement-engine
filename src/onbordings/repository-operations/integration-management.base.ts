@@ -25,6 +25,7 @@ export abstract class OnbordingsIntegrationManagementBase extends OnbordingsPaym
         isActive: this.getStatusForProfile(participant as unknown as Partial<CreateOnboardingDto>) === ParticipantStatus.DOCUMENTS_SUBMITTED,
       },
     });
+    await this.activateParticipantIfReady(id);
     return { ...integration, apiKey, apiSecret };
   }
 
@@ -41,6 +42,7 @@ export abstract class OnbordingsIntegrationManagementBase extends OnbordingsPaym
         apiSecretHash: this.hashSecret(apiSecret),
       },
     });
+    await this.activateParticipantIfReady(integration.participantId);
     return { ...integration, apiKey, apiSecret };
   }
 }
