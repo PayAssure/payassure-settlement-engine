@@ -3,6 +3,55 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { SettlementWebhookDeliveryService } from './settlement-webhook-delivery.service';
 
+function createWebhookDeliveryStore() {
+  const deliveries = new Map<string, any>();
+  const attempts: any[] = [];
+  const store: any = {
+    settlementWebhookDelivery: {
+      create: async ({ data }: any) => {
+        const delivery = { id: `delivery-${deliveries.size + 1}`, attemptCount: 0, ...data };
+        deliveries.set(delivery.id, delivery);
+        return structuredClone(delivery);
+      },
+      findUnique: async ({ where }: any) => {
+        const delivery = deliveries.get(where.id);
+        return delivery ? structuredClone(delivery) : null;
+      },
+      findMany: async ({ where }: any) => Array.from(deliveries.values()).filter((delivery) => (
+        delivery.status === where.status
+        && (!where.nextAttemptAt?.lte || (delivery.nextAttemptAt && delivery.nextAttemptAt <= where.nextAttemptAt.lte))
+      )),
+      updateMany: async ({ where, data }: any) => {
+        const delivery = deliveries.get(where.id);
+        if (!delivery || (where.status?.in && !where.status.in.includes(delivery.status))) return { count: 0 };
+        if (typeof where.status === 'string' && delivery.status !== where.status) return { count: 0 };
+        const { attemptCount, ...fields } = data;
+        Object.assign(delivery, fields);
+        if (attemptCount?.increment) delivery.attemptCount += attemptCount.increment;
+        else if (attemptCount !== undefined) delivery.attemptCount = attemptCount;
+        return { count: 1 };
+      },
+    },
+    settlementWebhookDeliveryAttempt: {
+      create: async ({ data }: any) => {
+        const attempt = { id: `attempt-${attempts.length + 1}`, ...data };
+        attempts.push(attempt);
+        return attempt;
+      },
+      updateMany: async ({ where, data }: any) => {
+        const attempt = attempts.find((entry) => (
+          entry.deliveryId === where.deliveryId && entry.attemptNumber === where.attemptNumber
+        ));
+        if (!attempt) return { count: 0 };
+        Object.assign(attempt, data);
+        return { count: 1 };
+      },
+    },
+    $transaction: async (operation: (tx: any) => Promise<unknown>) => operation(store),
+  };
+  return { store, deliveries, attempts };
+}
+
 test('settlement webhook delivery sends only to the retailer endpoint and signs the event', async () => {
   const secret = 'integration-secret';
   const calls: Array<{ url: string; headers: Headers; body: string }> = [];
@@ -16,7 +65,9 @@ test('settlement webhook delivery sends only to the retailer endpoint and signs 
     return new Response(null, { status: 204 });
   }) as typeof fetch;
 
+  const deliveryStore = createWebhookDeliveryStore();
   const prisma = {
+    ...deliveryStore.store,
     settlement: {
       findUnique: async () => ({
         id: 'settlement-1',
@@ -37,6 +88,7 @@ test('settlement webhook delivery sends only to the retailer endpoint and signs 
     },
     integration: {
       findUnique: async () => ({
+        id: 'retailer-integration',
         merchantId: 'retailer-merchant',
         apiSecret: secret,
         webhookUrl: 'https://retailer.example/events?site=store-1',
@@ -96,6 +148,7 @@ test('settlement webhook refuses a supplier as the settlement integration recipi
     return new Response(null, { status: 204 });
   }) as typeof fetch;
   const prisma = {
+    ...createWebhookDeliveryStore().store,
     settlement: {
       findUnique: async () => ({
         id: 'settlement-supplier-recipient',
@@ -109,6 +162,7 @@ test('settlement webhook refuses a supplier as the settlement integration recipi
     },
     integration: {
       findUnique: async () => ({
+        id: 'supplier-integration',
         merchantId: 'supplier-merchant',
         apiSecret: 'integration-secret',
         webhookUrl: 'https://supplier.example/events',
@@ -136,6 +190,7 @@ test('settlement webhook omits cash funding details before a mixed payment cash 
     return new Response(null, { status: 204 });
   }) as typeof fetch;
   const prisma = {
+    ...createWebhookDeliveryStore().store,
     settlement: {
       findUnique: async () => ({
         id: 'settlement-3',
@@ -155,6 +210,7 @@ test('settlement webhook omits cash funding details before a mixed payment cash 
     },
     integration: {
       findUnique: async () => ({
+        id: 'retailer-integration-3',
         merchantId: 'retailer-merchant-3',
         apiSecret: 'integration-secret',
         webhookUrl: 'https://retailer.example/events',
@@ -179,13 +235,14 @@ test('settlement webhook omits cash funding details before a mixed payment cash 
 
 test('settlement webhook does not retry a receiver 405 response', async () => {
   let attempts = 0;
-  const loggedErrors: string[] = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () => {
     attempts += 1;
     return new Response(null, { status: 405 });
   }) as typeof fetch;
+  const deliveryStore = createWebhookDeliveryStore();
   const prisma = {
+    ...deliveryStore.store,
     settlement: {
       findUnique: async () => ({
         id: 'settlement-4',
@@ -203,6 +260,7 @@ test('settlement webhook does not retry a receiver 405 response', async () => {
     },
     integration: {
       findUnique: async () => ({
+        id: 'retailer-integration-4',
         merchantId: 'retailer-merchant-4',
         apiSecret: 'integration-secret',
         webhookUrl: 'https://retailer.example/events?site=store-405',
@@ -217,10 +275,70 @@ test('settlement webhook does not retry a receiver 405 response', async () => {
 
   try {
     const service = new SettlementWebhookDeliveryService(prisma);
-    (service as any).logger.error = (message: string) => loggedErrors.push(message);
     await service.notify('settlement-4', 'payment.settlement.progress');
     assert.equal(attempts, 1);
-    assert.match(loggedErrors[0], /https:\/\/retailer\.example\/events\?site=store-405/);
+    const [delivery] = Array.from(deliveryStore.deliveries.values());
+    assert.equal(delivery.status, 'FAILED');
+    assert.equal(delivery.lastResponseStatus, 405);
+    assert.equal(delivery.endpoint, 'https://retailer.example/events?site=store-405');
+    assert.equal(deliveryStore.attempts.length, 1);
+    assert.equal(deliveryStore.attempts[0].responseStatus, 405);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('settlement webhook retries transient failures and preserves the event ID across attempts', async () => {
+  const eventIds: string[] = [];
+  let fetchCount = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    fetchCount += 1;
+    eventIds.push(new Headers(init?.headers).get('x-payassure-event-id') ?? '');
+    return new Response(null, { status: fetchCount === 1 ? 503 : 204 });
+  }) as typeof fetch;
+  const deliveryStore = createWebhookDeliveryStore();
+  const prisma = {
+    ...deliveryStore.store,
+    settlement: {
+      findUnique: async () => ({
+        id: 'settlement-retry',
+        businessId: 'retailer-retry',
+        integrationId: 'retailer-integration-retry',
+        reference: 'SET-RETRY',
+        merchantTransactionReference: 'ORDER-RETRY',
+        amount: 25,
+        currency: 'KES',
+        status: 'PROCESSING',
+        metadata: {},
+      }),
+    },
+    integration: {
+      findUnique: async () => ({
+        id: 'retailer-integration-retry',
+        merchantId: 'retailer-merchant-retry',
+        apiSecret: 'integration-secret',
+        webhookUrl: 'https://retailer.example/events',
+        participantId: 'retailer-retry',
+        participant: { id: 'retailer-retry', participantType: 'RETAILER', webhookUrl: null },
+      }),
+      findMany: async () => [],
+    },
+    onboardingParticipant: { findUnique: async () => null },
+    b2BPayoutAttempt: { findMany: async () => [] },
+  } as any;
+
+  try {
+    const service = new SettlementWebhookDeliveryService(prisma);
+    await service.notify('settlement-retry', 'payment.settlement.progress');
+    const [delivery] = Array.from(deliveryStore.deliveries.values());
+    assert.equal(fetchCount, 2);
+    assert.equal(eventIds[0], eventIds[1]);
+    assert.equal(delivery.status, 'DELIVERED');
+    assert.equal(delivery.attemptCount, 2);
+    assert.equal(deliveryStore.attempts.length, 2);
+    assert.equal(deliveryStore.attempts[0].responseStatus, 503);
+    assert.equal(deliveryStore.attempts[1].responseStatus, 204);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -234,6 +352,7 @@ test('settlement webhook delivery allows HTTP destinations for development', asy
     return new Response(null, { status: 204 });
   }) as typeof fetch;
   const prisma = {
+    ...createWebhookDeliveryStore().store,
     settlement: {
       findUnique: async () => ({
         id: 'settlement-2',
@@ -282,4 +401,17 @@ test('webhook transport errors include nested network diagnostics', () => {
 
   assert.match((service as any).errorMessage(fetchError), /ENOTFOUND/);
   assert.match((service as any).errorMessage(fetchError), /webhook\.example/);
+});
+
+test('webhook retry processing skips when the delivery tables are not yet migrated', async () => {
+  const service = new SettlementWebhookDeliveryService({
+    settlementWebhookDelivery: {
+      updateMany: async () => {
+        throw Object.assign(new Error('The table `public.settlement_webhook_deliveries` does not exist in the current database.'), { code: 'P2021' });
+      },
+    },
+  } as any);
+
+  await assert.doesNotReject(async () => service.processPendingRetries(10));
+  assert.equal(await service.processPendingRetries(10), 0);
 });

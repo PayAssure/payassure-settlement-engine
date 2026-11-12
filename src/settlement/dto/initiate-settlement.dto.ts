@@ -84,10 +84,10 @@ export class MerchantPaymentDto {
 }
 
 export class MerchantSettlementItemDto {
-  @ApiProperty({ example: 'pay_supplier_cement_001', description: 'Supplier merchant ID that owns the item.' })
+  @ApiPropertyOptional({ example: 'pay_supplier_cement_001', description: 'Supplier merchant ID that owns the item. Null values represent direct retailer settlement items.' })
   @IsString()
-  @IsNotEmpty()
-  supplierMerchantId = '';
+  @IsOptional()
+  supplierMerchantId?: string | null = null;
 
   @ApiProperty({ example: 'CEMENT-50KG-001', description: 'Retailer catalog item reference.' })
   @IsString()
@@ -132,10 +132,10 @@ export class SupplierItemDto {
 }
 
 export class SupplierDto {
-  @ApiProperty({ example: 'SUP-1001', description: 'Merchant identifier of the supplier for this settlement group.' })
+  @ApiPropertyOptional({ example: 'SUP-1001', description: 'Merchant identifier of the supplier for this settlement group. Null represents a direct retailer settlement group.' })
   @IsString()
-  @IsNotEmpty()
-  supplierMerchantId: string = '';
+  @IsOptional()
+  supplierMerchantId?: string | null = null;
 
   @ApiPropertyOptional({ example: 7200.0, description: 'Optional total amount for this supplier. PayAssure will verify this against item allocations.' })
   @IsNumber()

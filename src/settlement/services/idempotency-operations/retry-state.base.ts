@@ -27,15 +27,15 @@ export abstract class PayoutRetryStateBase extends PayoutAttemptStatusBase {
   async markCallbackReceived(idempotencyKey: string, callbackData: Record<string, any>): Promise<void> {
     const attempt = await this.prisma.b2BPayoutAttempt.findUnique({ where: { idempotencyKey } });
     if (!attempt) throw new NotFoundException(`Payout attempt not found: ${idempotencyKey}`);
-    const callbackStatus = String(callbackData.status ?? '').trim().toUpperCase();
     const resultCode = callbackData.resultCode ?? callbackData.ResultCode ?? callbackData.Result?.ResultCode;
     const hasResultCode = resultCode !== undefined && resultCode !== null && String(resultCode).trim() !== '';
-    const status = ['SUCCESS', 'PAID', 'COMPLETED'].includes(callbackStatus)
-      || (!['FAILED', 'FAILURE'].includes(callbackStatus) && hasResultCode && Number(resultCode) === 0)
-      ? 'COMPLETED'
-      : 'FAILED';
-    await this.prisma.b2BPayoutAttempt.update({
-      where: { id: attempt.id },
+    const status = !hasResultCode
+      ? 'UNKNOWN'
+      : Number(resultCode) === 0
+        ? 'SUCCESSFUL'
+        : 'FAILED';
+    await this.prisma.b2BPayoutAttempt.updateMany({
+      where: { id: attempt.id, status: { in: ['PENDING', 'SUBMITTED', 'UNKNOWN'] } },
       data: {
         status,
         callbackReceived: true,
@@ -48,5 +48,27 @@ export abstract class PayoutRetryStateBase extends PayoutAttemptStatusBase {
       payoutReference: attempt.payoutReference,
       status,
     });
+  }
+
+  async markStalePayoutAttemptsUnknown(
+    timeoutMs = 15 * 60 * 1000,
+  ): Promise<Array<{ id: string; settlementId: string; payoutReference: string }>> {
+    const staleBefore = new Date(Date.now() - timeoutMs);
+    const staleAttempts = await this.prisma.b2BPayoutAttempt.findMany({
+      where: { status: 'SUBMITTED', updatedAt: { lte: staleBefore } },
+      select: { id: true, settlementId: true, payoutReference: true },
+    });
+    const marked: Array<{ id: string; settlementId: string; payoutReference: string }> = [];
+    for (const attempt of staleAttempts) {
+      const update = await this.prisma.b2BPayoutAttempt.updateMany({
+        where: { id: attempt.id, status: 'SUBMITTED', updatedAt: { lte: staleBefore } },
+        data: {
+          status: 'UNKNOWN',
+          failureReason: 'No final M-Pesa payout callback was received before the reconciliation timeout',
+        },
+      });
+      if (update.count === 1) marked.push(attempt);
+    }
+    return marked;
   }
 }

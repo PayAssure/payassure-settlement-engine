@@ -10,7 +10,8 @@ class B2CService {
     const initiatorName = process.env.MPESA_INITIATOR_NAME || env.MPESA_INITIATOR_NAME || 'testapi';
     const securityCredential = generateSecurityCredential();
     const partyA = process.env.MPESA_PARTYA || env.MPESA_PARTYA || env.MPESA_SHORTCODE || '174379';
-    const callbackUrl = getMpesaCallbackUrl();
+    const callbackUrl = request.ResultURL ?? request.resultUrl ?? request.callbackUrl ?? getMpesaCallbackUrl();
+    const timeoutCallbackUrl = request.QueueTimeOutURL ?? request.queueTimeOutUrl ?? callbackUrl;
 
     const payload = {
       OriginatorConversationID: request.OriginatorConversationID || request.originatorConversationId || `${Date.now()}_b2c`,
@@ -21,7 +22,7 @@ class B2CService {
       PartyA: String(partyA),
       PartyB: mpesaService.formatPhoneNumber(String(request.PartyB ?? request.partyB ?? request.recipientPhone ?? '')),
       Remarks: request.Remarks || request.remarks || 'B2C payment',
-      QueueTimeOutURL: callbackUrl,
+      QueueTimeOutURL: timeoutCallbackUrl,
       ResultURL: callbackUrl,
       Occassion: request.Occassion || request.occasion || undefined,
     };

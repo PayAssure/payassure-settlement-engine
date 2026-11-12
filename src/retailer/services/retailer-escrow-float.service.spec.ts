@@ -30,7 +30,7 @@ test('creates and returns a retailer float without unused till and store identif
       };
     };
     depositModel.aggregate = async () => ({ _sum: { amount: null } });
-    transferModel.aggregate = async () => ({ _sum: { amount: null } });
+    transferModel.aggregate = async () => ({ _sum: { debitedAmount: null } });
 
     const result = await retailerEscrowFloatService.setFloat('pay_retailer_001', 10000);
 
@@ -84,7 +84,7 @@ test('editing dailyFloat updates configuration without unused location fields', 
     });
     depositModel.aggregate = async () => ({ _sum: { amount: 9000 } });
     transferModel.aggregate = async ({ where }: any) => ({
-      _sum: { amount: where.status === 'SUCCEEDED' ? 2000 : 0 },
+      _sum: { debitedAmount: where.status === 'SUCCEEDED' ? 2000 : 0 },
     });
 
     const result = await retailerEscrowFloatService.setFloat('pay_retailer_001', 12000);
@@ -126,7 +126,7 @@ test('virtual balance reports confirmed deposits, completed payouts, and active 
     };
     transferModel.aggregate = async ({ where }: any) => {
       aggregateCalls.push({ model: 'transfer', where });
-      return { _sum: { amount: where.status === 'SUCCEEDED' ? 2000 : 1500 } };
+      return { _sum: { debitedAmount: where.status === 'SUCCEEDED' ? 2000 : 1500 } };
     };
 
     const result = await retailerEscrowFloatService.getBalance('pay_retailer_balance');

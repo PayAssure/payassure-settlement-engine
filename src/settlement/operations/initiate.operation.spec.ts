@@ -136,3 +136,72 @@ test('cash settlement allocates after the DB balance has been reserved', async (
     retailerEscrowTransferService.hasFloatConfig = originalHasFloatConfig;
   }
 });
+
+test('DIRECT CASH settles without entering escrow checks, allocation, or customer payment flow', async () => {
+  const fixture = makeInitiationFixture({ type: 'CASH', provider: 'ESCROW', amount: 10 });
+  fixture.data = {
+    merchantId: 'retailer-merchant',
+    merchantTransactionReference: 'POS-DIRECT-CASH-001',
+    amount: 10,
+    totalAmount: 10,
+    currency: 'KES',
+    settlementMethod: 'CASH_ESCROW',
+    payment: { methods: [{ type: 'CASH', amount: 10 }] },
+    paymentMethod: { type: 'CASH', provider: 'ESCROW', amount: 10 },
+    items: [{ supplierMerchantId: null, itemReference: 'POS-ITEM-001', supplierAmount: 5, retailerAmount: 5 }],
+    suppliers: [],
+    transactionDate: new Date().toISOString(),
+    metadata: {},
+  } as any;
+  const originalHasFloatConfig = retailerEscrowTransferService.hasFloatConfig;
+  const originalStartForSettlement = retailerEscrowTransferService.startForSettlement;
+  const paymentModule = customerPayment as any;
+  const originalInitiateCustomerPayment = paymentModule.initiateCustomerPayment;
+  let floatChecks = 0;
+  let escrowReservations = 0;
+  let customerPaymentCalls = 0;
+  let settlementUpdate: any;
+  (fixture.repository as any).updateSettlementStatus = async (_id: string, _status: string, update: any) => {
+    settlementUpdate = update;
+  };
+  retailerEscrowTransferService.hasFloatConfig = async () => {
+    floatChecks += 1;
+    return true;
+  };
+  retailerEscrowTransferService.startForSettlement = async () => {
+    escrowReservations += 1;
+    throw new Error('DIRECT CASH must not reserve escrow');
+  };
+  paymentModule.initiateCustomerPayment = async () => {
+    customerPaymentCalls += 1;
+    throw new Error('DIRECT CASH must not enter the payment workflow');
+  };
+
+  try {
+    const response: any = await initiateOperation(
+      {},
+      fixture.repository,
+      fixture.logger,
+      'token',
+      fixture.data as any,
+      ['KES'],
+      async () => {
+        throw new Error('DIRECT CASH must not invoke cash payout allocation');
+      },
+    );
+
+    assert.equal(response.settlementStatus, 'SETTLED');
+    assert.equal(response.settlementPlan.retailerPayoutAmount, 0);
+    assert.equal(response.settlementPlan.supplierPayoutAmount, 0);
+    assert.equal(response.settlementPlan.escrowBalanceCheckRequired, false);
+    assert.equal(floatChecks, 0);
+    assert.equal(escrowReservations, 0);
+    assert.equal(customerPaymentCalls, 0);
+    assert.equal(settlementUpdate.settlementPlan.settlementStatus, 'SETTLED');
+    assert.equal(settlementUpdate.paymentConfirmation.provider, 'CASH');
+  } finally {
+    retailerEscrowTransferService.hasFloatConfig = originalHasFloatConfig;
+    retailerEscrowTransferService.startForSettlement = originalStartForSettlement;
+    paymentModule.initiateCustomerPayment = originalInitiateCustomerPayment;
+  }
+});

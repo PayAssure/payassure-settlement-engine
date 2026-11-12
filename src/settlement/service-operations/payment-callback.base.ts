@@ -74,9 +74,9 @@ export abstract class SettlementPaymentCallbackBase extends SettlementPaymentCon
         { account: 'Customer Clearing', direction: 'CREDIT', amount: Number(settlement.amount), description: 'Customer funds parked pending allocation' },
       ],
       allocations: [
-        { party: 'Supplier', amount: supplierAmount, destination: 'B2B payout', status: 'PENDING' },
-        { party: 'Retailer', amount: retailerAmount, destination: 'B2B payout', status: 'PENDING' },
-        { party: 'Platform', amount: platformFee, destination: 'Retained fee', status: 'PENDING' },
+        { party: 'RETAILER', amount: retailerAmount, destination: 'B2B payout', status: 'PENDING' },
+        { party: 'SUPPLIER', amount: supplierAmount, destination: 'B2B payout', status: 'PENDING' },
+        { party: 'PLATFORM', amount: platformFee, destination: 'Retained fee', status: 'PENDING' },
       ],
       paymentDetails: {
         supplier: {

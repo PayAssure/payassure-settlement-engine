@@ -1,8 +1,34 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { SettlementGatewayRequestBase } from './gateway-request.base';
 import type { B2bGatewayResponse } from './types';
+import { finalizeSettlementPayoutReservation } from '../../retailer/services/transfer/helpers/settlement-payout-reservation';
 
 export abstract class SettlementPayoutDispatchBase extends SettlementGatewayRequestBase {
+  async markPayoutOutcomeUnknown(settlementId: string, payoutReference: string): Promise<void> {
+    const settlement = await this.repository.findSettlementById(settlementId);
+    if (!settlement) {
+      throw new NotFoundException(`Settlement ${settlementId} was not found`);
+    }
+    const metadata = settlement.metadata && typeof settlement.metadata === 'object'
+      ? settlement.metadata as Record<string, any>
+      : {};
+    const reconciliation = Array.isArray(metadata.payoutReconciliation)
+      ? metadata.payoutReconciliation
+      : [];
+    await this.repository.updateSettlementStatus(settlementId, 'AWAITING_RECONCILIATION', {
+      metadata: {
+        ...metadata,
+        payoutReconciliation: [...reconciliation, {
+          payoutReference,
+          status: 'UNKNOWN',
+          reason: 'No final M-Pesa payout callback was received before the reconciliation timeout',
+          flaggedAt: new Date().toISOString(),
+        }],
+      },
+    });
+  }
+
   async dispatchB2bPayouts(data: any): Promise<any> {
     const settlement = await this.repository.findSettlementByReference(data.merchantTransactionReference);
     if (!settlement) {
@@ -13,6 +39,49 @@ export abstract class SettlementPayoutDispatchBase extends SettlementGatewayRequ
     const validationMetadata = (validationSettlement?.metadata && typeof validationSettlement.metadata === 'object')
       ? validationSettlement.metadata as Record<string, any>
       : {};
+    const workingSettlement = validationSettlement ?? settlement;
+    const settlementPlan = (validationMetadata.settlementPlan ?? existingMetadata.settlementPlan) as Record<string, any> | undefined;
+    const payloadSuppliers = Array.isArray(workingSettlement.paymentPayload?.suppliers)
+      ? workingSettlement.paymentPayload.suppliers
+      : [];
+    const settlementMode = String(
+      settlementPlan?.settlementMode
+        ?? validationMetadata.resolvedSettlementMode
+        ?? (payloadSuppliers.length > 0 && payloadSuppliers.every((supplier: any) => !supplier?.supplierMerchantId) ? 'DIRECT' : ''),
+    ).toUpperCase();
+    const paymentMethod = String(
+      settlementPlan?.paymentMethod
+        ?? validationMetadata.fundingPlan?.paymentMethod
+        ?? workingSettlement.paymentPayload?.paymentMethod?.type
+        ?? '',
+    ).toUpperCase();
+    const party = String(data.party || (existingMetadata?.supplierMerchantId ? 'SUPPLIER' : 'RETAILER')).toUpperCase() as 'SUPPLIER' | 'RETAILER';
+
+    if (settlementMode === 'DIRECT' && paymentMethod === 'CASH') {
+      this.logger.warn('[PAYOUT][SKIPPED] direct cash is already received by retailer', {
+        settlementId: settlement.id,
+        party,
+        reason: 'DIRECT_CASH_HAS_NO_PAYOUT',
+      });
+      return {
+        success: true,
+        status: 'SKIPPED',
+        skipped: true,
+        reason: 'DIRECT_CASH_HAS_NO_PAYOUT',
+        settlementId: settlement.id,
+      };
+    }
+
+    if (settlementPlan && party === 'RETAILER' && settlementMode === 'SPLIT' && paymentMethod === 'CASH') {
+      return {
+        success: true,
+        status: 'SKIPPED',
+        skipped: true,
+        reason: 'CASH_ALREADY_RECEIVED_BY_RETAILER',
+        settlementId: settlement.id,
+      };
+    }
+
     const settlementStatus = String((validationSettlement?.status ?? settlement?.status ?? '')).toUpperCase();
     const hasConfirmedCustomerPayment = this.hasConfirmedCustomerPayment(validationSettlement, validationMetadata);
     if (!hasConfirmedCustomerPayment) {
@@ -32,11 +101,39 @@ export abstract class SettlementPayoutDispatchBase extends SettlementGatewayRequ
       });
     }
 
-    const workingSettlement = validationSettlement ?? settlement;
-    const party = (String(data.party || (existingMetadata?.supplierMerchantId ? 'SUPPLIER' : 'RETAILER')).toUpperCase() as 'SUPPLIER' | 'RETAILER');
     const resolvedSupplierMerchantId = this.resolveSupplierMerchantId(workingSettlement, data.supplierMerchantId);
     const resolvedRetailerMerchantId = await this.resolveRetailerMerchantId(workingSettlement);
     const resolvedPartyMerchantId = party === 'RETAILER' ? resolvedRetailerMerchantId : resolvedSupplierMerchantId;
+    const payoutInstructions = Array.isArray(settlementPlan?.payoutInstructions)
+      ? settlementPlan.payoutInstructions as Array<Record<string, any>>
+      : null;
+    const approvedInstruction = payoutInstructions
+      ? payoutInstructions.find((instruction) => (
+        instruction.party === party
+        && (party !== 'SUPPLIER' || String(instruction.supplierMerchantId ?? '') === String(resolvedSupplierMerchantId ?? ''))
+      ))
+      : null;
+    const plannedAmount = settlementPlan
+      ? payoutInstructions
+        ? Number(approvedInstruction?.amount ?? 0)
+        : Number(party === 'SUPPLIER' ? settlementPlan.supplierPayoutAmount : settlementPlan.retailerPayoutAmount)
+      : undefined;
+    if (plannedAmount !== undefined && plannedAmount <= 0) {
+      this.logger.warn('[PAYOUT][SKIPPED] no approved payout instruction', {
+        settlementId: settlement.id,
+        party,
+        supplierMerchantId: resolvedSupplierMerchantId ?? null,
+        settlementMode,
+        paymentMethod,
+      });
+      return {
+        success: true,
+        status: 'SKIPPED',
+        skipped: true,
+        reason: 'NO_APPROVED_PAYOUT_ALLOCATION',
+        settlementId: settlement.id,
+      };
+    }
     const recipient = await this.resolveB2bRecipient(workingSettlement, party, resolvedSupplierMerchantId ?? undefined);
 
     if (recipient.type === 'BANK' && (!recipient.shortcode || !recipient.accountNumber)) {
@@ -50,6 +147,23 @@ export abstract class SettlementPayoutDispatchBase extends SettlementGatewayRequ
     }
 
     let amount = Number(data.amount ?? 0);
+    if (plannedAmount !== undefined) {
+      if (amount <= 0) amount = plannedAmount;
+      if (amount > plannedAmount) {
+        throw new BadRequestException({
+          statusCode: 400,
+          message: `Payout amount ${amount} exceeds the approved ${party.toLowerCase()} allocation ${plannedAmount}`,
+          error: 'PAYOUT_EXCEEDS_APPROVED_ALLOCATION',
+        });
+      }
+      if (payoutInstructions && amount > 0 && amount !== plannedAmount) {
+        throw new BadRequestException({
+          statusCode: 400,
+          message: `Payout amount ${amount} does not match the approved instruction amount ${plannedAmount}`,
+          error: 'PAYOUT_DOES_NOT_MATCH_APPROVED_INSTRUCTION',
+        });
+      }
+    }
     if (amount <= 0) {
       const allocation = Array.isArray(existingMetadata.allocationPlan?.allocations)
         ? existingMetadata.allocationPlan.allocations.find((alloc: any) => alloc.party === party)
@@ -59,8 +173,25 @@ export abstract class SettlementPayoutDispatchBase extends SettlementGatewayRequ
     if (amount <= 0) {
       throw new BadRequestException({ statusCode: 400, message: 'Payout amount must be greater than zero', error: 'INVALID_PAYOUT_AMOUNT' });
     }
-    const roundedAmount = amount > 0 && amount < 1 ? 1 : Math.round(amount);
+    let roundedAmount = amount > 0 && amount < 1 ? 1 : Math.round(amount);
+    if (plannedAmount !== undefined && roundedAmount > plannedAmount) {
+      roundedAmount = Math.floor(plannedAmount);
+    }
+    if (roundedAmount <= 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        message: 'Approved payout allocation is below the smallest supported payout amount',
+        error: 'APPROVED_PAYOUT_BELOW_MINIMUM',
+      });
+    }
 
+    const newCallbackIdentifier = randomUUID();
+    const escrowFundedAmount = party === 'SUPPLIER'
+      ? Math.min(
+        roundedAmount,
+        Math.max(0, Number(approvedInstruction?.escrowFundedAmount ?? data.escrowFundedAmount ?? 0)),
+      )
+      : 0;
     const payoutAttemptResult = await this.idempotencyService.createOrGetPayoutAttempt({
       settlementId: settlement.id,
       merchantTransactionReference: data.merchantTransactionReference,
@@ -69,8 +200,10 @@ export abstract class SettlementPayoutDispatchBase extends SettlementGatewayRequ
       recipientMerchantId: resolvedPartyMerchantId ?? undefined,
       recipientType: recipient.type,
       recipientPhone: recipient.phoneNumber ?? recipient.payerPhoneNumber ?? undefined,
+      callbackIdentifier: newCallbackIdentifier,
+      metadata: { escrowFundedAmount },
     });
-    if (!payoutAttemptResult.isNewAttempt && payoutAttemptResult.status === 'COMPLETED') {
+    if (!payoutAttemptResult.isNewAttempt && ['COMPLETED', 'SUCCESSFUL'].includes(payoutAttemptResult.status)) {
       this.logger.warn('[PAYOUT] Payout already completed, skipping duplicate', {
         settlementId: settlement.id,
         payoutReference: payoutAttemptResult.payoutReference,
@@ -92,6 +225,15 @@ export abstract class SettlementPayoutDispatchBase extends SettlementGatewayRequ
         },
       };
     }
+    if (!payoutAttemptResult.isNewAttempt && ['SUBMITTED', 'UNKNOWN'].includes(payoutAttemptResult.status)) {
+      return {
+        success: true,
+        status: payoutAttemptResult.status,
+        payoutReference: payoutAttemptResult.payoutReference,
+        isDuplicate: true,
+        message: 'Payout is awaiting its final M-Pesa callback; duplicate dispatch prevented.',
+      };
+    }
 
     const payoutReference = payoutAttemptResult.payoutReference;
     if (payoutAttemptResult.attemptCount > 1) {
@@ -101,7 +243,7 @@ export abstract class SettlementPayoutDispatchBase extends SettlementGatewayRequ
         attempt_count: payoutAttemptResult.attemptCount,
       });
     }
-    const callbackIdentifier = (globalThis as any)?.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const callbackIdentifier = payoutAttemptResult.callbackIdentifier ?? newCallbackIdentifier;
     const callbackUrl = this.getB2bPayoutCallbackUrl(callbackIdentifier);
     const recipientPhoneNumber = recipient.phoneNumber ?? recipient.payerPhoneNumber ?? null;
     const recipientShortCode = recipient.shortcode ?? recipientPhoneNumber ?? null;
@@ -239,6 +381,16 @@ export abstract class SettlementPayoutDispatchBase extends SettlementGatewayRequ
         payoutDispatchAuditLog: [...payoutDispatchAuditLog, auditEntry],
       },
     });
+    const finalizedReservation = existingMetadata.escrowFunding?.payoutSource === 'CENTRAL_ACCOUNT'
+      ? await finalizeSettlementPayoutReservation(settlement.id, this.prisma)
+      : { finalized: false };
+    if (finalizedReservation.finalized && finalizedReservation.settlementStatus === 'COMPLETED') {
+      await this.repository.notifyWebhookEvent?.(settlement.id, 'payment.settlement.completed');
+    } else if (finalizedReservation.finalized && finalizedReservation.settlementStatus === 'PROCESSING_FAILED') {
+      await this.repository.notifyWebhookEvent?.(settlement.id, 'payment.settlement.partially_failed', {
+        reason: 'One or more payout submissions failed before final M-Pesa confirmation',
+      });
+    }
     return { success: gatewayResult.success, status: dispatchRecord.status, payoutReference, gatewayResult, dispatchRecord };
   }
 }

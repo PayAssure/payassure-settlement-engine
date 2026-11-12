@@ -30,6 +30,114 @@ const mockRetryService = {
   getPayoutsDueForRetry: async () => [],
 } as any;
 
+test('DIRECT CASH payout dispatch skips both parties before idempotency and gateway calls', async () => {
+  let payoutAttempts = 0;
+  let b2bCalls = 0;
+  let b2cCalls = 0;
+  const service = new SettlementService({
+    findSettlementByReference: async () => ({
+      id: 'settlement-direct-cash',
+      status: 'COMPLETED',
+      merchantTransactionReference: 'TXN-DIRECT-CASH',
+      metadata: {
+        resolvedSettlementMode: 'DIRECT',
+        settlementPlan: {
+          settlementMode: 'DIRECT',
+          paymentMethod: 'CASH',
+          supplierPayoutAmount: 0,
+          retailerPayoutAmount: 0,
+        },
+      },
+      paymentPayload: {
+        paymentMethod: { type: 'CASH' },
+        suppliers: [{ supplierMerchantId: null }],
+      },
+    }),
+  } as any, {
+    ...mockIdempotencyService,
+    createOrGetPayoutAttempt: async () => {
+      payoutAttempts += 1;
+      throw new Error('DIRECT CASH must not create a payout attempt');
+    },
+  } as any, mockRetryService);
+  const originalB2B = b2bService.initiateB2B.bind(b2bService);
+  const originalB2C = b2cService.initiateB2C.bind(b2cService);
+  (service as any).logger = { warn: () => {}, log: () => {}, error: () => {} };
+  (b2bService as any).initiateB2B = async () => { b2bCalls += 1; };
+  (b2cService as any).initiateB2C = async () => { b2cCalls += 1; };
+
+  try {
+    const retailerResult = await service.dispatchB2bPayouts({
+      merchantTransactionReference: 'TXN-DIRECT-CASH',
+      party: 'RETAILER',
+      amount: 10,
+    });
+    const supplierResult = await service.dispatchB2bPayouts({
+      merchantTransactionReference: 'TXN-DIRECT-CASH',
+      party: 'SUPPLIER',
+      supplierMerchantId: 'pos_supplier_001',
+      amount: 5,
+    });
+
+    assert.equal(retailerResult.skipped, true);
+    assert.equal(supplierResult.skipped, true);
+    assert.equal(payoutAttempts, 0);
+    assert.equal(b2bCalls, 0);
+    assert.equal(b2cCalls, 0);
+  } finally {
+    (b2bService as any).initiateB2B = originalB2B;
+    (b2cService as any).initiateB2C = originalB2C;
+  }
+});
+
+test('duplicate DIRECT CASH allocation callbacks skip escrow lookups and payout dispatch', async () => {
+  let escrowLookups = 0;
+  let payoutDispatches = 0;
+  const service = new SettlementService({
+    findSettlementByReference: async () => ({
+      id: 'settlement-direct-cash-callback',
+      status: 'COMPLETED',
+      amount: 10,
+      currency: 'KES',
+      merchantTransactionReference: 'TXN-DIRECT-CASH-CALLBACK',
+      metadata: {
+        settlementPlan: {
+          settlementMode: 'DIRECT',
+          paymentMethod: 'CASH',
+          supplierPayoutAmount: 0,
+          retailerPayoutAmount: 0,
+          settlementStatus: 'SETTLED',
+        },
+      },
+      paymentPayload: { suppliers: [{ supplierMerchantId: null }] },
+    }),
+    updateSettlementStatus: async () => {
+      throw new Error('Completed direct cash callback should not update settlement status again');
+    },
+  } as any, mockIdempotencyService, mockRetryService);
+  (service as any).logger = { warn: () => {}, log: () => {}, error: () => {} };
+  (service as any).prisma = {
+    retailerEscrowTransfer: {
+      findUnique: async () => {
+        escrowLookups += 1;
+        throw new Error('DIRECT CASH must not query escrow transfers');
+      },
+    },
+  };
+  (service as any).dispatchB2bPayouts = async () => {
+    payoutDispatches += 1;
+    throw new Error('DIRECT CASH must not dispatch payouts');
+  };
+
+  const callback = { merchantTransactionReference: 'TXN-DIRECT-CASH-CALLBACK' } as any;
+  const first = await service.splitAndAllocateFunds(callback);
+  const duplicate = await service.splitAndAllocateFunds(callback);
+  assert.equal(first.status, 'SETTLED');
+  assert.equal(duplicate.status, 'SETTLED');
+  assert.equal(escrowLookups, 0);
+  assert.equal(payoutDispatches, 0);
+});
+
 test('SettlementRecordRepository resolves callback identifiers stored under nested payout request metadata', async () => {
   const callbackIdentifier = '50e1f407-fd08-4640-930d-9718930dc29b';
   const repository = new SettlementRecordRepository({
@@ -556,6 +664,7 @@ test('splitAndAllocateFunds persists payment callback metadata before B2B payout
   };
 
   const service = new SettlementService(repository as any, mockIdempotencyService, mockRetryService);
+  (service as any).prisma = { retailerEscrowTransfer: { findUnique: async () => null } };
   let dispatchCalled = false;
   (service as any).dispatchB2bPayouts = async () => {
     dispatchCalled = true;
@@ -663,60 +772,103 @@ test('splitAndAllocateFunds dispatches central-account payouts for cash with a D
   assert.equal(response.splitRecord.expectedPayoutCount, 2);
 });
 
-test('cash reservation is finalized only after callbacks confirm every expected payout', async () => {
-  let confirmedPayoutCount = 1;
-  let finalized = false;
+test('cash reservation is debited only after all expected payout callbacks confirm success', async () => {
+  const attempts = [
+    {
+      id: 'attempt-supplier',
+      settlementId: 'settlement-cash-callback',
+      payoutReference: 'payout-supplier',
+      party: 'SUPPLIER',
+      recipientMerchantId: 'supplier-1',
+      amount: 40,
+      status: 'SUBMITTED',
+      metadata: { escrowFundedAmount: 40 },
+      callbackIdentifier: 'callback-supplier',
+    },
+    {
+      id: 'attempt-retailer',
+      settlementId: 'settlement-cash-callback',
+      payoutReference: 'payout-retailer',
+      party: 'RETAILER',
+      recipientMerchantId: 'retailer-1',
+      amount: 60,
+      status: 'SUBMITTED',
+      metadata: { escrowFundedAmount: 0 },
+      callbackIdentifier: 'callback-retailer',
+    },
+  ];
+  const transfer: any = { id: 'cash-transfer-callback', settlementId: 'settlement-cash-callback', amount: 40, status: 'BALANCE_VERIFIED' };
+  const settlement: any = {
+    id: 'settlement-cash-callback',
+    status: 'PROCESSING',
+    metadata: {
+      escrowFunding: { payoutSource: 'CENTRAL_ACCOUNT', transferId: 'cash-transfer-callback' },
+      splitRecords: [{ expectedPayoutCount: 2 }],
+      allocationPlan: {
+        allocations: [
+          { party: 'SUPPLIER', supplierMerchantId: 'supplier-1', amount: 40, destination: 'B2B payout', status: 'PENDING' },
+          { party: 'RETAILER', amount: 60, destination: 'B2B payout', status: 'PENDING' },
+        ],
+      },
+    },
+  };
+  const tx: any = {
+    b2BPayoutAttempt: {
+      findUnique: async ({ where }: any) => attempts.find((attempt) => attempt.id === where.id) ?? null,
+      updateMany: async ({ where, data }: any) => {
+        const attempt = attempts.find((entry) => entry.id === where.id && entry.status === where.status);
+        if (!attempt) return { count: 0 };
+        Object.assign(attempt, data);
+        return { count: 1 };
+      },
+      findMany: async () => attempts.map(({ status }) => ({ status })),
+    },
+    settlement: {
+      findUnique: async () => settlement,
+      update: async ({ data }: any) => {
+        Object.assign(settlement, data);
+        return settlement;
+      },
+    },
+    retailerEscrowTransfer: {
+      findUnique: async () => transfer,
+      updateMany: async ({ where, data }: any) => {
+        if (transfer.id !== where.id || transfer.status !== where.status) return { count: 0 };
+        Object.assign(transfer, data);
+        return { count: 1 };
+      },
+    },
+  };
   const service = new SettlementService({
     findSettlementByReference: async () => ({
       id: 'settlement-cash-callback',
       reference: 'REF-CASH-CALLBACK',
-      metadata: {
-        escrowFunding: { payoutSource: 'CENTRAL_ACCOUNT', transferId: 'cash-transfer-callback' },
-        splitRecords: [{ expectedPayoutCount: 2 }],
-      },
+      metadata: settlement.metadata,
     }),
     findSettlementById: async () => ({
       id: 'settlement-cash-callback',
       reference: 'REF-CASH-CALLBACK',
-      metadata: {
-        escrowFunding: { payoutSource: 'CENTRAL_ACCOUNT', transferId: 'cash-transfer-callback' },
-        splitRecords: [{ expectedPayoutCount: 2 }],
-      },
+      metadata: settlement.metadata,
     }),
     updateSettlementStatus: async () => ({}),
   } as any, mockIdempotencyService, mockRetryService);
   (service as any).idempotencyService = {
-    getPayoutAttemptByReference: async () => ({
-      idempotencyKey: 'payout-key',
-      settlementId: 'settlement-cash-callback',
-    }),
-    markCallbackReceived: async () => {},
+    getPayoutAttemptByReference: async (reference: string) => attempts.find((attempt) => attempt.payoutReference === reference),
   };
-  (service as any).prisma = {
-    settlement: {
-      findUnique: async () => ({
-        metadata: {
-          escrowFunding: { payoutSource: 'CENTRAL_ACCOUNT', transferId: 'cash-transfer-callback' },
-          splitRecords: [{ expectedPayoutCount: 2 }],
-        },
-      }),
-    },
-    retailerEscrowTransfer: {
-      findUnique: async () => ({ id: 'cash-transfer-callback', status: 'BALANCE_VERIFIED' }),
-      updateMany: async () => { finalized = true; return { count: 1 }; },
-    },
-    b2BPayoutAttempt: {
-      findMany: async () => Array.from({ length: confirmedPayoutCount }, () => ({ status: 'COMPLETED' })),
-    },
-  };
-  (service as any).resolveSupplierMerchantId = () => 'supplier-1';
+  (service as any).prisma = { $transaction: async (operation: (client: any) => Promise<any>) => operation(tx) };
 
-  await service.handleB2bPayoutCallback({ reference: 'payout-1', party: 'SUPPLIER', status: 'SUCCESS' });
-  assert.equal(finalized, false);
+  await service.handleB2bPayoutCallback({ reference: 'payout-supplier', ResultCode: 0 });
+  assert.equal(transfer.status, 'BALANCE_VERIFIED');
+  assert.equal(Number(transfer.debitedAmount ?? 0), 0);
 
-  confirmedPayoutCount = 2;
-  await service.handleB2bPayoutCallback({ reference: 'payout-2', party: 'RETAILER', status: 'SUCCESS' });
-  assert.equal(finalized, true);
+  await service.handleB2bPayoutCallback({ reference: 'payout-retailer', ResultCode: 0 });
+  assert.equal(transfer.status, 'SUCCEEDED');
+  assert.equal(Number(transfer.debitedAmount), 40);
+  assert.equal(settlement.status, 'COMPLETED');
+  assert.equal(settlement.metadata.allocationPlan.allocations[0].status, 'SUCCESSFUL');
+
+  await service.handleB2bPayoutCallback({ reference: 'payout-supplier', ResultCode: 0 });
+  assert.equal(Number(transfer.debitedAmount), 40);
 });
 
 test('handlePaymentCallback transitions a settlement into pending processing using participant payout records instead of payer payload details', async () => {
@@ -790,7 +942,7 @@ test('handlePaymentCallback transitions a settlement into pending processing usi
   assert.equal(response.status, 'PENDING_PROCESSING');
   assert.equal(updatedStatus, 'PENDING_PROCESSING');
   assert.equal(updatedPayload.metadata.paymentCallback.merchantTransactionReference, 'TXN-1001');
-  assert.equal(response.allocationPlan.allocations[0].party, 'Supplier');
+  assert.equal(response.allocationPlan.allocations[0].party, 'RETAILER');
   assert.equal(response.allocationPlan.paymentDetails.supplier.type, 'MPESA');
   assert.equal(response.allocationPlan.paymentDetails.supplier.phoneNumber, '254712345678');
   assert.equal(response.allocationPlan.paymentDetails.retailer.type, 'BANK');
@@ -876,7 +1028,7 @@ test('confirmSettlementPayment records a customer payment confirmation and marks
   assert.equal(updatedStatus, 'PENDING_PROCESSING');
   assert.equal(updatedPayload.metadata.paymentConfirmation.status, 'PAID');
   assert.equal(updatedPayload.metadata.paymentConfirmation.providerReference.receiptNumber, 'RCPT-001');
-  assert.equal(response.allocationPlan.allocations[0].party, 'Supplier');
+  assert.equal(response.allocationPlan.allocations[0].party, 'RETAILER');
 });
 
 test('confirmSettlementPayment accepts a paid confirmation payload', async () => {
@@ -1146,6 +1298,7 @@ test('splitAndAllocateFunds returns failed status when both payout dispatches er
   };
 
   const service = new SettlementService(repository as any, mockIdempotencyService, mockRetryService);
+  (service as any).prisma = { retailerEscrowTransfer: { findUnique: async () => null } };
   (service as any).dispatchB2bPayouts = async () => {
     throw new Error('B2B gateway unavailable');
   };
@@ -1200,41 +1353,68 @@ test('dispatchB2bPayouts falls back to supplier merchant ID from payment payload
 });
 
 test('handleB2bPayoutCallback updates allocation status and records callback', async () => {
-  let updatedStatus: any = null;
-  let updatedPayload: any = null;
-
-  const repository = {
-    findSettlementByReference: async () => ({
-      id: 'settlement-11',
-      merchantTransactionReference: 'TXN-CALLBACK-1',
-      reference: 'REF-11',
-      metadata: {
-        allocationPlan: {
-          allocations: [
-            { party: 'SUPPLIER', amount: 18000, destination: 'B2B payout', status: 'PENDING' },
-            { party: 'RETAILER', amount: 1600, destination: 'B2B payout', status: 'PENDING' },
-          ],
-        },
+  const attempt: any = {
+    id: 'attempt-callback-1',
+    settlementId: 'settlement-11',
+    payoutReference: 'payout-abc',
+    callbackIdentifier: 'callback-id-1',
+    party: 'SUPPLIER',
+    recipientMerchantId: 'supplier-1',
+    amount: 18000,
+    status: 'SUBMITTED',
+    metadata: {},
+  };
+  const settlement: any = {
+    id: 'settlement-11',
+    status: 'PROCESSING',
+    merchantTransactionReference: 'TXN-CALLBACK-1',
+    reference: 'REF-11',
+    metadata: {
+      splitRecords: [{ expectedPayoutCount: 1 }],
+      allocationPlan: {
+        allocations: [
+          { party: 'SUPPLIER', supplierMerchantId: 'supplier-1', amount: 18000, destination: 'B2B payout', status: 'PENDING' },
+        ],
       },
-    }),
-    updateSettlementStatus: async (_id: string, status: string, updates: any) => {
-      updatedStatus = status;
-      updatedPayload = updates;
-      return { id: 'settlement-11', status, ...updates };
     },
   };
+  const tx: any = {
+    b2BPayoutAttempt: {
+      findUnique: async () => attempt,
+      updateMany: async ({ where, data }: any) => {
+        if (attempt.id !== where.id || attempt.status !== where.status) return { count: 0 };
+        Object.assign(attempt, data);
+        return { count: 1 };
+      },
+      findMany: async () => [{ status: attempt.status }],
+    },
+    settlement: {
+      findUnique: async () => settlement,
+      update: async ({ data }: any) => {
+        Object.assign(settlement, data);
+        return settlement;
+      },
+    },
+  };
+  const repository = {
+    findSettlementByReference: async () => settlement,
+  };
 
-  const service = new SettlementService(repository as any, mockIdempotencyService, mockRetryService);
+  const service = new SettlementService(repository as any, {
+    ...mockIdempotencyService,
+    getPayoutAttemptByReference: async () => attempt,
+  } as any, mockRetryService);
+  (service as any).prisma = { $transaction: async (operation: (client: any) => Promise<any>) => operation(tx) };
   const response = await service.handleB2bPayoutCallback({
     merchantTransactionReference: 'TXN-CALLBACK-1',
     reference: 'payout-abc',
-    party: 'SUPPLIER',
-    status: 'SUCCESS',
-    providerReference: 'GW-123',
+    ResultCode: 0,
+    ResultDesc: 'Success',
   } as any);
 
   assert.equal(response.success, true);
-  assert.equal(updatedStatus, 'PROCESSING');
-  assert.equal(updatedPayload.metadata.allocationPlan.allocations[0].status, 'PAID');
-  assert.equal(updatedPayload.metadata.payoutCallbacks.length, 1);
+  assert.equal(response.status, 'SUCCESSFUL');
+  assert.equal(settlement.status, 'COMPLETED');
+  assert.equal(settlement.metadata.allocationPlan.allocations[0].status, 'SUCCESSFUL');
+  assert.equal(settlement.metadata.payoutCallbacks.length, 1);
 });

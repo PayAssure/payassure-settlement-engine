@@ -54,9 +54,23 @@ test('normalize canonical settlement groups repeated supplier products into one 
   assert.ok(firstSupplier, 'first supplier should exist after normalization');
   assert.equal(firstSupplier.supplierMerchantId, 'pay_d68f568ddc7d7b2a');
   assert.equal(firstSupplier.items?.length ?? 0, 2, 'all items for the same supplier should remain together under one grouped supplier');
-  assert.equal(firstSupplier.supplierTotalAmount, 70690.12, 'supplier totals should be combined and summed');
+  assert.ok(Number.isInteger(firstSupplier.supplierTotalAmount), 'supplier payouts should be truncated to whole KES');
+  assert.equal(
+    firstSupplier.supplierTotalAmount,
+    firstSupplier.items?.reduce((sum, item) => sum + Number(item.supplierAmount ?? 0), 0),
+    'supplier totals should equal the whole-KES item allocations',
+  );
   const retailerTotal = Number((normalized.suppliers ?? []).reduce((sum, supplier) => sum + Number(supplier.retailerTotalAmount ?? 0), 0));
-  assert.equal(retailerTotal, 9486.92, 'retailer totals should be combined and dispatched as one retailer payout');
+  assert.ok(Number.isInteger(retailerTotal), 'retailer payouts should be truncated to whole KES');
+  const platformFee = Number((normalized.suppliers ?? []).reduce((sum, supplier) => sum + Number(supplier.platformFee ?? 0), 0));
+  assert.equal(
+    Number((normalized.suppliers ?? []).reduce(
+      (sum, supplier) => sum + Number(supplier.supplierTotalAmount ?? 0) + Number(supplier.retailerTotalAmount ?? 0),
+      0,
+    )) + platformFee,
+    127000,
+    'whole-KES party allocations and retained fees should reconcile to the transaction total',
+  );
 
   const simulatedCallback = simulateMpesaLandingCallback({
     merchantTransactionReference: 'TXN-SIM-20260918-0002',
@@ -361,7 +375,7 @@ test('mixed settlement simulation matrix logs each step and keeps going past per
     return unsupportedCurrencyDto;
   });
 
-  await logScenario('invalid supplier validation', async () => {
+  await logScenario('unknown non-null supplier is rejected for review', async () => {
     const missingSupplierRepo = {
       findIntegrationByMerchantId: async (merchantId: string) => {
         if (merchantId === 'pay_missing_supplier') {
@@ -387,9 +401,13 @@ test('mixed settlement simulation matrix logs each step and keeps going past per
     });
 
     await assert.rejects(
-      () => validateSettlementData(invalidSupplierDto, missingSupplierRepo as any, { warn: () => undefined, error: () => undefined, log: () => undefined } as any, ['KES']),
-      /Supplier was not found in PayAssure|not eligible|payout destination/i,
-      'expected validation to reject a supplier that cannot receive payouts',
+      () => validateSettlementData(
+        invalidSupplierDto,
+        missingSupplierRepo as any,
+        { warn: () => undefined, error: () => undefined, log: () => undefined } as any,
+        ['KES'],
+      ),
+      /Supplier was not found in PayAssure/i,
     );
 
     return invalidSupplierDto;

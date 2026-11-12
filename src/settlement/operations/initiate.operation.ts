@@ -6,7 +6,7 @@ import {
   InternalServerErrorException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ParticipantStatus, ParticipantType } from '@prisma/client';
+import { ParticipantStatus, ParticipantType, SettlementStatus } from '@prisma/client';
 import type { InitiateSettlementDto } from '../dto/initiate-settlement.dto';
 import { validateAndGetSession } from '../helpers/session.helpers';
 import { generateInternalMerchantTransactionReference, generatePayAssureReference } from '../helpers/reference.helpers';
@@ -21,6 +21,7 @@ import { initiateCustomerPayment } from './initiate/payment/initiate-customer-pa
 import { normalizePaymentMethods } from './initiate/payment/normalize-payment-methods';
 import { retailerEscrowTransferService } from '../../retailer';
 import type { SettlementInitiationContext } from './initiate/context';
+import { buildSettlementPlan } from './initiate/helpers/build-settlement-plan';
 
 export { simulateMpesaLandingCallback } from './initiate/payment/simulate-mpesa-landing-callback';
 export { sendStkPushRequestWithRetry } from './initiate/payment/stk-push-with-retry';
@@ -62,10 +63,12 @@ export async function initiateOperation(
     const invalidSuppliers = await validateAndFilterSuppliers(data, repository, logger, supportedCurrencies);
 
     data.suppliers = aggregateSuppliers(data.suppliers) as any;
+    const settlementPlan = buildSettlementPlan(data);
+    data.metadata = { ...(data.metadata ?? {}), settlementPlan };
     const cashAmount = normalizePaymentMethods(data)
       .filter((method) => String(method.type ?? '').trim().toUpperCase() === 'CASH')
       .reduce((sum, method) => sum + method.amount, 0);
-    if (cashAmount > 0 && !(await retailerEscrowTransferService.hasFloatConfig(retailerMerchantId))) {
+    if (settlementPlan.escrowBalanceCheckRequired && !(await retailerEscrowTransferService.hasFloatConfig(retailerMerchantId))) {
       throw new BadRequestException(`Retailer escrow daily float is not configured for ${retailerMerchantId}; CASH settlement was blocked.`);
     }
 
@@ -80,6 +83,57 @@ export async function initiateOperation(
     );
 
     await repository.touchSession(session.id);
+    if (
+      settlementPlan.settlementMode === 'DIRECT'
+      && settlementPlan.paymentMethod === 'CASH'
+    ) {
+      const completedAt = new Date();
+      await repository.updateSettlementStatus(primarySettlement.id, SettlementStatus.COMPLETED, {
+        completedAt,
+        metadata: {
+          ...(data.metadata ?? {}),
+          paymentConfirmation: {
+            status: 'PAID',
+            provider: 'CASH',
+            paidAmount: settlementPlan.cashAmount,
+            confirmedAt: completedAt.toISOString(),
+          },
+          settlementPlan: { ...settlementPlan, settlementStatus: 'SETTLED' },
+        },
+      });
+      logger.log('[DIRECT_SETTLEMENT][PAYOUTS_SKIPPED]', {
+        settlementId: primarySettlement.id,
+        settlementMode: settlementPlan.settlementMode,
+        paymentMethod: settlementPlan.paymentMethod,
+        retailerPayoutAmount: 0,
+        supplierPayoutAmount: 0,
+        escrowBalanceCheckRequired: false,
+        reason: 'Cash has already been received by the retailer',
+      });
+      return {
+        success: true,
+        settlementStatus: 'SETTLED',
+        settlement: {
+          settlementId: primarySettlement.id,
+          merchantId: retailerMerchantId,
+          status: SettlementStatus.COMPLETED,
+          amount: Number(primarySettlement.amount),
+          retailerAmount: settlementPlan.retailerEntitlement,
+          supplierAmount: 0,
+          systemAmount: settlementPlan.platformFeeAmount,
+          paymentDetails: toPublicPaymentDetails(data.paymentMethod),
+          currency: primarySettlement.currency,
+          reference: primarySettlement.reference,
+          createdAt: primarySettlement.createdAt,
+          estimatedProcessingTime: 'N/A',
+        },
+        settlementPlan: { ...settlementPlan, settlementStatus: 'SETTLED' },
+        message: 'Direct cash settlement completed. No escrow reservation or payout was created.',
+        children: [],
+        ...(invalidSuppliers.length > 0 ? { excludedSuppliers: invalidSuppliers } : {}),
+      };
+    }
+
     const context: SettlementInitiationContext = {
       prisma,
       repository,

@@ -1,4 +1,4 @@
-import { BadRequestException, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../../../common/database/prisma';
@@ -64,12 +64,13 @@ class RetailerEscrowBalanceQueryService {
     let availableBalance = 0;
     try {
       ({ created, availableBalance } = await prisma.$transaction(async (tx) => {
+        // Serialize balance checks per retailer; keep the balance read and reservation insert in this transaction.
         const claimed = await tx.retailerEscrowFloat.updateMany({
-          where: { id: config.id },
+          where: { id: config.id, activeTransferId: null },
           data: { activeTransferId: transferId },
         });
         if (claimed.count !== 1) {
-          throw new NotFoundException(`Escrow float for retailer ${request.retailerMerchantId} was not found`);
+          throw new ConflictException(`An escrow transfer is already being reserved for retailer ${request.retailerMerchantId}`);
         }
         const currentAvailableBalance = await retailerEscrowFloatService.getAvailableBalance(config.id, tx);
         if (currentAvailableBalance < request.cashAmount) {
@@ -181,11 +182,11 @@ class RetailerEscrowBalanceQueryService {
     const merchantTransactionReference = `E${randomUUID().replace(/-/g, '').slice(0, 11).toUpperCase()}`;
     await prisma.$transaction(async (tx) => {
       const claimed = await tx.retailerEscrowFloat.updateMany({
-        where: { id: config.id },
+        where: { id: config.id, activeTransferId: null },
         data: { activeTransferId: transferId },
       });
       if (claimed.count !== 1) {
-        throw new NotFoundException(`Escrow float for retailer ${retailerMerchantId} was not found`);
+        throw new ConflictException(`An escrow transfer is already being reserved for retailer ${retailerMerchantId}`);
       }
       await tx.retailerEscrowTransfer.create({
         data: {

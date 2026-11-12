@@ -46,7 +46,11 @@ class RetailerEscrowPayoutFlowService {
       });
       await tx.retailerEscrowTransfer.update({
         where: { id: current.id },
-        data: { status: 'SUCCEEDED', transferCallback: body as Prisma.InputJsonValue },
+        data: {
+          status: 'SUCCEEDED',
+          debitedAmount: current.amount,
+          transferCallback: body as Prisma.InputJsonValue,
+        },
       });
       if (current.settlementId) {
         await updateEscrowSettlementMetadata(current.settlementId, {

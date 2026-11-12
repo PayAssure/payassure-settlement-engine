@@ -224,20 +224,38 @@ test('cash settlement reserves the DB balance without dispatching a retailer-to-
   const float = { id: 'float-ledger-test', activeTransferId: null };
   let locked = false;
   let createdTransfer: any;
+  let blockNextClaim = false;
+  let balanceReads = 0;
+  let transferCreates = 0;
+  let lockAcquisitions = 0;
 
   try {
     floatModel.findUnique = async () => float;
     floatModel.updateMany = async ({ where }: any) => {
-      assert.equal('expectedRemainingBalance' in where, false);
-      locked = true;
-      return { count: 1 };
+      if (where.activeTransferId === null) {
+        assert.equal('expectedRemainingBalance' in where, false);
+        if (blockNextClaim) return { count: 0 };
+        locked = true;
+        lockAcquisitions += 1;
+        return { count: 1 };
+      }
+      if (where.activeTransferId) {
+        locked = false;
+        return { count: 1 };
+      }
+      return { count: 0 };
     };
-    transferModel.create = async ({ data }: any) => { createdTransfer = data; return { id: data.id, ...data }; };
+    transferModel.create = async ({ data }: any) => {
+      transferCreates += 1;
+      createdTransfer = data;
+      return { id: data.id, ...data };
+    };
     settlementModel.findUnique = async () => ({ metadata: {} });
     settlementModel.update = async () => ({});
     retailerEscrowFloatService.getAvailableBalance = async (floatId: string) => {
       assert.equal(floatId, 'float-ledger-test');
       assert.equal(locked, true, 'the ledger is read only after the retailer lock is acquired');
+      balanceReads += 1;
       return 10000;
     };
     (prisma as any).$transaction = async (callback: (tx: any) => Promise<unknown>) => callback(prisma);
@@ -255,7 +273,7 @@ test('cash settlement reserves the DB balance without dispatching a retailer-to-
     assert.equal(started.status, 'BALANCE_VERIFIED');
     assert.equal(started.payoutSource, 'CENTRAL_ACCOUNT');
     assert.equal(started.availableBalance, 10000);
-    assert.equal(locked, true);
+    assert.equal(lockAcquisitions, 1);
     assert.equal(Number(createdTransfer.requiredBalance), 10000);
     assert.equal(createdTransfer.status, 'BALANCE_VERIFIED');
 
@@ -269,6 +287,20 @@ test('cash settlement reserves the DB balance without dispatching a retailer-to-
       }),
       (error: any) => error.response?.message.includes('shortfall 1000 KES'),
     );
+
+    blockNextClaim = true;
+    await assert.rejects(
+      () => retailerEscrowBalanceQueryService.startForSettlement({
+        settlementId: 'settlement-lock-test',
+        merchantTransactionReference: 'TXN-LOCK-TEST',
+        retailerMerchantId: 'retailer-ledger-test',
+        cashAmount: 1000,
+        mpesaAmount: 0,
+      }),
+      (error: any) => error.response?.message.includes('already being reserved'),
+    );
+    assert.equal(balanceReads, 2, 'a reservation must not read the balance if the database lock was not acquired');
+    assert.equal(transferCreates, 1, 'a reservation must not create a payout record if the database lock was not acquired');
   } finally {
     (prisma as any).$transaction = originalTransaction;
     floatModel.findUnique = original.floatFindUnique;

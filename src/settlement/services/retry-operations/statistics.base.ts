@@ -5,7 +5,7 @@ export abstract class RetryStatisticsBase extends RetryBatchProcessingBase {
     const payouts = await this.idempotencyService.getSettlementPayouts(settlementId);
     return {
       totalPayouts: payouts.length,
-      completed: payouts.filter((p) => p.status === 'COMPLETED').length,
+      completed: payouts.filter((p) => ['COMPLETED', 'SUCCESSFUL'].includes(p.status)).length,
       submitted: payouts.filter((p) => p.status === 'SUBMITTED').length,
       pending: payouts.filter((p) => p.status === 'PENDING').length,
       retrying: payouts.filter((p) => p.status === 'RETRYING').length,

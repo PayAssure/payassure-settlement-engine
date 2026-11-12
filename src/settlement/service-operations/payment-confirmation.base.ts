@@ -39,17 +39,57 @@ export abstract class SettlementPaymentConfirmationBase extends SettlementPayout
     const allocationPayload = (settlement.paymentPayload && typeof settlement.paymentPayload === 'object' && !Array.isArray(settlement.paymentPayload))
       ? settlement.paymentPayload as Record<string, any>
       : {};
+    const storedSettlementPlan = existingMetadata.settlementPlan && typeof existingMetadata.settlementPlan === 'object'
+      ? existingMetadata.settlementPlan as Record<string, any>
+      : null;
+    const plannedAllocations = Array.isArray(storedSettlementPlan?.allocations)
+      ? storedSettlementPlan.allocations
+      : Array.isArray(allocationPayload.suppliers)
+        ? allocationPayload.suppliers
+        : [];
     const supplierGroups = new Map<string, number>();
     let retailerAmount = 0;
     let platformFee = 0;
-    for (const supplier of (Array.isArray(allocationPayload.suppliers) ? allocationPayload.suppliers : [])) {
+    for (const supplier of plannedAllocations) {
       const supplierId = String(supplier.supplierMerchantId ?? '').trim();
-      if (supplierId) supplierGroups.set(supplierId, (supplierGroups.get(supplierId) ?? 0) + Number(supplier.supplierTotalAmount ?? 0));
+      if (supplierId) {
+        const supplierAmount = Array.isArray(supplier.items) && supplier.items.length > 0
+          ? supplier.items.reduce((sum: number, item: any) => sum + Number(item.supplierAmount ?? 0), 0)
+          : Number(supplier.supplierTotalAmount ?? 0);
+        supplierGroups.set(supplierId, (supplierGroups.get(supplierId) ?? 0) + supplierAmount);
+      }
       retailerAmount += Number(supplier.retailerTotalAmount ?? 0);
       platformFee += Number(supplier.platformFee ?? 0);
     }
-    const supplierAllocations = Array.from(supplierGroups, ([merchantId, amount]) => ({ merchantId, amount }));
+    let remainingSupplierPayout = storedSettlementPlan
+      ? Math.max(0, Number(storedSettlementPlan.supplierPayoutAmount ?? 0))
+      : Number.POSITIVE_INFINITY;
+    let remainingEscrowFunding = storedSettlementPlan
+      ? Math.max(0, Number(storedSettlementPlan.escrowDebitAmount ?? 0))
+      : 0;
+    const plannedPayoutInstructions = Array.isArray(storedSettlementPlan?.payoutInstructions)
+      ? storedSettlementPlan.payoutInstructions as Array<Record<string, any>>
+      : null;
+    const supplierAllocations = plannedPayoutInstructions
+      ? plannedPayoutInstructions
+        .filter((instruction) => instruction.party === 'SUPPLIER' && Number(instruction.amount) > 0)
+        .map((instruction) => ({
+          merchantId: String(instruction.supplierMerchantId),
+          amount: Number(instruction.amount),
+          escrowFundedAmount: Number(instruction.escrowFundedAmount ?? 0),
+        }))
+      : Array.from(supplierGroups, ([merchantId, requestedAmount]) => {
+        const amount = Math.min(requestedAmount, remainingSupplierPayout);
+        const escrowFundedAmount = Math.min(amount, remainingEscrowFunding);
+        remainingSupplierPayout -= amount;
+        remainingEscrowFunding -= escrowFundedAmount;
+        return { merchantId, amount, escrowFundedAmount };
+      }).filter((supplier) => supplier.amount > 0);
     const supplierAmount = supplierAllocations.reduce((total, supplier) => total + supplier.amount, 0);
+    const retailerPayoutAmount = storedSettlementPlan
+      ? Math.max(0, Number(plannedPayoutInstructions?.find((instruction) => instruction.party === 'RETAILER')?.amount
+        ?? storedSettlementPlan.retailerPayoutAmount ?? 0))
+      : retailerAmount;
     const paymentMethod = (settlement.paymentPayload && typeof settlement.paymentPayload === 'object' && !Array.isArray(settlement.paymentPayload)
       ? (settlement.paymentPayload as Record<string, any>).paymentMethod
       : null) as Record<string, any> | null;
@@ -57,16 +97,45 @@ export abstract class SettlementPaymentConfirmationBase extends SettlementPayout
     const retailerMerchantId = await this.resolveRetailerMerchantId(settlement);
     const supplierRecipient = supplierMerchantId ? await this.resolveB2bRecipient(settlement, 'SUPPLIER', supplierMerchantId) : null;
     const retailerRecipient = retailerMerchantId ? await this.resolveB2bRecipient(settlement, 'RETAILER', retailerMerchantId) : null;
+    const customerReceived = storedSettlementPlan
+      ? Math.max(0, Number(storedSettlementPlan.mpesaAmount ?? 0))
+      : String(paymentMethod?.type ?? '').toUpperCase() === 'CASH'
+        ? 0
+        : Number(data.paidAmount ?? settlement.amount ?? 0);
     const allocationPlan = {
-      customerReceived: Number(settlement.amount),
+      customerReceived,
+      payoutInstructions: [
+        ...supplierAllocations.map((supplier) => ({
+          party: 'SUPPLIER',
+          supplierMerchantId: supplier.merchantId,
+          amount: supplier.amount,
+          escrowFundedAmount: supplier.escrowFundedAmount,
+        })),
+        ...(retailerPayoutAmount > 0 ? [{
+          party: 'RETAILER',
+          amount: retailerPayoutAmount,
+          escrowFundedAmount: 0,
+        }] : []),
+      ],
       ledgerEntries: [
-        { account: 'Cash', direction: 'DEBIT', amount: Number(settlement.amount), description: 'Customer payment received' },
-        { account: 'Customer Clearing', direction: 'CREDIT', amount: Number(settlement.amount), description: 'Customer funds parked pending allocation' },
+        { account: 'Cash', direction: 'DEBIT', amount: customerReceived, description: 'Customer M-Pesa payment received' },
+        { account: 'Customer Clearing', direction: 'CREDIT', amount: customerReceived, description: 'Customer M-Pesa funds parked pending allocation' },
       ],
       allocations: [
-        { party: 'Supplier', amount: supplierAmount, destination: 'B2B payout', status: 'PENDING' },
-        { party: 'Retailer', amount: retailerAmount, destination: 'B2B payout', status: 'PENDING' },
-        { party: 'Platform', amount: platformFee, destination: 'Retained fee', status: 'PENDING' },
+        ...supplierAllocations.map((supplier) => ({
+          party: 'SUPPLIER',
+          supplierMerchantId: supplier.merchantId,
+          amount: supplier.amount,
+          destination: 'B2B payout',
+          status: 'PENDING',
+        })),
+        {
+          party: 'RETAILER',
+          amount: retailerPayoutAmount,
+          destination: 'B2B payout',
+          status: retailerPayoutAmount > 0 ? 'PENDING' : 'NOT_REQUIRED',
+        },
+        { party: 'PLATFORM', amount: platformFee, destination: 'Retained fee', status: 'RETAINED' },
       ],
       paymentDetails: {
         supplier: {
@@ -107,6 +176,7 @@ export abstract class SettlementPaymentConfirmationBase extends SettlementPayout
             party: 'SUPPLIER',
             amount: supplier.amount,
             supplierMerchantId: supplier.merchantId,
+            escrowFundedAmount: supplier.escrowFundedAmount,
           });
           dispatchResults.push({ party: 'SUPPLIER', supplierMerchantId: supplier.merchantId, result: supplierDispatch });
         } catch (error) {
@@ -118,12 +188,14 @@ export abstract class SettlementPaymentConfirmationBase extends SettlementPayout
       this.logger.error(`[CONFIRMATION][DISPATCH] supplier payout dispatch loop failed for settlement ${settlement.id}: ${error instanceof Error ? error.message : String(error)}`);
     }
     try {
-      const retailerDispatch = await this.dispatchB2bPayouts({
-        merchantTransactionReference: settlement.merchantTransactionReference,
-        party: 'RETAILER',
-        amount: retailerAmount,
-      });
-      dispatchResults.push({ party: 'RETAILER', result: retailerDispatch });
+      if (retailerPayoutAmount > 0) {
+        const retailerDispatch = await this.dispatchB2bPayouts({
+          merchantTransactionReference: settlement.merchantTransactionReference,
+          party: 'RETAILER',
+          amount: retailerPayoutAmount,
+        });
+        dispatchResults.push({ party: 'RETAILER', result: retailerDispatch });
+      }
     } catch (error) {
       this.logger.warn(`[CONFIRMATION][DISPATCH] retailer payout dispatch failed for settlement ${settlement.id}: ${error instanceof Error ? error.message : String(error)}`);
       dispatchResults.push({ party: 'RETAILER', error: error instanceof Error ? error.message : String(error) });

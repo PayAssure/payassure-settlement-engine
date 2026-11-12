@@ -10,6 +10,10 @@ export function normalizeCanonicalSettlement(data: InitiateSettlementDto): Initi
 
   const totalAmount = validateCanonicalSettlement(data);
   const { suppliers, commercialTotal } = groupCanonicalItems(data.items ?? []);
+  const sourceSuppliers = (data.items && data.items.length > 0 ? suppliers : (data.suppliers ?? [])) as Array<{ supplierMerchantId?: string | null }>;
+  const hasDirectItems = sourceSuppliers.some((supplier) => supplier.supplierMerchantId == null || !String(supplier.supplierMerchantId).trim());
+  const hasSplitItems = sourceSuppliers.some((supplier) => !!supplier.supplierMerchantId && String(supplier.supplierMerchantId).trim().length > 0);
+  const resolvedSettlementMode = hasDirectItems && hasSplitItems ? 'MIXED' : hasDirectItems ? 'DIRECT' : 'SPLIT';
   const fee = applyCanonicalPlatformFees(suppliers, totalAmount);
   const paymentMethods = data.payment?.methods?.map((method) => ({
     type: method.type,
@@ -39,6 +43,7 @@ export function normalizeCanonicalSettlement(data: InitiateSettlementDto): Initi
     suppliers,
     metadata: {
       ...(data.metadata ?? {}),
+      resolvedSettlementMode,
       calculatedAllocation: {
         commercialTotal: roundMoney(commercialTotal),
         supplierFeeShare: fee.supplierFeeShare,

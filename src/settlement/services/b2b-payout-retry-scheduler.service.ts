@@ -3,10 +3,13 @@ import { B2BPayoutRetryService } from './b2b-payout-retry.service';
 import { B2BPayoutIdempotencyService } from './b2b-payout-idempotency.service';
 import { SettlementService } from '../settlement.service';
 import { RetrySchedulerControlsBase } from './retry-scheduler-operations/scheduler-controls.base';
+import { SettlementWebhookDeliveryService } from './settlement-webhook-delivery.service';
+import { prisma } from '../../common/database/prisma';
 
 @Injectable()
 export class B2BPayoutRetryScheduler extends RetrySchedulerControlsBase implements OnModuleInit {
   protected readonly logger = new Logger(B2BPayoutRetryScheduler.name);
+  private readonly webhookDeliveryService = new SettlementWebhookDeliveryService(prisma);
   protected retryJobHandle: NodeJS.Timeout | null = null;
   protected isRunning = false;
   protected readonly RETRY_CHECK_INTERVAL_MS = 30000;
@@ -18,5 +21,10 @@ export class B2BPayoutRetryScheduler extends RetrySchedulerControlsBase implemen
     protected readonly settlementService: SettlementService,
   ) {
     super();
+  }
+
+  protected async processRetries() {
+    await super.processRetries();
+    await this.webhookDeliveryService.processPendingRetries(this.RETRY_BATCH_SIZE);
   }
 }

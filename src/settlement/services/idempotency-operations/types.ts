@@ -20,4 +20,5 @@ export interface PayoutAttemptResult {
   isNewAttempt: boolean;
   attemptCount: number;
   lastAttemptAt: Date;
+  callbackIdentifier?: string | null;
 }

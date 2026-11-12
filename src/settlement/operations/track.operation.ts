@@ -23,9 +23,9 @@ export async function trackOperation(prisma: any, repository: any, settlementId:
   const allocationPlan = settlement.metadata?.allocationPlan ?? {
     customerReceived: Number(settlement.amount),
     allocations: [
-      { party: 'Supplier', amount: Number(settlement.amount) * 0.9, destination: 'B2B payout', status: 'PENDING' },
-      { party: 'Retailer', amount: Number(settlement.amount) * 0.08, destination: 'B2B payout', status: 'PENDING' },
-      { party: 'Platform', amount: Number(settlement.amount) * 0.02, destination: 'Retained fee', status: 'PENDING' },
+      { party: 'RETAILER', amount: Number(settlement.amount) * 0.9, destination: 'B2B payout', status: 'PENDING' },
+      { party: 'SUPPLIER', amount: Number(settlement.amount) * 0.08, destination: 'B2B payout', status: 'PENDING' },
+      { party: 'PLATFORM', amount: Number(settlement.amount) * 0.02, destination: 'Retained fee', status: 'PENDING' },
     ],
     paymentDetails: {
       supplier: { type: paymentType, provider: paymentMethod?.provider ?? 'Safaricom', payerPhoneNumber: paymentMethod?.payerPhoneNumber ?? null },

@@ -1,0 +1,2 @@
+-- RenameIndex
+ALTER INDEX "settlement_webhook_delivery_attempts_deliveryId_attemptNumber_k" RENAME TO "settlement_webhook_delivery_attempts_deliveryId_attemptNumb_key";

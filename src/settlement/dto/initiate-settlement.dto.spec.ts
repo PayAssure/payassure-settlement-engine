@@ -284,9 +284,9 @@ test('accepts the canonical mixed payment payload and calculates allocations ser
   assert.equal(normalized.totalAmount, 400);
   assert.equal(normalized.settlementMethod, 'MIXED');
   assert.equal(normalized.paymentMethods?.[0].provider, 'ESCROW');
-  assert.equal(normalized.suppliers?.[0].supplierTotalAmount, 198.4);
-  assert.equal(normalized.suppliers?.[0].retailerTotalAmount, 198.4);
-  assert.equal(normalized.suppliers?.[0].platformFee, 3.2);
+  assert.equal(normalized.suppliers?.[0].supplierTotalAmount, 198);
+  assert.equal(normalized.suppliers?.[0].retailerTotalAmount, 198);
+  assert.equal(normalized.suppliers?.[0].platformFee, 4);
   assert.equal(normalized.metadata?.invoiceReference, 'INV-001');
   assert.equal((normalized as any).idempotencyKey, undefined);
   assert.equal((normalized as any).orderReference, undefined);
@@ -296,6 +296,43 @@ test('accepts the canonical mixed payment payload and calculates allocations ser
     delete process.env.PAYASSURE_PLATFORM_FEE_RATE;
   } else {
     process.env.PAYASSURE_PLATFORM_FEE_RATE = previousFeeRate;
+  }
+});
+
+test('canonical fees use 0.8 percent and retain fractional KES allocations as platform fee', () => {
+  const previousFeeRate = process.env.PAYASSURE_PLATFORM_FEE_RATE;
+  delete process.env.PAYASSURE_PLATFORM_FEE_RATE;
+
+  const dto = plainToInstance(InitiateSettlementDto, {
+    merchantId: 'pay_retailer_001',
+    merchantTransactionReference: 'TXN-CANONICAL-FRACTIONAL-001',
+    amount: 100,
+    currency: 'KES',
+    payment: { methods: [{ type: 'CASH', amount: 100 }] },
+    items: [{
+      supplierMerchantId: 'pay_supplier_001',
+      itemReference: 'ITEM-FRACTIONAL-001',
+      supplierAmount: 6,
+      retailerAmount: 94,
+    }],
+  });
+
+  try {
+    const normalized = normalizeCanonicalSettlement(dto);
+    const supplier = normalized.suppliers?.[0];
+    assert.equal(normalized.metadata?.calculatedAllocation?.platformFeeRate, 0.8);
+    assert.equal(supplier?.supplierTotalAmount, 5);
+    assert.equal(supplier?.retailerTotalAmount, 93);
+    assert.equal(supplier?.items?.[0].supplierAmount, 5);
+    assert.equal(supplier?.items?.[0].retailerAmount, 93);
+    assert.equal(supplier?.platformFee, 2);
+    assert.equal(supplier?.supplierTotalAmount + supplier?.retailerTotalAmount + supplier?.platformFee, 100);
+  } finally {
+    if (previousFeeRate === undefined) {
+      delete process.env.PAYASSURE_PLATFORM_FEE_RATE;
+    } else {
+      process.env.PAYASSURE_PLATFORM_FEE_RATE = previousFeeRate;
+    }
   }
 });
 

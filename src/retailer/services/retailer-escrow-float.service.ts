@@ -71,7 +71,7 @@ class RetailerEscrowFloatService {
       }),
       client.retailerEscrowTransfer.aggregate({
         where: { retailerEscrowFloatId: floatId, status: 'SUCCEEDED' },
-        _sum: { amount: true },
+        _sum: { debitedAmount: true },
       }),
       client.retailerEscrowTransfer.aggregate({
         where: {
@@ -82,7 +82,7 @@ class RetailerEscrowFloatService {
       }),
     ]);
     const depositedBalance = Number(deposits._sum.amount ?? 0);
-    const paidOutBalance = Number(transfers._sum.amount ?? 0);
+    const paidOutBalance = Number(transfers._sum.debitedAmount ?? 0);
     const reservedBalance = Number(reservedTransfers._sum.amount ?? 0);
     return {
       depositedBalance,

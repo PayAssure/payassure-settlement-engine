@@ -4,6 +4,10 @@ import { SettlementRepository } from '../settlement.repository';
 import { InitiateSettlementDto } from '../dto/initiate-settlement.dto';
 import { areAmountsEqual } from './reference.helpers';
 
+function supplierItemsAreDirect(supplier: { supplierMerchantId?: string | null; items?: any[]; supplierTotalAmount?: number; retailerTotalAmount?: number }) {
+  return supplier.supplierMerchantId == null || supplier.supplierMerchantId === '' || !String(supplier.supplierMerchantId).trim();
+}
+
 export async function validateSettlementData(
   data: InitiateSettlementDto,
   repository: SettlementRepository,
@@ -90,8 +94,21 @@ export async function validateSettlementData(
 
   for (const [supplierIndex, supplier] of (data.suppliers ?? []).entries()) {
     const supplierErrorStart = errors.length;
-    if (!supplier.supplierMerchantId) {
+    const normalizedSupplierMerchantId = supplier.supplierMerchantId == null ? null : String(supplier.supplierMerchantId).trim() || null;
+
+    if (normalizedSupplierMerchantId === null && supplierItemsAreDirect(supplier)) {
+      const supplierItems = Array.isArray(supplier.items) ? supplier.items : [];
+      const hasItems = supplierItems.length > 0;
+      const directRetailerTotal = hasItems
+        ? supplierItems.reduce((sum, item) => sum + Number(item.supplierAmount ?? 0) + Number(item.retailerAmount ?? 0), 0)
+        : Number(supplier.supplierTotalAmount ?? 0) + Number(supplier.retailerTotalAmount ?? 0);
+      computedTotal += directRetailerTotal + Number(supplier.platformFee ?? 0);
+      continue;
+    }
+
+    if (!normalizedSupplierMerchantId) {
       errors.push({ field: `suppliers[${supplierIndex}].supplierMerchantId`, message: 'Supplier merchant ID is required for each supplier group' });
+      continue;
     }
 
     const supplierItems = Array.isArray(supplier.items) ? supplier.items : [];
@@ -145,26 +162,26 @@ export async function validateSettlementData(
 
     computedTotal += supplierAmount + retailerAmount + platformFee;
 
-    const supplierIntegration = await repository.findIntegrationByMerchantId(supplier.supplierMerchantId);
+    const supplierIntegration = await repository.findIntegrationByMerchantId(normalizedSupplierMerchantId);
 
     if (!supplierIntegration?.participant) {
-      logger.warn(`Supplier lookup failed during validation: supplierMerchantId=${supplier.supplierMerchantId}`);
+      logger.warn(`Supplier lookup failed during validation: supplierMerchantId=${normalizedSupplierMerchantId}`);
       errors.push({ field: `suppliers[${supplierIndex}].supplierMerchantId`, message: 'Supplier was not found in PayAssure' });
     } else {
       const supplierStatus = supplierIntegration.participant.status as ParticipantStatus;
       const isActiveSupplier = supplierIntegration.participant.participantType === ParticipantType.SUPPLIER && ([ParticipantStatus.ACTIVE, ParticipantStatus.LIVE] as ParticipantStatus[]).includes(supplierStatus);
 
       if (!isActiveSupplier) {
-        logger.warn(`Supplier not eligible during validation: supplierMerchantId=${supplier.supplierMerchantId}, status=${supplierStatus}`);
+        logger.warn(`Supplier not eligible during validation: supplierMerchantId=${normalizedSupplierMerchantId}, status=${supplierStatus}`);
         errors.push({ field: `suppliers[${supplierIndex}].supplierMerchantId`, message: 'Supplier is not active or not eligible to receive settlements' });
       }
 
       const supplierPayment = supplierIntegration.participant.payment as any;
       if (!supplierPayment) {
-        logger.warn(`Supplier has no configured payment destination: supplierMerchantId=${supplier.supplierMerchantId}`);
+        logger.warn(`Supplier has no configured payment destination: supplierMerchantId=${normalizedSupplierMerchantId}`);
         errors.push({ field: `suppliers[${supplierIndex}].supplierMerchantId`, message: 'Supplier payout destination is not configured' });
       } else if (supplierPayment.status !== 'VERIFIED' && supplierPayment.isVerified !== true) {
-        logger.warn(`Supplier payout destination not verified: supplierMerchantId=${supplier.supplierMerchantId}`);
+        logger.warn(`Supplier payout destination not verified: supplierMerchantId=${normalizedSupplierMerchantId}`);
         errors.push({ field: `suppliers[${supplierIndex}].supplierMerchantId`, message: 'Supplier payout destination must be verified before settlement' });
       }
     }
@@ -173,7 +190,7 @@ export async function validateSettlementData(
     if (supplierErrors.length > 0) {
       invalidSuppliers.push({
         index: supplierIndex,
-        supplierMerchantId: supplier.supplierMerchantId,
+        supplierMerchantId: normalizedSupplierMerchantId ?? undefined,
         errors: supplierErrors,
       });
     }

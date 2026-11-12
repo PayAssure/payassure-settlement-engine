@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import type { CreatePayoutAttemptDto, PayoutAttemptResult } from './types';
 import { IdempotencyKeysBase } from './idempotency-keys.base';
@@ -5,27 +6,12 @@ import { IdempotencyKeysBase } from './idempotency-keys.base';
 export abstract class PayoutAttemptCreationBase extends IdempotencyKeysBase {
   async createOrGetPayoutAttempt(data: CreatePayoutAttemptDto): Promise<PayoutAttemptResult> {
     const idempotencyKey = this.generateIdempotencyKey(data.settlementId, data.party, data.recipientMerchantId);
-    const existingAttempt = await this.prisma.b2BPayoutAttempt.findUnique({ where: { idempotencyKey } });
-    if (existingAttempt) {
-      this.logger.log('[IDEMPOTENCY] Payout attempt already exists', {
-        idempotencyKey,
-        payoutReference: existingAttempt.payoutReference,
-        status: existingAttempt.status,
-        attemptCount: existingAttempt.attemptCount,
-      });
-      return {
-        id: existingAttempt.id,
-        payoutReference: existingAttempt.payoutReference,
-        idempotencyKey,
-        status: existingAttempt.status,
-        isNewAttempt: false,
-        attemptCount: existingAttempt.attemptCount,
-        lastAttemptAt: existingAttempt.lastAttemptAt,
-      };
-    }
     const payoutReference = this.generatePayoutReference(data.merchantTransactionReference, data.party);
-    const newAttempt = await this.prisma.b2BPayoutAttempt.create({
-      data: {
+    const newId = randomUUID();
+    const attempt = await this.prisma.b2BPayoutAttempt.upsert({
+      where: { idempotencyKey },
+      create: {
+        id: newId,
         settlementId: data.settlementId,
         merchantTransactionReference: data.merchantTransactionReference,
         payoutReference,
@@ -39,22 +25,35 @@ export abstract class PayoutAttemptCreationBase extends IdempotencyKeysBase {
         status: 'PENDING',
         metadata: data.metadata || {},
       },
+      update: {},
     });
-    this.logger.log('[IDEMPOTENCY] New payout attempt created', {
-      idempotencyKey,
-      payoutReference: newAttempt.payoutReference,
-      settlementId: data.settlementId,
-      party: data.party,
-      amount: data.amount,
-    });
+    const isNewAttempt = attempt.id === newId;
+    if (!isNewAttempt) {
+      this.logger.log('[IDEMPOTENCY] Payout attempt already exists', {
+        idempotencyKey,
+        payoutReference: attempt.payoutReference,
+        status: attempt.status,
+        attemptCount: attempt.attemptCount,
+      });
+    }
+    if (isNewAttempt) {
+      this.logger.log('[IDEMPOTENCY] New payout attempt created', {
+        idempotencyKey,
+        payoutReference: attempt.payoutReference,
+        settlementId: data.settlementId,
+        party: data.party,
+        amount: data.amount,
+      });
+    }
     return {
-      id: newAttempt.id,
-      payoutReference,
+      id: attempt.id,
+      payoutReference: attempt.payoutReference,
       idempotencyKey,
-      status: 'PENDING',
-      isNewAttempt: true,
-      attemptCount: 1,
-      lastAttemptAt: newAttempt.lastAttemptAt,
+      status: attempt.status,
+      isNewAttempt,
+      attemptCount: attempt.attemptCount,
+      lastAttemptAt: attempt.lastAttemptAt,
+      callbackIdentifier: attempt.callbackIdentifier,
     };
   }
 }

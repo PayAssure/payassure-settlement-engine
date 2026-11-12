@@ -18,6 +18,52 @@ export abstract class SettlementAllocationBase extends SettlementPaymentCallback
       throw new BadRequestException({ statusCode: 400, message: 'Settlement payment payload not found', error: 'INVALID_SETTLEMENT_PAYLOAD' });
     }
     const existingMetadata = (settlement.metadata && typeof settlement.metadata === 'object') ? settlement.metadata as Record<string, any> : {};
+    const settlementPlan = existingMetadata.settlementPlan && typeof existingMetadata.settlementPlan === 'object'
+      ? existingMetadata.settlementPlan as Record<string, any>
+      : null;
+    const storedSuppliers = Array.isArray(paymentPayload.suppliers) ? paymentPayload.suppliers : [];
+    const resolvedMode = String(
+      settlementPlan?.settlementMode
+        ?? existingMetadata.resolvedSettlementMode
+        ?? (storedSuppliers.length > 0 && storedSuppliers.every((supplier: any) => !supplier?.supplierMerchantId) ? 'DIRECT' : ''),
+    ).toUpperCase();
+    const resolvedPaymentMethod = String(
+      settlementPlan?.paymentMethod
+        ?? existingMetadata.fundingPlan?.paymentMethod
+        ?? paymentPayload.paymentMethod?.type
+        ?? '',
+    ).toUpperCase();
+    if (resolvedMode === 'DIRECT' && resolvedPaymentMethod === 'CASH') {
+      this.logger.log('[DIRECT_SETTLEMENT][PAYOUTS_SKIPPED]', {
+        settlementId: settlement.id,
+        merchantTransactionReference: data.merchantTransactionReference,
+        settlementMode: resolvedMode,
+        paymentMethod: resolvedPaymentMethod,
+        retailerPayoutAmount: 0,
+        supplierPayoutAmount: 0,
+        escrowTransferLookup: 'SKIPPED',
+        reason: 'Cash has already been received by the retailer',
+      });
+      if (settlement.status !== SettlementStatus.COMPLETED) {
+        await this.repository.updateSettlementStatus(settlement.id, SettlementStatus.COMPLETED, {
+          completedAt: new Date(),
+          metadata: {
+            ...existingMetadata,
+            settlementPlan: { ...(settlementPlan ?? {}), settlementMode: resolvedMode, paymentMethod: resolvedPaymentMethod, settlementStatus: 'SETTLED' },
+          },
+        });
+      }
+      return {
+        success: true,
+        status: 'SETTLED',
+        settlementId: settlement.id,
+        merchantTransactionReference: data.merchantTransactionReference,
+        settlementPlan: { ...(settlementPlan ?? {}), settlementMode: resolvedMode, paymentMethod: resolvedPaymentMethod, settlementStatus: 'SETTLED' },
+        dispatchResults: { suppliers: [], retailer: null, errors: [] },
+        message: 'Direct cash settlement is settled; no escrow or payout workflow was entered.',
+      };
+    }
+
     const fundingPlan = existingMetadata.fundingPlan && typeof existingMetadata.fundingPlan === 'object'
       ? existingMetadata.fundingPlan as Record<string, any>
       : {};
@@ -71,7 +117,11 @@ export abstract class SettlementAllocationBase extends SettlementPaymentCallback
         mpesaFundingStatus: fundingPlan.mpesaStatus ?? 'WAITING_FOR_CUSTOMER',
       };
     }
-    const suppliers = Array.isArray(paymentPayload.suppliers) ? paymentPayload.suppliers : [];
+    const suppliers = Array.isArray(settlementPlan?.allocations)
+      ? settlementPlan.allocations
+      : Array.isArray(paymentPayload.suppliers)
+        ? paymentPayload.suppliers
+        : [];
     if (suppliers.length === 0) {
       this.logger.warn('[SETTLEMENT][SPLIT] no suppliers found in payment payload', { timestamp, settlementId: settlement.id });
     }
@@ -99,6 +149,60 @@ export abstract class SettlementAllocationBase extends SettlementPaymentCallback
       }
     }
     const supplierAllocations = Array.from(supplierGroups.values());
+    const plannedPayoutInstructions = Array.isArray(settlementPlan?.payoutInstructions)
+      ? settlementPlan.payoutInstructions as Array<Record<string, any>>
+      : null;
+    let remainingSupplierPayout = settlementPlan
+      ? Math.max(0, Number(settlementPlan.supplierPayoutAmount ?? 0))
+      : Number.POSITIVE_INFINITY;
+    let remainingEscrowFunding = settlementPlan
+      ? Math.max(0, Number(settlementPlan.escrowDebitAmount ?? 0))
+      : 0;
+    const approvedSupplierAllocations = plannedPayoutInstructions
+      ? plannedPayoutInstructions
+        .filter((instruction) => instruction.party === 'SUPPLIER' && Number(instruction.amount) > 0)
+        .map((instruction) => ({
+          merchantId: String(instruction.supplierMerchantId),
+          amount: Number(instruction.amount),
+          escrowFundedAmount: Number(instruction.escrowFundedAmount ?? 0),
+        }))
+      : supplierAllocations
+        .map((supplier) => {
+          const amount = Math.min(supplier.amount, remainingSupplierPayout);
+          const escrowFundedAmount = Math.min(amount, remainingEscrowFunding);
+          remainingSupplierPayout -= amount;
+          remainingEscrowFunding -= escrowFundedAmount;
+          return { ...supplier, amount, escrowFundedAmount };
+        })
+        .filter((supplier) => supplier.amount > 0);
+    let approvedRetailerPayout = plannedPayoutInstructions
+      ? Math.max(0, Number(plannedPayoutInstructions.find((instruction) => instruction.party === 'RETAILER')?.amount ?? 0))
+      : settlementPlan
+        ? Math.max(0, Number(settlementPlan.retailerPayoutAmount ?? 0))
+        : retailerAmount;
+    if (settlementPlan?.settlementMode === 'DIRECT' && Number(settlementPlan.mpesaAmount ?? 0) > 0) {
+      const confirmedMpesaAmount = data.customerMpesaPaymentConfirmed === true
+        ? Number(fundingPlan.mpesaAmount ?? settlementPlan.mpesaAmount)
+        : 0;
+      approvedRetailerPayout = Math.min(
+        approvedRetailerPayout,
+        confirmedMpesaAmount,
+        Math.max(0, retailerAmount),
+      );
+      settlementPlan.confirmedMpesaAmount = confirmedMpesaAmount;
+      settlementPlan.retailerPayoutAmount = approvedRetailerPayout;
+      settlementPlan.retailerPayoutRequired = approvedRetailerPayout > 0;
+      if (plannedPayoutInstructions) {
+        settlementPlan.payoutInstructions = plannedPayoutInstructions
+          .filter((instruction) => instruction.party !== 'RETAILER')
+          .concat(approvedRetailerPayout > 0 ? [{
+            party: 'RETAILER',
+            amount: approvedRetailerPayout,
+            escrowFundedAmount: 0,
+          }] : []);
+      }
+    }
+
     const paymentCallbackRecord = {
       merchantTransactionReference: data.merchantTransactionReference,
       status: 'SUCCESS',
@@ -127,10 +231,10 @@ export abstract class SettlementAllocationBase extends SettlementPaymentCallback
       resultDesc: data.resultDesc ?? null,
       totalAmount: Number(settlement.amount),
       currency: settlement.currency ?? 'KES',
-      expectedPayoutCount: supplierAllocations.filter((supplier) => supplier.amount > 0).length + (retailerAmount > 0 ? 1 : 0),
+      expectedPayoutCount: approvedSupplierAllocations.length + (approvedRetailerPayout > 0 ? 1 : 0),
       allocations: {
-        suppliers: supplierAllocations.map((supplier) => ({ merchantId: supplier.merchantId, amount: supplier.amount, status: 'PENDING_PAYOUT' })),
-        retailer: { merchantId: resolvedRetailerMerchantId, amount: retailerAmount, status: 'PENDING_PAYOUT' },
+        suppliers: approvedSupplierAllocations.map((supplier) => ({ merchantId: supplier.merchantId, amount: supplier.amount, status: 'PENDING_PAYOUT' })),
+        retailer: { merchantId: resolvedRetailerMerchantId, amount: approvedRetailerPayout, status: approvedRetailerPayout > 0 ? 'PENDING_PAYOUT' : 'NOT_REQUIRED' },
       },
     };
     const splitRecords = Array.isArray(existingMetadata.splitRecords) ? existingMetadata.splitRecords : [];
@@ -138,6 +242,7 @@ export abstract class SettlementAllocationBase extends SettlementPaymentCallback
       ...existingMetadata,
       paymentCallback: paymentCallbackRecord,
       paymentConfirmation: { ...paymentCallbackRecord, status: 'PAID', confirmedAt: timestamp },
+      ...(settlementPlan ? { settlementPlan } : {}),
       splitRecords: [...splitRecords, splitRecord],
       lastSplitAt: timestamp,
     };
@@ -151,7 +256,7 @@ export abstract class SettlementAllocationBase extends SettlementPaymentCallback
     });
     await this.repository.notifyWebhookEvent?.(settlement.id, 'payment.settlement.started');
     const dispatchResults = { suppliers: [] as any[], retailer: null as any, errors: [] as any[] };
-    for (const supplier of supplierAllocations) {
+    for (const supplier of approvedSupplierAllocations) {
       if (!supplier.merchantId || supplier.amount <= 0) continue;
       try {
         const supplierDispatch = await this.dispatchB2bPayouts({
@@ -159,6 +264,7 @@ export abstract class SettlementAllocationBase extends SettlementPaymentCallback
           party: 'SUPPLIER',
           supplierMerchantId: supplier.merchantId,
           amount: supplier.amount,
+          escrowFundedAmount: supplier.escrowFundedAmount,
         });
         dispatchResults.suppliers.push({ supplierMerchantId: supplier.merchantId, result: supplierDispatch });
       } catch (supplierError) {
@@ -172,17 +278,17 @@ export abstract class SettlementAllocationBase extends SettlementPaymentCallback
         dispatchResults.errors.push({ party: 'SUPPLIER', supplierMerchantId: supplier.merchantId, amount: supplier.amount, error: errorMsg });
       }
     }
-    if (retailerAmount > 0) {
+    if (approvedRetailerPayout > 0) {
       try {
         dispatchResults.retailer = await this.dispatchB2bPayouts({
           merchantTransactionReference: data.merchantTransactionReference,
           party: 'RETAILER',
-          amount: retailerAmount,
+          amount: approvedRetailerPayout,
         });
       } catch (retailerError) {
         const errorMsg = retailerError instanceof Error ? retailerError.message : String(retailerError);
         this.logger.error('[SETTLEMENT][SPLIT] retailer payout dispatch failed', { timestamp, settlementId: settlement.id, error: errorMsg });
-        dispatchResults.errors.push({ party: 'RETAILER', amount: retailerAmount, error: errorMsg });
+        dispatchResults.errors.push({ party: 'RETAILER', amount: approvedRetailerPayout, error: errorMsg });
       }
     }
     const successfulPayoutCount = dispatchResults.suppliers.length + (dispatchResults.retailer ? 1 : 0);

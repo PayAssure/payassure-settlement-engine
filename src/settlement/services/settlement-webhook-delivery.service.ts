@@ -13,6 +13,7 @@ export type SettlementWebhookEvent =
   | 'payment.settlement.reconciliation_required';
 
 type WebhookParticipant = {
+  integrationId: string;
   merchantId: string;
   participantType: string;
   webhookUrl: string;
@@ -25,36 +26,36 @@ export class SettlementWebhookDeliveryService {
   constructor(private readonly prisma: PrismaClient) {}
 
   async notify(settlementId: string, eventType: SettlementWebhookEvent, details: Record<string, unknown> = {}) {
-    try {
-      const settlement = await this.prisma.settlement.findUnique({
-        where: { id: settlementId },
-      });
-      if (!settlement) {
-        this.logger.error(`Cannot deliver ${eventType}: settlement ${settlementId} was not found`);
-        return;
-      }
+    const settlement = await this.prisma.settlement.findUnique({ where: { id: settlementId } });
+    if (!settlement) {
+      throw new Error(`Cannot deliver ${eventType}: settlement ${settlementId} was not found`);
+    }
 
-      const retailer = await this.resolveRetailer(settlement);
-      if (!retailer) {
-        this.logger.warn(`No configured webhook endpoint found for ${eventType} on settlement ${settlementId}`);
-        return;
-      }
+    const retailer = await this.resolveRetailer(settlement);
+    if (!retailer) {
+      this.logger.warn(`No configured webhook endpoint found for ${eventType} on settlement ${settlementId}`);
+      return;
+    }
 
-      const payoutAttempts = await this.prisma.b2BPayoutAttempt.findMany({
-        where: { settlementId },
-        select: {
-          party: true,
-          recipientMerchantId: true,
-          amount: true,
-          status: true,
-          payoutReference: true,
-          updatedAt: true,
-        },
-      });
-      const eventId = randomUUID();
-      const createdAt = new Date().toISOString();
-      const cashFunding = this.cashFunding(settlement.metadata, settlement.currency);
-      const baseData = {
+    const payoutAttempts = await this.prisma.b2BPayoutAttempt.findMany({
+      where: { settlementId },
+      select: {
+        party: true,
+        recipientMerchantId: true,
+        amount: true,
+        status: true,
+        payoutReference: true,
+        updatedAt: true,
+      },
+    });
+    const eventId = randomUUID();
+    const createdAt = new Date().toISOString();
+    const cashFunding = this.cashFunding(settlement.metadata, settlement.currency);
+    const body = JSON.stringify({
+      id: eventId,
+      type: eventType,
+      created_at: createdAt,
+      data: {
         settlement: {
           id: settlement.id,
           reference: settlement.reference,
@@ -65,33 +66,69 @@ export class SettlementWebhookDeliveryService {
         },
         ...(cashFunding ? { cash_funding: cashFunding } : {}),
         details,
-      };
-      const body = JSON.stringify({
-        id: eventId,
-        type: eventType,
-        created_at: createdAt,
+        recipient: {
+          merchant_id: retailer.merchantId,
+          participant_type: retailer.participantType,
+        },
+        payouts: payoutAttempts.map((attempt) => ({
+          party: attempt.party,
+          merchant_id: attempt.recipientMerchantId,
+          amount: Number(attempt.amount),
+          status: attempt.status,
+          reference: attempt.payoutReference,
+          updated_at: attempt.updatedAt.toISOString(),
+        })),
+      },
+    });
+    const delivery = await this.prisma.settlementWebhookDelivery.create({
+      data: {
+        eventId,
+        settlementId,
+        integrationId: retailer.integrationId,
+        merchantId: retailer.merchantId,
+        eventType,
+        endpoint: retailer.webhookUrl,
+        payload: body,
+        status: 'PENDING',
+      },
+    });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = await this.deliverStored(delivery.id, retailer.secret, true);
+      if (result.status !== 'RETRYING') return result;
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 200 * (2 ** attempt)));
+    }
+    return this.prisma.settlementWebhookDelivery.findUnique({ where: { id: delivery.id } });
+  }
+
+  async processPendingRetries(batchSize = 10): Promise<number> {
+    try {
+      const staleDeliveryBefore = new Date(Date.now() - 5 * 60 * 1000);
+      await this.prisma.settlementWebhookDelivery.updateMany({
+        where: { status: 'DELIVERING', lastAttemptAt: { lte: staleDeliveryBefore } },
         data: {
-          ...baseData,
-          recipient: {
-            merchant_id: retailer.merchantId,
-            participant_type: retailer.participantType,
-          },
-          payouts: payoutAttempts.map((attempt) => ({
-            party: attempt.party,
-            merchant_id: attempt.recipientMerchantId,
-            amount: Number(attempt.amount),
-            status: attempt.status,
-            reference: attempt.payoutReference,
-            updated_at: attempt.updatedAt.toISOString(),
-          })),
+          status: 'RETRYING',
+          nextAttemptAt: new Date(),
+          lastError: 'Previous webhook delivery worker stopped before recording its outcome',
         },
       });
-      await this.deliver(retailer, eventId, eventType, body);
+      const pending = await this.prisma.settlementWebhookDelivery.findMany({
+        where: { status: 'RETRYING', nextAttemptAt: { lte: new Date() } },
+        orderBy: { nextAttemptAt: 'asc' },
+        take: batchSize,
+      });
+      for (const delivery of pending) {
+        await this.deliverStored(delivery.id);
+      }
+      return pending.length;
     } catch (error) {
-      this.logger.error(
-        `Webhook event ${eventType} could not be prepared for settlement ${settlementId}`,
-        this.errorMessage(error),
-      );
+      if (this.isMissingTableError(error)) {
+        this.logger.warn(
+          '[SETTLEMENT_WEBHOOK_DELIVERY] Skipping retry processing because the settlement webhook tables do not exist yet. Run prisma migrate deploy to create them.',
+          { error: this.errorMessage(error) },
+        );
+        return 0;
+      }
+      throw error;
     }
   }
 
@@ -116,6 +153,7 @@ export class SettlementWebhookDeliveryService {
 
   private resolveParticipant(
     integration: {
+      id: string;
       merchantId: string;
       apiSecret: string | null;
       webhookUrl: string | null;
@@ -139,77 +177,132 @@ export class SettlementWebhookDeliveryService {
     }
     return {
       merchantId: integration.merchantId,
+      integrationId: integration.id,
       participantType: participant.participantType,
       webhookUrl,
       secret: integration.apiSecret,
     };
   }
 
-  private async deliver(
-    participant: WebhookParticipant,
-    eventId: string,
-    eventType: SettlementWebhookEvent,
-    body: string,
-  ) {
+  private async deliverStored(deliveryId: string, immediateSecret?: string, force = false): Promise<any> {
+    const delivery = await this.prisma.settlementWebhookDelivery.findUnique({ where: { id: deliveryId } });
+    if (!delivery) throw new Error(`Webhook delivery ${deliveryId} was not found`);
+    const nextAttemptNumber = delivery.attemptCount + 1;
+    const claimWhere: Record<string, unknown> = {
+      id: delivery.id,
+      status: { in: ['PENDING', 'RETRYING'] },
+      ...(force ? {} : { OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: new Date() } }] }),
+    };
+    const claimed = await this.prisma.$transaction(async (tx) => {
+      const claim = await tx.settlementWebhookDelivery.updateMany({
+        where: claimWhere,
+        data: {
+          status: 'DELIVERING',
+          attemptCount: { increment: 1 },
+          lastAttemptAt: new Date(),
+        },
+      });
+      if (claim.count !== 1) return false;
+      await tx.settlementWebhookDeliveryAttempt.create({
+        data: { deliveryId: delivery.id, attemptNumber: nextAttemptNumber },
+      });
+      return true;
+    });
+    if (!claimed) return this.prisma.settlementWebhookDelivery.findUnique({ where: { id: delivery.id } });
+
     let url: URL;
     try {
-      url = new URL(participant.webhookUrl);
+      url = new URL(delivery.endpoint);
     } catch (error) {
-      this.logger.warn(`Invalid webhook URL for merchant ${participant.merchantId}`, this.errorMessage(error));
-      return;
+      await this.finishDelivery(delivery, 'FAILED', null, this.errorMessage(error));
+      return this.prisma.settlementWebhookDelivery.findUnique({ where: { id: delivery.id } });
     }
     if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-      this.logger.warn(`Refusing unsupported webhook URL protocol for merchant ${participant.merchantId}`);
-      return;
+      await this.finishDelivery(delivery, 'FAILED', null, 'Refusing unsupported webhook URL protocol');
+      return this.prisma.settlementWebhookDelivery.findUnique({ where: { id: delivery.id } });
+    }
+
+    const integration = immediateSecret
+      ? null
+      : await this.prisma.integration.findUnique({
+        where: { id: delivery.integrationId },
+        select: { apiSecret: true },
+      });
+    const secret = immediateSecret ?? integration?.apiSecret;
+    if (!secret) {
+      await this.finishDelivery(delivery, 'FAILED', null, 'Webhook signing secret is missing for the integration');
+      return this.prisma.settlementWebhookDelivery.findUnique({ where: { id: delivery.id } });
     }
 
     const timestamp = Math.floor(Date.now() / 1000).toString();
-    const signature = createHmac('sha256', participant.secret).update(`${timestamp}.${body}`).digest('hex');
+    const signature = createHmac('sha256', secret).update(`${timestamp}.${delivery.payload}`).digest('hex');
     const headers = {
       'content-type': 'application/json',
-      'x-payassure-event': eventType,
-      'x-payassure-event-id': eventId,
+      'x-payassure-event': delivery.eventType,
+      'x-payassure-event-id': delivery.eventId,
       'x-payassure-timestamp': timestamp,
       'x-payassure-signature': `t=${timestamp},v1=${signature}`,
     };
 
-    const endpoint = url.href;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-      try {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers,
-          body,
-          signal: controller.signal,
-          redirect: 'error',
-        });
-        await response.body?.cancel();
-        if (!response.ok) {
-          const error = `Webhook returned HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`;
-          if (response.status < 500 && ![408, 425, 429].includes(response.status)) {
-            this.logger.error(
-              `Webhook delivery rejected for merchant ${participant.merchantId}, endpoint ${endpoint}, event ${eventId} (${eventType}); not retrying non-retryable response`,
-              error,
-            );
-            return;
-          }
-          throw new Error(error);
-        }
-        return;
-      } catch (error) {
-        if (attempt === 3) {
-          this.logger.error(
-            `Webhook delivery failed for merchant ${participant.merchantId}, endpoint ${endpoint}, event ${eventId} (${eventType}) after ${attempt} attempts`,
-            this.errorMessage(error),
-          );
-          return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 200 * (2 ** (attempt - 1))));
-      } finally {
-        clearTimeout(timeout);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: delivery.payload,
+        signal: controller.signal,
+        redirect: 'error',
+      });
+      await response.body?.cancel();
+      if (response.ok) {
+        await this.finishDelivery(delivery, 'DELIVERED', response.status, null);
+      } else {
+        const error = `Webhook returned HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`;
+        const retryable = response.status >= 500 || [408, 425, 429].includes(response.status);
+        await this.finishDelivery(delivery, retryable ? 'RETRYING' : 'FAILED', response.status, error);
       }
+    } catch (error) {
+      await this.finishDelivery(delivery, 'RETRYING', null, this.errorMessage(error));
+    } finally {
+      clearTimeout(timeout);
+    }
+    return this.prisma.settlementWebhookDelivery.findUnique({ where: { id: delivery.id } });
+  }
+
+  private async finishDelivery(
+    delivery: any,
+    status: 'DELIVERED' | 'RETRYING' | 'FAILED',
+    responseStatus: number | null,
+    error: string | null,
+  ) {
+    const maxAttempts = 8;
+    const attemptCount = Number(delivery.attemptCount) + 1;
+    const finalStatus = status === 'RETRYING' && attemptCount >= maxAttempts ? 'FAILED' : status;
+    const nextAttemptAt = finalStatus === 'RETRYING'
+      ? new Date(Date.now() + Math.min(60 * 60 * 1000, 30_000 * (2 ** Math.max(0, attemptCount - 1))))
+      : null;
+    await this.prisma.$transaction(async (tx) => {
+      await tx.settlementWebhookDeliveryAttempt.updateMany({
+        where: { deliveryId: delivery.id, attemptNumber: attemptCount },
+        data: { responseStatus, error },
+      });
+      await tx.settlementWebhookDelivery.updateMany({
+        where: { id: delivery.id, status: 'DELIVERING' },
+        data: {
+          status: finalStatus,
+          lastResponseStatus: responseStatus,
+          lastError: error,
+          nextAttemptAt,
+          ...(finalStatus === 'DELIVERED' ? { deliveredAt: new Date() } : {}),
+        },
+      });
+    });
+    if (finalStatus === 'FAILED') {
+      this.logger.error(
+        `Webhook delivery failed for merchant ${delivery.merchantId}, endpoint ${delivery.endpoint}, event ${delivery.eventId}`,
+        error ?? `HTTP ${responseStatus}`,
+      );
     }
   }
 
@@ -229,6 +322,15 @@ export class SettlementWebhookDeliveryService {
       currency,
       source: 'RETAILER_VIRTUAL_BALANCE',
     };
+  }
+
+  private isMissingTableError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    const details = error as Record<string, unknown>;
+    const value = details.code ?? details.name;
+    if (value === 'P2021') return true;
+    const message = typeof details.message === 'string' ? details.message : '';
+    return /does not exist in the current database|relation .* does not exist/i.test(message);
   }
 
   private errorMessage(error: unknown): string {

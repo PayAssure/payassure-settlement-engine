@@ -9,13 +9,27 @@ export async function startMixedCashEscrowAfterMpesa(
 ) {
   const settlement = await prisma.settlement.findFirst({
     where: { merchantTransactionReference },
-    select: { id: true, metadata: true },
+    select: { id: true, metadata: true, paymentPayload: true },
   });
   if (!settlement) return;
 
   const metadata = settlement.metadata && typeof settlement.metadata === 'object' && !Array.isArray(settlement.metadata)
     ? settlement.metadata as Record<string, unknown>
     : {};
+  const settlementPlan = metadata.settlementPlan && typeof metadata.settlementPlan === 'object'
+    ? metadata.settlementPlan as Record<string, unknown>
+    : {};
+  const paymentPayload = settlement.paymentPayload && typeof settlement.paymentPayload === 'object' && !Array.isArray(settlement.paymentPayload)
+    ? settlement.paymentPayload as Record<string, any>
+    : {};
+  const suppliers = Array.isArray(paymentPayload.suppliers) ? paymentPayload.suppliers : [];
+  const settlementMode = String(
+    settlementPlan.settlementMode
+      ?? metadata.resolvedSettlementMode
+      ?? (suppliers.length > 0 && suppliers.every((supplier: any) => !supplier?.supplierMerchantId) ? 'DIRECT' : ''),
+  ).toUpperCase();
+  if (settlementMode === 'DIRECT') return;
+
   const fundingPlan = metadata.fundingPlan && typeof metadata.fundingPlan === 'object' && !Array.isArray(metadata.fundingPlan)
     ? metadata.fundingPlan as Record<string, unknown>
     : {};

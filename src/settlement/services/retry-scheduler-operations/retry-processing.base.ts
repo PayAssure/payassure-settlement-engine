@@ -9,6 +9,10 @@ export abstract class RetryProcessingBase extends RetrySchedulerLifecycleBase {
     this.isRunning = true;
     const startTime = Date.now();
     try {
+      const stalePayouts = await this.idempotencyService.markStalePayoutAttemptsUnknown?.() ?? [];
+      for (const payout of stalePayouts) {
+        await this.settlementService.markPayoutOutcomeUnknown(payout.settlementId, payout.payoutReference);
+      }
       const pendingRetries = await this.idempotencyService.getPendingRetries();
       if (pendingRetries.length === 0) return;
       this.logger.log('[RETRY_SCHEDULER] Processing pending retries', {

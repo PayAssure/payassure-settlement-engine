@@ -29,6 +29,7 @@ test('logs and returns the settlement initiation response unchanged', async () =
   const response = await controller.initiateSettlement(request as any, 'session-token');
 
   assert.equal(response, expectedResponse);
+  assert.equal(logged[0][0], `[SETTLEMENT_REQUEST_PAYLOAD] ${JSON.stringify(request, null, 2)}`);
   assert.deepEqual(logged[1], ['[SETTLEMENT_INITIATION_RESPONSE]', expectedResponse]);
 });
 

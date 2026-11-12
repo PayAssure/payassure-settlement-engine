@@ -56,6 +56,7 @@ export async function updateEscrowSettlementMetadata(
     where: { id: settlementId },
     data: {
       ...(status ? { status, failedAt: new Date() } : {}),
+      ...(status === SettlementStatus.COMPLETED ? { completedAt: new Date(), failedAt: null } : {}),
       metadata: {
         ...metadata,
         escrowFunding: { ...escrowFunding, ...update },

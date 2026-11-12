@@ -5,6 +5,10 @@ export abstract class PayoutLookupsBase extends PayoutRetryStateBase {
     return this.prisma.b2BPayoutAttempt.findUnique({ where: { payoutReference } });
   }
 
+  async getPayoutAttemptByCallbackIdentifier(callbackIdentifier: string): Promise<any | null> {
+    return this.prisma.b2BPayoutAttempt.findFirst({ where: { callbackIdentifier } });
+  }
+
   async getPendingRetries(): Promise<any[]> {
     return this.prisma.b2BPayoutAttempt.findMany({
       where: { status: { in: ['FAILED', 'RETRYING'] }, nextRetryAt: { lte: new Date() } },
