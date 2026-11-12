@@ -2,6 +2,18 @@ import { roundMoney } from './round-money';
 
 export function applyCanonicalPlatformFees(suppliers: any[], totalAmount: number) {
   const configuredFeeRate = Number(process.env.PAYASSURE_PLATFORM_FEE_RATE ?? 0.8);
+  const hasSplitAllocations = suppliers.some(
+    (supplier) => supplier.supplierMerchantId != null && String(supplier.supplierMerchantId).trim().length > 0,
+  );
+  if (!hasSplitAllocations) {
+    return {
+      platformFee: 0,
+      supplierFeeShare: 0,
+      retailerFeeShare: 0,
+      configuredFeeRate: Number.isFinite(configuredFeeRate) ? configuredFeeRate : 0.8,
+    };
+  }
+
   const calculatedPlatformFee = roundMoney(totalAmount * (Number.isFinite(configuredFeeRate) ? configuredFeeRate : 0.8) / 100);
   const supplierFeeShare = roundMoney(calculatedPlatformFee / 2);
   const retailerFeeShare = roundMoney(calculatedPlatformFee - supplierFeeShare);

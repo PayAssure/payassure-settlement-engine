@@ -62,10 +62,14 @@ test('settlement webhook delivery sends only to the retailer endpoint and signs 
       headers: new Headers(init?.headers),
       body: String(init?.body),
     });
-    return new Response(null, { status: 204 });
+    return new Response('accepted', {
+      status: 200,
+      headers: { 'content-type': 'text/plain', 'x-receiver': 'pos' },
+    });
   }) as typeof fetch;
 
   const deliveryStore = createWebhookDeliveryStore();
+  const deliveryLogs: Array<{ message: string; details: Record<string, any> }> = [];
   const prisma = {
     ...deliveryStore.store,
     settlement: {
@@ -91,9 +95,13 @@ test('settlement webhook delivery sends only to the retailer endpoint and signs 
         id: 'retailer-integration',
         merchantId: 'retailer-merchant',
         apiSecret: secret,
-        webhookUrl: 'https://retailer.example/events?site=store-1',
+        webhookUrl: 'https://integration.example/events',
         participantId: 'retailer-1',
-        participant: { id: 'retailer-1', participantType: 'RETAILER', webhookUrl: null },
+        participant: {
+          id: 'retailer-1',
+          participantType: 'RETAILER',
+          webhookUrl: 'https://retailer.example/events?site=store-1',
+        },
       }),
       findMany: async () => {
         throw new Error('Supplier integrations must not be queried for webhook delivery');
@@ -112,6 +120,9 @@ test('settlement webhook delivery sends only to the retailer endpoint and signs 
 
   try {
     const service = new SettlementWebhookDeliveryService(prisma);
+    (service as any).logger = {
+      log: (message: string, details: Record<string, any>) => deliveryLogs.push({ message, details }),
+    };
     await service.notify('settlement-1', 'payment.collection.succeeded', { status: 'PAID' });
 
     assert.equal(calls.length, 1);
@@ -124,6 +135,7 @@ test('settlement webhook delivery sends only to the retailer endpoint and signs 
     assert.equal(call.headers.get('x-payassure-event-id'), body.id);
     assert.equal(signature, `t=${timestamp},v1=${createHmac('sha256', secret).update(`${timestamp}.${call.body}`).digest('hex')}`);
     assert.equal(body.data.settlement.merchant_transaction_reference, 'ORDER-1');
+    assert.equal(body.data.settlement.merchantTransactionReference, 'ORDER-1');
     assert.equal(body.data.details.status, 'PAID');
     assert.equal(body.data.recipient.merchant_id, 'retailer-merchant');
     assert.equal(body.data.recipient.participant_type, 'RETAILER');
@@ -135,6 +147,20 @@ test('settlement webhook delivery sends only to the retailer endpoint and signs 
     assert.equal('availableBalance' in body.data.cash_funding, false);
     assert.equal('remainingBalance' in body.data.cash_funding, false);
     assert.equal(body.data.payouts.length, 2);
+    assert.deepEqual(deliveryLogs.map((entry) => entry.message), [
+      '[SETTLEMENT_WEBHOOK_DELIVERY][REQUEST]',
+      '[SETTLEMENT_WEBHOOK_DELIVERY][RESPONSE]',
+    ]);
+    assert.equal(deliveryLogs[0].details.url, call.url);
+    assert.equal(deliveryLogs[0].details.method, 'POST');
+    assert.equal(deliveryLogs[0].details.body, call.body);
+    assert.equal(deliveryLogs[0].details.headers['x-payassure-signature'], signature);
+    assert.equal(deliveryLogs[1].details.status, 200);
+    assert.deepEqual(deliveryLogs[1].details.headers, {
+      'content-type': 'text/plain',
+      'x-receiver': 'pos',
+    });
+    assert.equal(deliveryLogs[1].details.body, 'accepted');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -339,6 +365,53 @@ test('settlement webhook retries transient failures and preserves the event ID a
     assert.equal(deliveryStore.attempts.length, 2);
     assert.equal(deliveryStore.attempts[0].responseStatus, 503);
     assert.equal(deliveryStore.attempts[1].responseStatus, 204);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('settlement webhook retries refresh the endpoint from the retailer participant webhook URL', async () => {
+  const calls: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    calls.push(String(input));
+    return new Response(null, { status: 204 });
+  }) as typeof fetch;
+  const deliveryStore = createWebhookDeliveryStore();
+  const delivery = await deliveryStore.store.settlementWebhookDelivery.create({
+    data: {
+      eventId: 'event-retry-current-url',
+      settlementId: 'settlement-retry-current-url',
+      integrationId: 'retailer-integration-current-url',
+      merchantId: 'retailer-merchant-current-url',
+      eventType: 'payment.settlement.completed',
+      endpoint: 'https://old-tunnel.example/webhook',
+      payload: '{}',
+      status: 'RETRYING',
+      nextAttemptAt: new Date(Date.now() - 1000),
+    },
+  });
+  const storedDelivery = deliveryStore.deliveries.get(delivery.id)!;
+  storedDelivery.status = 'RETRYING';
+  storedDelivery.nextAttemptAt = new Date(Date.now() - 1000);
+  const prisma = {
+    ...deliveryStore.store,
+    integration: {
+      findUnique: async () => ({
+        apiSecret: 'integration-secret',
+        webhookUrl: 'https://integration.example/webhook',
+        participant: { webhookUrl: 'https://pos.example/webhook' },
+      }),
+    },
+  } as any;
+
+  try {
+    const service = new SettlementWebhookDeliveryService(prisma);
+    await service.processPendingRetries();
+
+    assert.deepEqual(calls, ['https://pos.example/webhook']);
+    assert.equal(storedDelivery.endpoint, 'https://pos.example/webhook');
+    assert.equal(storedDelivery.status, 'DELIVERED');
   } finally {
     globalThis.fetch = originalFetch;
   }

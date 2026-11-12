@@ -101,6 +101,13 @@ export async function initiateOperation(
           settlementPlan: { ...settlementPlan, settlementStatus: 'SETTLED' },
         },
       });
+      await repository.notifyWebhookEvent?.(primarySettlement.id, 'payment.collection.succeeded', {
+        status: 'PAID',
+        collectionStatus: 'completed',
+        provider: 'CASH',
+        amount: settlementPlan.cashAmount,
+        currency: primarySettlement.currency,
+      });
       logger.log('[DIRECT_SETTLEMENT][PAYOUTS_SKIPPED]', {
         settlementId: primarySettlement.id,
         settlementMode: settlementPlan.settlementMode,
@@ -113,6 +120,7 @@ export async function initiateOperation(
       return {
         success: true,
         settlementStatus: 'SETTLED',
+        collectionStatus: 'completed',
         settlement: {
           settlementId: primarySettlement.id,
           merchantId: retailerMerchantId,

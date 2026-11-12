@@ -65,6 +65,9 @@ test('direct CASH plan keeps retailer cash and creates no supplier payout alloca
   assert.equal(plan.escrowDebitAmount, 0);
   assert.equal(plan.escrowBalanceCheckRequired, false);
   assert.equal(plan.settlementStatus, 'SETTLED');
+  assert.equal(plan.platformFeeAmount, 0);
+  assert.equal(normalized.metadata?.calculatedAllocation?.platformFee, 0);
+  assert.equal(normalized.suppliers?.[0].retailerTotalAmount, 10);
 
   const allocations = await createSupplierSettlements({
     prisma: {},
@@ -83,8 +86,8 @@ test('direct CASH plan keeps retailer cash and creates no supplier payout alloca
 
   assert.equal(allocations.childSettlements.length, 0);
   assert.equal(allocations.totalSupplierAmount, 0);
-  assert.equal(allocations.totalRetailerAmount, 9);
-  assert.equal(allocations.totalSystemAmount, 1);
+  assert.equal(allocations.totalRetailerAmount, 10);
+  assert.equal(allocations.totalSystemAmount, 0);
 });
 
 test('rejects unknown non-null supplier IDs instead of treating them as direct', async () => {
@@ -122,7 +125,8 @@ test('DIRECT MPESA plans approve only the eligible MPESA retailer payout', () =>
   assert.equal(plan.settlementMode, 'DIRECT');
   assert.equal(plan.paymentMethod, 'MPESA');
   assert.equal(plan.supplierPayoutAmount, 0);
-  assert.equal(plan.retailerPayoutAmount, 9);
+  assert.equal(plan.retailerPayoutAmount, 10);
+  assert.equal(plan.platformFeeAmount, 0);
   assert.equal(plan.escrowBalanceCheckRequired, false);
 });
 

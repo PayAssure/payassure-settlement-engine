@@ -60,6 +60,7 @@ export class SettlementWebhookDeliveryService {
           id: settlement.id,
           reference: settlement.reference,
           merchant_transaction_reference: settlement.merchantTransactionReference,
+          merchantTransactionReference: settlement.merchantTransactionReference,
           amount: Number(settlement.amount),
           currency: settlement.currency,
           status: settlement.status,
@@ -169,7 +170,7 @@ export class SettlementWebhookDeliveryService {
       this.logger.error(`Refusing webhook delivery to non-retailer participant ${participant.id}`);
       return null;
     }
-    const webhookUrl = integration?.webhookUrl ?? participant.webhookUrl;
+    const webhookUrl = participant.webhookUrl ?? integration?.webhookUrl;
     if (!webhookUrl) return null;
     if (!integration?.apiSecret) {
       this.logger.error(`Webhook for participant ${participant.id} is configured without an integration signing secret`);
@@ -210,6 +211,30 @@ export class SettlementWebhookDeliveryService {
     });
     if (!claimed) return this.prisma.settlementWebhookDelivery.findUnique({ where: { id: delivery.id } });
 
+    const integration = immediateSecret
+      ? null
+      : await this.prisma.integration.findUnique({
+        where: { id: delivery.integrationId },
+        select: {
+          apiSecret: true,
+          webhookUrl: true,
+          participant: { select: { webhookUrl: true } },
+        },
+      });
+    const secret = immediateSecret ?? integration?.apiSecret;
+    if (!secret) {
+      await this.finishDelivery(delivery, 'FAILED', null, 'Webhook signing secret is missing for the integration');
+      return this.prisma.settlementWebhookDelivery.findUnique({ where: { id: delivery.id } });
+    }
+    const configuredEndpoint = integration?.participant?.webhookUrl ?? integration?.webhookUrl;
+    if (configuredEndpoint && configuredEndpoint !== delivery.endpoint) {
+      await this.prisma.settlementWebhookDelivery.updateMany({
+        where: { id: delivery.id, status: 'DELIVERING' },
+        data: { endpoint: configuredEndpoint },
+      });
+      delivery.endpoint = configuredEndpoint;
+    }
+
     let url: URL;
     try {
       url = new URL(delivery.endpoint);
@@ -219,18 +244,6 @@ export class SettlementWebhookDeliveryService {
     }
     if (url.protocol !== 'https:' && url.protocol !== 'http:') {
       await this.finishDelivery(delivery, 'FAILED', null, 'Refusing unsupported webhook URL protocol');
-      return this.prisma.settlementWebhookDelivery.findUnique({ where: { id: delivery.id } });
-    }
-
-    const integration = immediateSecret
-      ? null
-      : await this.prisma.integration.findUnique({
-        where: { id: delivery.integrationId },
-        select: { apiSecret: true },
-      });
-    const secret = immediateSecret ?? integration?.apiSecret;
-    if (!secret) {
-      await this.finishDelivery(delivery, 'FAILED', null, 'Webhook signing secret is missing for the integration');
       return this.prisma.settlementWebhookDelivery.findUnique({ where: { id: delivery.id } });
     }
 
@@ -244,6 +257,15 @@ export class SettlementWebhookDeliveryService {
       'x-payassure-signature': `t=${timestamp},v1=${signature}`,
     };
 
+    this.logger.log('[SETTLEMENT_WEBHOOK_DELIVERY][REQUEST]', {
+      deliveryId: delivery.id,
+      attemptNumber: nextAttemptNumber,
+      url: url.toString(),
+      method: 'POST',
+      headers,
+      body: delivery.payload,
+    });
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
     try {
@@ -254,7 +276,15 @@ export class SettlementWebhookDeliveryService {
         signal: controller.signal,
         redirect: 'error',
       });
-      await response.body?.cancel();
+      const responseBody = await response.text();
+      this.logger.log('[SETTLEMENT_WEBHOOK_DELIVERY][RESPONSE]', {
+        deliveryId: delivery.id,
+        attemptNumber: nextAttemptNumber,
+        status: response.status,
+        statusText: response.statusText,
+        headers: Object.fromEntries(response.headers.entries()),
+        body: responseBody,
+      });
       if (response.ok) {
         await this.finishDelivery(delivery, 'DELIVERED', response.status, null);
       } else {

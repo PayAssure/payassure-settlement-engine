@@ -59,12 +59,14 @@ export function buildSettlementPlan(data: InitiateSettlementDto): SettlementPlan
   const retailerAllocation = supplierGroups.reduce((total, supplier) => (
     total + Number(supplier.retailerTotalAmount ?? 0)
   ), 0);
-  const platformFeeAmount = Number(data.metadata?.calculatedAllocation?.platformFee)
-    || supplierGroups.reduce((total, supplier) => total + Number(supplier.platformFee ?? 0), 0);
   const hasDirect = supplierGroups.some((supplier) => supplier.supplierMerchantId == null);
   const hasSplit = supplierGroups.some((supplier) => supplier.supplierMerchantId != null);
   const settlementMode = data.metadata?.resolvedSettlementMode
     ?? (hasDirect && hasSplit ? 'MIXED' : hasDirect ? 'DIRECT' : 'SPLIT');
+  const platformFeeAmount = settlementMode === 'DIRECT'
+    ? 0
+    : Number(data.metadata?.calculatedAllocation?.platformFee)
+      || supplierGroups.reduce((total, supplier) => total + Number(supplier.platformFee ?? 0), 0);
   const retailerEntitlement = settlementMode === 'DIRECT'
     ? Number(data.totalAmount ?? data.amount ?? 0)
     : retailerAllocation;
@@ -99,7 +101,7 @@ export function buildSettlementPlan(data: InitiateSettlementDto): SettlementPlan
       : String(supplier.supplierMerchantId).trim() || null,
     supplierTotalAmount: Number(supplier.supplierTotalAmount ?? 0),
     retailerTotalAmount: Number(supplier.retailerTotalAmount ?? 0),
-    platformFee: Number(supplier.platformFee ?? 0),
+    platformFee: settlementMode === 'DIRECT' ? 0 : Number(supplier.platformFee ?? 0),
     items: (Array.isArray(supplier.items) ? supplier.items : []).map((item) => ({ ...item })),
   }));
   let remainingSupplierPayout = supplierPayoutAmount;

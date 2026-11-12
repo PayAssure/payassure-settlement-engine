@@ -161,8 +161,16 @@ test('DIRECT CASH settles without entering escrow checks, allocation, or custome
   let escrowReservations = 0;
   let customerPaymentCalls = 0;
   let settlementUpdate: any;
+  const webhookEvents: Array<{ settlementId: string; eventType: string; details: Record<string, unknown> }> = [];
   (fixture.repository as any).updateSettlementStatus = async (_id: string, _status: string, update: any) => {
     settlementUpdate = update;
+  };
+  (fixture.repository as any).notifyWebhookEvent = async (
+    settlementId: string,
+    eventType: string,
+    details: Record<string, unknown>,
+  ) => {
+    webhookEvents.push({ settlementId, eventType, details });
   };
   retailerEscrowTransferService.hasFloatConfig = async () => {
     floatChecks += 1;
@@ -191,14 +199,29 @@ test('DIRECT CASH settles without entering escrow checks, allocation, or custome
     );
 
     assert.equal(response.settlementStatus, 'SETTLED');
+    assert.equal(response.collectionStatus, 'completed');
+    assert.equal(response.settlement.status, 'COMPLETED');
+    assert.equal(response.settlement.systemAmount, 0);
+    assert.equal(response.settlementPlan.platformFeeAmount, 0);
     assert.equal(response.settlementPlan.retailerPayoutAmount, 0);
     assert.equal(response.settlementPlan.supplierPayoutAmount, 0);
     assert.equal(response.settlementPlan.escrowBalanceCheckRequired, false);
     assert.equal(floatChecks, 0);
     assert.equal(escrowReservations, 0);
     assert.equal(customerPaymentCalls, 0);
-    assert.equal(settlementUpdate.settlementPlan.settlementStatus, 'SETTLED');
-    assert.equal(settlementUpdate.paymentConfirmation.provider, 'CASH');
+    assert.equal(settlementUpdate.metadata.settlementPlan.settlementStatus, 'SETTLED');
+    assert.equal(settlementUpdate.metadata.paymentConfirmation.provider, 'CASH');
+    assert.deepEqual(webhookEvents, [{
+      settlementId: 'settlement-1',
+      eventType: 'payment.collection.succeeded',
+      details: {
+        status: 'PAID',
+        collectionStatus: 'completed',
+        provider: 'CASH',
+        amount: 10,
+        currency: 'KES',
+      },
+    }]);
   } finally {
     retailerEscrowTransferService.hasFloatConfig = originalHasFloatConfig;
     retailerEscrowTransferService.startForSettlement = originalStartForSettlement;

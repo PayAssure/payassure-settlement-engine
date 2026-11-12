@@ -29,10 +29,12 @@ Content-Type: application/json
 }
 ```
 
-When PayAssure resolves the callback destination, the retailer
-integration-specific `webhookUrl` takes precedence over the participant URL.
-If the integration has no webhook URL, the retailer participant URL is used.
-PayAssure signs events with the retailer integration's API secret.
+When PayAssure resolves the callback destination, the retailer participant's
+`webhookUrl` takes precedence. The integration's `webhookUrl` is used only if
+the retailer participant URL is not configured. PayAssure signs events with
+the retailer integration's API secret. Before retrying a queued delivery,
+PayAssure refreshes its endpoint from these current database settings, so a
+corrected participant URL also applies to pending retries.
 
 Generate or retrieve the retailer credentials through the authenticated
 `POST /onbordings/generate-keys` and `GET /onbordings/keys` routes. Keep the
@@ -234,8 +236,11 @@ These are receiver/configuration failures, not settlement payout failures. The
 settlement continues independently of webhook delivery. Return a `2xx` only
 after accepting the event; then inspect the receiver's request logs using the
 event ID and retailer merchant ID if processing did not occur. PayAssure prefers
-the retailer integration's `webhookUrl` over the participant-level URL.
-Delivery logs include the full retailer URL.
+the retailer participant's `webhookUrl` over the integration-level URL.
+Delivery logs include the full outbound request (URL, method, headers, and body)
+and HTTP response (status, headers, and body) for each attempt. The request
+signature and webhook payload are included, so restrict access to application
+logs and avoid forwarding them to untrusted systems.
 
 ## 7. Integration checklist
 
@@ -252,3 +257,32 @@ Delivery logs include the full retailer URL.
       and overall settlement state.
 - [ ] Return `2xx` after durable acceptance; use reconciliation if delivery is
       missed.
+
+{
+  "id": "537cdee2-6fa9-43e4-8ee0-9ab8ff7ef70f",
+  "type": "payment.collection.succeeded",
+  "created_at": "2026-11-12T08:10:07.000Z",
+  "data": {
+    "settlement": {
+      "id": "cmwd8oqja000jxf00tbla4o9w",
+      "reference": "PASTL-20261112074136-636E8432",
+      "merchant_transaction_reference": "POS-bf3bfdc7-da75-41f8-92dc-3495d05e8254",
+      "merchantTransactionReference": "POS-bf3bfdc7-da75-41f8-92dc-3495d05e8254",
+      "amount": 10,
+      "currency": "KES",
+      "status": "COMPLETED"
+    },
+    "details": {
+      "status": "PAID",
+      "collectionStatus": "completed",
+      "provider": "CASH",
+      "amount": 10,
+      "currency": "KES"
+    },
+    "recipient": {
+      "merchant_id": "pay_a540605f5a27dde1",
+      "participant_type": "RETAILER"
+    },
+    "payouts": []
+  }
+}
