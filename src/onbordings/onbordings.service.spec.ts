@@ -1,5 +1,6 @@
 import assert = require('node:assert/strict');
 import test = require('node:test');
+import { createHash } from 'crypto';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { CreateOnboardingDto } from './dto/create-onboarding.dto';
@@ -307,4 +308,89 @@ test('activatePayment marks a pending payment as verified when the secret is val
   assert.equal(activatedSecret, 'paysec_valid');
   assert.equal(response.payment?.status, 'VERIFIED');
   assert.equal(response.payment?.isVerified, true);
+});
+
+test('resendPaymentActivationSecret rotates the pending secret and emails it to the authenticated user', async () => {
+  let updatedPayment: Record<string, unknown> | undefined;
+  let sentEmail: Record<string, unknown> | undefined;
+  const service = new OnbordingsService({
+    findParticipantByEmail: async (email: string) => ({
+      id: 'participant-1',
+      email,
+      businessName: 'Test Merchant',
+      contactName: 'Jane Doe',
+      payment: {
+        type: 'MPESA',
+        accountName: 'Jane Doe',
+        status: 'PENDING_VERIFICATION',
+        paymentActivationSecretHash: 'old-hash',
+        paymentActivationSecretExpiresAt: '2026-01-01T00:00:00.000Z',
+        verificationAttempts: 3,
+      },
+    }),
+    updatePayment: async (_id: string, payment: Record<string, unknown>) => {
+      updatedPayment = payment;
+      return {};
+    },
+  } as any, {
+    sendPaymentSecretEmail: async (data: Record<string, unknown>, context: string) => {
+      sentEmail = { ...data, context };
+    },
+  } as any);
+
+  const response = await service.resendPaymentActivationSecret({ email: 'jane@example.com' });
+  const emailedSecret = sentEmail?.paymentSecret as string;
+  const expiryTime = new Date(updatedPayment?.paymentActivationSecretExpiresAt as string).getTime();
+
+  assert.equal(response.message, 'A new payment activation secret has been sent to your email address.');
+  assert.equal(sentEmail?.email, 'jane@example.com');
+  assert.equal(sentEmail?.name, 'Jane Doe');
+  assert.equal(sentEmail?.context, 'resend');
+  assert.match(emailedSecret, /^paysec_[a-f0-9]{32}$/);
+  assert.equal(updatedPayment?.paymentActivationSecretHash, createHash('sha256').update(emailedSecret).digest('hex'));
+  assert.equal(updatedPayment?.paymentActivationSecretExpiresAt, sentEmail?.expiresAt);
+  assert.ok(expiryTime > Date.now());
+  assert.equal(updatedPayment?.verificationAttempts, 0);
+  assert.equal('paymentActivationSecret' in (updatedPayment ?? {}), false);
+  assert.equal(JSON.stringify(response).includes(emailedSecret), false);
+});
+
+test('resendPaymentActivationSecret rejects payment destinations that are not pending', async () => {
+  let updated = false;
+  const service = new OnbordingsService({
+    findParticipantByEmail: async () => ({
+      id: 'participant-1',
+      payment: { status: 'VERIFIED' },
+    }),
+    updatePayment: async () => {
+      updated = true;
+    },
+  } as any, { sendPaymentSecretEmail: async () => {} } as any);
+
+  await assert.rejects(
+    () => service.resendPaymentActivationSecret({ email: 'jane@example.com' }),
+    /not pending verification/i,
+  );
+  assert.equal(updated, false);
+});
+
+test('resendPaymentActivationSecret reports email delivery failure', async () => {
+  const service = new OnbordingsService({
+    findParticipantByEmail: async (email: string) => ({
+      id: 'participant-1',
+      email,
+      businessName: 'Test Merchant',
+      payment: { status: 'PENDING_VERIFICATION' },
+    }),
+    updatePayment: async () => ({}),
+  } as any, {
+    sendPaymentSecretEmail: async () => {
+      throw new Error('SMTP unavailable');
+    },
+  } as any);
+
+  await assert.rejects(
+    () => service.resendPaymentActivationSecret({ email: 'jane@example.com' }),
+    /Unable to send payment activation secret email/i,
+  );
 });

@@ -5,7 +5,9 @@ retailer integration. Suppliers do not receive settlement webhooks. The retailer
 hosts a receiver endpoint, for example `https://pos.example.com/webhook`, and
 configures its URL on the retailer integration. There is no separate PayAssure
 inbound route named `/webhook`; this is the HTTPS URL on your system that
-PayAssure calls.
+PayAssure calls. The same receiver can also receive retailer escrow deposit
+notifications. Those are separate events from checkout/settlement events and do
+not change the checkout webhook contract.
 
 ## 1. Configure the receiver URL
 
@@ -203,26 +205,64 @@ your own queue.
 | `payment.settlement.retrying` | PayAssure is dispatching a subsequent payout attempt. `details` includes the party, payout reference, and attempt count. |
 | `payment.settlement.completed` | The settlement was marked completed, including through reconciliation. |
 | `payment.settlement.reconciliation_required` | The settlement entered `AWAITING_RECONCILIATION`. |
+| `payment.escrow.deposit.succeeded` | A retailer's M-Pesa escrow float deposit was confirmed successfully and credited to that retailer's virtual balance. |
 
 The `details` object contains event-specific fields and may be empty for events
 without additional details. `data.payouts` is a snapshot of payout attempts
 known when the webhook is prepared; it is not a promise that all payout
 callbacks have arrived.
 
+### Retailer escrow deposit event
+
+`payment.escrow.deposit.succeeded` is sent only after the M-Pesa callback has
+confirmed a successful deposit and its amount matches the requested amount.
+Failed, incomplete, or amount-mismatched callbacks do not produce this event.
+It reports the individual deposit, not a checkout or settlement:
+
+```json
+{
+  "id": "8b4e1402-20df-4a29-b255-aec5537d7631",
+  "type": "payment.escrow.deposit.succeeded",
+  "created_at": "2026-11-14T08:00:00.000Z",
+  "data": {
+    "deposit": {
+      "id": "clx_float_deposit_001",
+      "amount": 5000,
+      "currency": "KES",
+      "status": "SUCCEEDED",
+      "payer_phone": "254700000000",
+      "receipt_number": "ABC123XYZ",
+      "completed_at": "2026-11-14T08:00:00.000Z"
+    },
+    "recipient": {
+      "merchant_id": "pay_retailer_001",
+      "participant_type": "RETAILER"
+    }
+  }
+}
+```
+
+The event is delivered to the same configured retailer endpoint, using the
+same signature headers and HMAC verification described above. Deduplicate it
+using `(data.recipient.merchant_id, id)` just like settlement events. It has no
+checkout ID and does not indicate that a specific checkout used these funds;
+the deposit contributes to the retailer's pooled escrow balance.
+
 ## 6. Retry and delivery behavior
 
-For the retailer endpoint, PayAssure makes a synchronous HTTP or HTTPS request with a
-five-second request timeout. A transport error or non-2xx response is retried
-up to three total attempts with a short backoff, except non-retryable 4xx
-responses (such as `404` and `405`), which are logged and stopped immediately.
-`408`, `425`, `429`, and 5xx responses remain retryable. Redirects are rejected.
-Delivery failures are logged and do not roll back payment or settlement state.
+For the retailer endpoint, PayAssure makes a synchronous HTTP or HTTPS request
+with a five-second request timeout. A transport error or retryable non-2xx
+response is retried up to three total attempts with a short backoff.
+Non-retryable 4xx responses (such as `404` and `405`) are logged and stopped
+immediately; `408`, `425`, `429`, and 5xx responses remain retryable. Redirects
+are rejected. Delivery failures are logged and do not roll back payment,
+settlement, or deposit state.
 
-The current sender retries within the request execution only; it does not
-persist a webhook outbox or guarantee delivery after a process crash. Your
-system must use idempotent event handling and should reconcile important
-transactions through the settlement status/history APIs if it does not receive
-events. A later, separate notification for a state change has a new event ID.
+Webhook deliveries are stored. If the immediate attempts do not deliver an
+event, the retry scheduler can retry it later using the same event ID. The
+sender does not guarantee delivery after a process crash or permanent receiver
+failure, so use idempotent processing and reconcile important transactions if
+an event is not received. Each distinct event has its own event ID.
 
 ### Diagnosing delivery failures
 

@@ -6,10 +6,12 @@ import { resolveMpesaCallbackUrl } from '../../../payment/config/mpesa.env';
 import { MpesaStkOperationsBase } from '../../../payment/services/mpesa-operations/stk-operations.base';
 import type { MpesaRequestCredentials } from '../../../payment/services/mpesa-operations/types';
 import { parseStkCallback } from '../../../payment/utils/mpesa-callback.util';
+import { SettlementWebhookDeliveryService } from '../../../settlement/services/settlement-webhook-delivery.service';
 import { getRetailerEscrowMpesaConfig } from '../../config/retailer-escrow.env';
 
 class RetailerFloatDepositService extends MpesaStkOperationsBase {
   protected readonly logger = console;
+  private readonly webhookDelivery = new SettlementWebhookDeliveryService(prisma);
 
   async initiate(merchantId: string, amount: number, payerPhoneNumber: string) {
     if (!Number.isInteger(amount) || amount <= 0) {
@@ -165,7 +167,7 @@ class RetailerFloatDepositService extends MpesaStkOperationsBase {
       return { received: true, status: 'FAILED', reason };
     }
 
-    return prisma.$transaction(async (transaction) => {
+    const result = await prisma.$transaction(async (transaction) => {
       const claimed = await transaction.retailerEscrowFloatDeposit.updateMany({
         where: { id: deposit.id, status: { in: ['PENDING', 'SUBMITTED'] } },
         data: {
@@ -183,6 +185,17 @@ class RetailerFloatDepositService extends MpesaStkOperationsBase {
       }
       return { received: true, status: 'SUCCEEDED', receiptNumber: callback.receipt };
     });
+    if (result.status === 'SUCCEEDED' && !('duplicate' in result && result.duplicate)) {
+      try {
+        await this.webhookDelivery.notifyRetailerDeposit(deposit.id);
+      } catch (error) {
+        this.logger.error(`[RETAILER_FLOAT_DEPOSIT][WEBHOOK_FAILED] ${JSON.stringify({
+          depositId: deposit.id,
+          error: error instanceof Error ? error.message : String(error),
+        })}`);
+      }
+    }
+    return result;
   }
 }
 

@@ -438,8 +438,8 @@ model B2BPayoutAttempt {
 model SettlementWebhookDelivery {
   id                 String                             @id @default(cuid())
   eventId            String                             @unique
-  settlementId       String
-  settlement         Settlement                         @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  settlementId       String?
+  settlement         Settlement?                        @relation(fields: [settlementId], references: [id], onDelete: Cascade)
   integrationId      String
   merchantId         String
   eventType          String

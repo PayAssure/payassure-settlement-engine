@@ -10,7 +10,8 @@ export type SettlementWebhookEvent =
   | 'payment.settlement.partially_failed'
   | 'payment.settlement.retrying'
   | 'payment.settlement.completed'
-  | 'payment.settlement.reconciliation_required';
+  | 'payment.settlement.reconciliation_required'
+  | 'payment.escrow.deposit.succeeded';
 
 type WebhookParticipant = {
   integrationId: string;
@@ -93,6 +94,77 @@ export class SettlementWebhookDeliveryService {
         status: 'PENDING',
       },
     });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = await this.deliverStored(delivery.id, retailer.secret, true);
+      if (result.status !== 'RETRYING') return result;
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 200 * (2 ** attempt)));
+    }
+    return this.prisma.settlementWebhookDelivery.findUnique({ where: { id: delivery.id } });
+  }
+
+  async notifyRetailerDeposit(depositId: string) {
+    const deposit = await this.prisma.retailerEscrowFloatDeposit.findUnique({
+      where: { id: depositId },
+      include: { retailerEscrowFloat: { select: { merchantId: true, currency: true } } },
+    });
+    if (!deposit) {
+      throw new Error(`Cannot deliver payment.escrow.deposit.succeeded: deposit ${depositId} was not found`);
+    }
+
+    const integration = await this.prisma.integration.findUnique({
+      where: { merchantId: deposit.retailerMerchantId },
+      include: { participant: true },
+    });
+    if (!integration || integration.participant?.participantType !== 'RETAILER') {
+      this.logger.warn(`No retailer integration found for escrow deposit ${depositId}`);
+      return;
+    }
+    if (deposit.retailerEscrowFloat?.merchantId !== integration.merchantId) {
+      this.logger.error(`Refusing webhook delivery for deposit ${depositId}: retailer does not own its escrow float`);
+      return;
+    }
+
+    const retailer = this.resolveParticipant(integration, integration.participant);
+    if (!retailer) {
+      this.logger.warn(`No configured webhook endpoint found for payment.escrow.deposit.succeeded on deposit ${depositId}`);
+      return;
+    }
+
+    const eventType: SettlementWebhookEvent = 'payment.escrow.deposit.succeeded';
+    const eventId = randomUUID();
+    const body = JSON.stringify({
+      id: eventId,
+      type: eventType,
+      created_at: new Date().toISOString(),
+      data: {
+        deposit: {
+          id: deposit.id,
+          amount: Number(deposit.amount),
+          currency: deposit.retailerEscrowFloat.currency,
+          status: deposit.status,
+          payer_phone: deposit.payerPhone,
+          receipt_number: deposit.receiptNumber,
+          completed_at: deposit.completedAt?.toISOString() ?? null,
+        },
+        recipient: {
+          merchant_id: retailer.merchantId,
+          participant_type: retailer.participantType,
+        },
+      },
+    });
+    const delivery = await this.prisma.settlementWebhookDelivery.create({
+      data: {
+        eventId,
+        settlementId: null,
+        integrationId: retailer.integrationId,
+        merchantId: retailer.merchantId,
+        eventType,
+        endpoint: retailer.webhookUrl,
+        payload: body,
+        status: 'PENDING',
+      },
+    });
+
     for (let attempt = 0; attempt < 3; attempt++) {
       const result = await this.deliverStored(delivery.id, retailer.secret, true);
       if (result.status !== 'RETRYING') return result;

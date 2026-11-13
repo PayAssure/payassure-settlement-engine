@@ -710,6 +710,78 @@ verification and credential generation are complete.
 - `404 Not Found`: no participant matches the authenticated user's email;
   message: `Onboarding participant not found for the authenticated user`.
 
+### Resend the authenticated user's payment activation secret
+
+`POST /onbordings/payment/resend-activation-secret`
+
+Generates a new activation secret for the authenticated user's pending payment
+destination and emails it to the email address in the user's JWT. Because only
+the secret hash is stored, this endpoint rotates the secret rather than
+retrieving the previous one. The new secret expires 24 hours after it is
+generated, and failed verification attempts are reset. The secret is never
+included in the endpoint response.
+
+#### Request
+
+No request body is required. Send the authenticated user's JWT as a bearer token.
+The recipient is taken from the email claim in that token; clients must not send
+an email address or participant ID to choose the recipient.
+
+#### Client integration
+
+Call this endpoint when the user chooses **Resend activation email**, for
+example if the original email was not received or the previous secret expired.
+Use the user's access token from login or token refresh:
+
+```javascript
+async function resendPaymentActivationSecret(apiBaseUrl, accessToken) {
+  const response = await fetch(
+    `${apiBaseUrl}/onbordings/payment/resend-activation-secret`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: ['Bearer', accessToken].join(' '),
+      },
+    },
+  );
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(`Could not resend activation email (${response.status})`);
+  }
+
+  return result;
+}
+```
+
+On success, show the returned confirmation and ask the user to check the email
+address on their account. The secret arrives by email; it is not in the HTTP
+response. Once the user provides the new secret, submit it to
+`PATCH /onbordings/payment/activate` in the `paymentActivationSecret` field.
+Handle `401` by refreshing the session or asking the user to sign in again;
+`403` means the payment destination is not awaiting activation; `404` means
+there is no onboarding participant for the account; and `500` means delivery
+failed and the user may request another email. Do not log or persist the
+activation secret or access token in client logs.
+
+#### Success: `200 OK`
+
+```json
+{
+  "message": "A new payment activation secret has been sent to your email address."
+}
+```
+
+#### Errors
+
+- `401 Unauthorized`: missing or invalid JWT, or the token has no email claim.
+- `403 Forbidden`: the user's payment destination is not configured or is not
+  pending verification.
+- `404 Not Found`: no participant matches the authenticated user's email.
+- `500 Internal Server Error`: the email service is unavailable or the email
+  could not be sent. If delivery fails after the secret was rotated, retry this
+  endpoint to generate and email another secret.
+
 ## Response Shapes
 
 ### Authenticated onboarding response

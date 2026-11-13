@@ -190,6 +190,13 @@ On success, the balance operation is:
 availableBalance = successful deposit total - successful settlement transfer total
 ```
 
+After a successful deposit is recorded, PayAssure sends the retailer's
+configured outbound webhook a separate `payment.escrow.deposit.succeeded`
+event. This is distinct from the checkout/settlement webhook and does not
+change its payload or delivery behavior. The deposit event schema, signature
+verification, and delivery behavior are documented in
+[WEBHOOK_INTEGRATION.md](./WEBHOOK_INTEGRATION.md#retailer-escrow-deposit-event).
+
 The callback handler returns HTTP `200` to Safaricom while recording the processing result internally.
 
 ## 5. End-to-end settlement flow

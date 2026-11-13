@@ -10,7 +10,7 @@ export class EmailService {
     name: string;
     paymentSecret: string;
     expiresAt: string;
-  }): Promise<void> {
+  }, context: 'registration' | 'resend' = 'registration'): Promise<void> {
     const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM } = process.env;
     if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
       throw new Error('SMTP_HOST, SMTP_USER and SMTP_PASS are required');
@@ -27,8 +27,8 @@ export class EmailService {
     await transporter.sendMail({
       from: SMTP_FROM || `PayAssure <${SMTP_USER}>`,
       to: data.email,
-      subject: 'PayAssure registration successful',
-      html: paymentSecretEmailTemplate(data),
+      subject: context === 'resend' ? 'Your PayAssure payment activation secret' : 'PayAssure registration successful',
+      html: paymentSecretEmailTemplate(data, context),
     });
 
     this.logger.log(`Payment secret email sent to ${data.email}`);

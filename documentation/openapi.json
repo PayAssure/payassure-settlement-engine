@@ -1306,6 +1306,79 @@
         ]
       }
     },
+    "/onbordings/payment/resend-activation-secret": {
+      "post": {
+        "operationId": "OnbordingsController_resendPaymentActivationSecret",
+        "summary": "Resend a payment activation secret to the authenticated user",
+        "description": "Generates a new secret for the authenticated user’s pending payment destination and emails it to the email address in their JWT. The secret is not returned in the API response.",
+        "responses": {
+          "200": {
+            "description": "A new payment activation secret was emailed to the authenticated user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                      "example": "A new payment activation secret has been sent to your email address."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication token is missing, invalid, or has no email claim.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The payment destination is not configured or is not pending verification.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Onboarding participant not found for the authenticated user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The activation secret email could not be sent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "onbordings"
+        ],
+        "security": [
+          {
+            "access-token": []
+          }
+        ]
+      }
+    },
     "/onbordings/payment/activate": {
       "patch": {
         "operationId": "OnbordingsController_activatePayment",

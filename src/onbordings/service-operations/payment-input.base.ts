@@ -25,20 +25,28 @@ export abstract class OnbordingsPaymentInputBase extends OnbordingsServiceContex
   }
 
   protected preparePaymentForStorage(payment: PaymentMethodDto): { payment: PaymentMethodDto; paymentActivationSecret?: string } {
-    const activationSecret = `paysec_${randomBytes(16).toString('hex')}`;
-    const activationSecretHash = createHash('sha256').update(activationSecret).digest('hex');
+    const activationSecret = this.generatePaymentActivationSecret();
     const normalizedPayment: PaymentMethodDto = {
       ...payment,
       phoneNumber: payment.phoneNumber ?? payment.payerPhoneNumber,
       payerPhoneNumber: undefined,
       status: 'PENDING_VERIFICATION',
       isVerified: false,
-      paymentActivationSecretHash: activationSecretHash,
-      paymentActivationSecretExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      paymentActivationSecretHash: activationSecret.hash,
+      paymentActivationSecretExpiresAt: activationSecret.expiresAt,
       verificationAttempts: 0,
       verificationMethod: undefined,
       verifiedAt: undefined,
     } as PaymentMethodDto;
-    return { payment: normalizedPayment, paymentActivationSecret: activationSecret };
+    return { payment: normalizedPayment, paymentActivationSecret: activationSecret.secret };
+  }
+
+  protected generatePaymentActivationSecret(): { secret: string; hash: string; expiresAt: string } {
+    const secret = `paysec_${randomBytes(16).toString('hex')}`;
+    return {
+      secret,
+      hash: createHash('sha256').update(secret).digest('hex'),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    };
   }
 }

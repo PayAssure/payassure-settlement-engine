@@ -450,6 +450,20 @@ Configure an absolute HTTP or HTTPS receiver URL, such as `http://localhost:3010
   - 401 Unauthorized
   - 404 Not Found
 
+### 10) POST /onbordings/payment/resend-activation-secret
+- Purpose: Generate and email a new activation secret to the authenticated user's email for their pending payment destination.
+- Required headers:
+  - Authorization: ******
+- Request body: none
+- Success response:
+  - Status: 200 OK
+  - Body: confirmation message; the secret is not returned by the API.
+- Error responses:
+  - 401 Unauthorized
+  - 403 Forbidden: payment destination is not configured or is not pending verification
+  - 404 Not Found
+  - 500 Internal Server Error: activation email could not be sent
+
 ### 11) PATCH /onbordings/payment/activate
 - Purpose: Activate the authenticated user's pending payment destination with a secret.
 - Required headers:

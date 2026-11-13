@@ -675,6 +675,36 @@
       ]
     },
     {
+      "name": "POST /onbordings/payment/resend-activation-secret",
+      "item": [
+        {
+          "name": "Email a fresh activation secret to the authenticated user",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "******",
+                "description": "****** token"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/onbordings/payment/resend-activation-secret",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "onbordings",
+                "payment",
+                "resend-activation-secret"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
       "name": "PATCH /onbordings/payment/activate",
       "item": [
         {

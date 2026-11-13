@@ -166,6 +166,88 @@ test('settlement webhook delivery sends only to the retailer endpoint and signs 
   }
 });
 
+test('successful retailer escrow deposits send a signed webhook to the retailer endpoint', async () => {
+  const secret = 'retailer-integration-secret';
+  const calls: Array<{ url: string; headers: Headers; body: string }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    calls.push({
+      url: String(input),
+      headers: new Headers(init?.headers),
+      body: String(init?.body),
+    });
+    return new Response('accepted', { status: 200 });
+  }) as typeof fetch;
+
+  const deliveryStore = createWebhookDeliveryStore();
+  const prisma = {
+    ...deliveryStore.store,
+    retailerEscrowFloatDeposit: {
+      findUnique: async () => ({
+        id: 'deposit-1',
+        retailerMerchantId: 'retailer-merchant',
+        amount: 500,
+        payerPhone: '254700000000',
+        status: 'SUCCEEDED',
+        receiptNumber: 'MPESA-RECEIPT-1',
+        completedAt: new Date('2026-11-14T08:00:00.000Z'),
+        retailerEscrowFloat: { merchantId: 'retailer-merchant', currency: 'KES' },
+      }),
+    },
+    integration: {
+      findUnique: async () => ({
+        id: 'retailer-integration',
+        merchantId: 'retailer-merchant',
+        apiSecret: secret,
+        webhookUrl: 'https://integration.example/events',
+        participantId: 'retailer-1',
+        participant: {
+          id: 'retailer-1',
+          participantType: 'RETAILER',
+          webhookUrl: 'https://retailer.example/events',
+        },
+      }),
+    },
+  } as any;
+
+  try {
+    const service = new SettlementWebhookDeliveryService(prisma);
+    await service.notifyRetailerDeposit('deposit-1');
+
+    assert.equal(calls.length, 1);
+    const [call] = calls;
+    assert.equal(call.url, 'https://retailer.example/events');
+    const event = JSON.parse(call.body);
+    const timestamp = call.headers.get('x-payassure-timestamp');
+    assert.equal(event.type, 'payment.escrow.deposit.succeeded');
+    assert.equal(call.headers.get('x-payassure-event'), event.type);
+    assert.equal(call.headers.get('x-payassure-event-id'), event.id);
+    assert.equal(
+      call.headers.get('x-payassure-signature'),
+      `t=${timestamp},v1=${createHmac('sha256', secret).update(`${timestamp}.${call.body}`).digest('hex')}`,
+    );
+    assert.deepEqual(event.data.deposit, {
+      id: 'deposit-1',
+      amount: 500,
+      currency: 'KES',
+      status: 'SUCCEEDED',
+      payer_phone: '254700000000',
+      receipt_number: 'MPESA-RECEIPT-1',
+      completed_at: '2026-11-14T08:00:00.000Z',
+    });
+    assert.deepEqual(event.data.recipient, {
+      merchant_id: 'retailer-merchant',
+      participant_type: 'RETAILER',
+    });
+    const [delivery] = Array.from(deliveryStore.deliveries.values());
+    assert.equal(delivery.settlementId, null);
+    assert.equal(delivery.eventType, 'payment.escrow.deposit.succeeded');
+    assert.equal(delivery.status, 'DELIVERED');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('settlement webhook refuses a supplier as the settlement integration recipient', async () => {
   let fetchCalls = 0;
   const originalFetch = globalThis.fetch;

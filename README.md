@@ -38,6 +38,18 @@ Open Swagger UI at http://localhost:3000/api and call `GET /settlement/hello`.
 
 Core settlement and reconciliation engine for the PayAssure financial platform.
 
+## CORS configuration
+
+Set `CORS_ORIGIN` in the API deployment environment to allow the documentation
+site to call the API:
+
+```env
+CORS_ORIGIN=https://docs.payassure.co.ke
+```
+
+Additional origins can be included as a comma-separated list, for example
+`CORS_ORIGIN=https://docs.payassure.co.ke,https://app.payassure.co.ke`.
+
 ## Registration email settings
 
 Set these environment variables to send the payment activation secret after onboarding registration:

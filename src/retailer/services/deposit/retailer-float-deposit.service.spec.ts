@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert = require('node:assert/strict');
 import { prisma } from '../../../common/database/prisma';
+import { SettlementWebhookDeliveryService } from '../../../settlement/services/settlement-webhook-delivery.service';
 import { retailerFloatDepositService } from './retailer-float-deposit.service';
 import { retailerEscrowTransferService } from '../transfer/retailer-escrow-transfer.service';
 
@@ -78,11 +79,13 @@ test('retailer float deposit uses retailer STK credentials and does not update b
 test('successful float deposit callback marks the deposit successful once and ignores duplicates', async () => {
   const depositModel = (prisma as any).retailerEscrowFloatDeposit;
   const originalTransaction = (prisma as any).$transaction;
+  const originalNotifyDeposit = SettlementWebhookDeliveryService.prototype.notifyRetailerDeposit;
   const original = {
     depositFindUnique: depositModel.findUnique,
     depositUpdateMany: depositModel.updateMany,
     depositFindUniqueOrThrow: depositModel.findUniqueOrThrow,
   };
+  const notifiedDeposits: string[] = [];
   const deposit: any = {
     id: 'deposit-2',
     retailerEscrowFloatId: 'float-2',
@@ -93,6 +96,10 @@ test('successful float deposit callback marks the deposit successful once and ig
     status: 'SUBMITTED',
   };
   try {
+    SettlementWebhookDeliveryService.prototype.notifyRetailerDeposit = async function (depositId: string) {
+      notifiedDeposits.push(depositId);
+      return undefined;
+    };
     depositModel.findUnique = async () => deposit;
     depositModel.updateMany = async ({ data }: any) => {
       if (deposit.status !== 'SUBMITTED') return { count: 0 };
@@ -109,7 +116,9 @@ test('successful float deposit callback marks the deposit successful once and ig
     assert.equal(first.status, 'SUCCEEDED');
     assert.equal('duplicate' in duplicate ? duplicate.duplicate : undefined, true);
     assert.equal(deposit.status, 'SUCCEEDED');
+    assert.deepEqual(notifiedDeposits, ['deposit-2']);
   } finally {
+    SettlementWebhookDeliveryService.prototype.notifyRetailerDeposit = originalNotifyDeposit;
     (prisma as any).$transaction = originalTransaction;
     depositModel.findUnique = original.depositFindUnique;
     depositModel.updateMany = original.depositUpdateMany;
