@@ -48,6 +48,7 @@ class RetailerEscrowFloatService {
     return {
       merchantId: config.merchantId,
       currency: config.currency,
+      dailyFloat: Number(config.dailyFloat),
       ...await this.getBalanceSummary(config.id),
       asOf: new Date().toISOString(),
     };

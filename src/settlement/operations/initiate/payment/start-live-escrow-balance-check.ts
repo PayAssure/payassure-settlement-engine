@@ -25,6 +25,10 @@ export async function startLiveEscrowBalanceCheck(
       },
       failedAt: new Date(),
     });
+    await repository.notifyWebhookEvent?.(primarySettlement.id, 'payment.settlement.failed', {
+      status: 'FAILED',
+      reason,
+    });
     return {
       success: false,
       settlement: buildSettlementResult(context, { status: SettlementStatus.FAILED, estimatedProcessingTime: 'N/A' }),
@@ -98,6 +102,10 @@ export async function startLiveEscrowBalanceCheck(
         escrowFunding: { ...initialMetadata.escrowFunding, status: 'FAILED', reason },
       },
       failedAt: new Date(),
+    });
+    await repository.notifyWebhookEvent?.(primarySettlement.id, 'payment.settlement.failed', {
+      status: 'FAILED',
+      reason,
     });
     return {
       success: false,

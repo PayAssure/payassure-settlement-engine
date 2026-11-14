@@ -201,6 +201,7 @@ your own queue.
 | `payment.collection.failed` | A customer payment callback reported failure before a successful payment was confirmed. |
 | `payment.settlement.started` | PayAssure accepted the successful collection for allocation and settlement processing. |
 | `payment.settlement.progress` | Settlement processing or payout callback updated the recorded payout state. Check `data.payouts` for the latest available attempt states. |
+| `payment.settlement.failed` | Settlement initiation failed before payout processing, including when the retailer escrow balance check failed. `details` contains `status: "FAILED"` and the failure `reason`. |
 | `payment.settlement.partially_failed` | A payout callback reported failure. Customer collection status remains separate; the event's `details` identifies the failed party and payout reference. |
 | `payment.settlement.retrying` | PayAssure is dispatching a subsequent payout attempt. `details` includes the party, payout reference, and attempt count. |
 | `payment.settlement.completed` | The settlement was marked completed, including through reconciliation. |

@@ -150,6 +150,7 @@ Success response (`201 Created`, NestJS POST default):
 {
   "merchantId": "pay_retailer_001",
   "currency": "KES",
+  "dailyFloat": 10000,
   "depositedBalance": 12500,
   "paidOutBalance": 2000,
   "reservedBalance": 1500,
@@ -160,7 +161,7 @@ Success response (`201 Created`, NestJS POST default):
 
 The balance calculation is scoped to the retailer resolved from the token. Pending/submitted deposits are excluded; only successful deposits count. A pending transfer is reserved so the same balance cannot be spent twice. This response is the source to use for cash-payment affordability checks. The settlement initiation flow independently repeats the balance check under its database lock; clients must not rely on a previously read balance as a reservation.
 
-The response fields `depositedBalance`, `paidOutBalance`, `reservedBalance`, and `availableBalance` have the same meanings as in the GET float response above. `asOf` is the timestamp at which this balance response was generated.
+The response field `dailyFloat` is the retailer's configured expected daily float; it is metadata, not a balance or credit. The fields `depositedBalance`, `paidOutBalance`, `reservedBalance`, and `availableBalance` have the same meanings as in the GET float response above. `asOf` is the timestamp at which this balance response was generated.
 
 Errors:
 

@@ -7,6 +7,7 @@ export type SettlementWebhookEvent =
   | 'payment.collection.failed'
   | 'payment.settlement.started'
   | 'payment.settlement.progress'
+  | 'payment.settlement.failed'
   | 'payment.settlement.partially_failed'
   | 'payment.settlement.retrying'
   | 'payment.settlement.completed'

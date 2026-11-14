@@ -119,6 +119,7 @@ test('virtual balance reports confirmed deposits, completed payouts, and active 
       id: 'float-balance-test',
       merchantId: 'pay_retailer_balance',
       currency: 'KES',
+      dailyFloat: 10000,
     });
     depositModel.aggregate = async ({ where }: any) => {
       aggregateCalls.push({ model: 'deposit', where });
@@ -126,13 +127,16 @@ test('virtual balance reports confirmed deposits, completed payouts, and active 
     };
     transferModel.aggregate = async ({ where }: any) => {
       aggregateCalls.push({ model: 'transfer', where });
-      return { _sum: { debitedAmount: where.status === 'SUCCEEDED' ? 2000 : 1500 } };
+      return where.status === 'SUCCEEDED'
+        ? { _sum: { debitedAmount: 2000 } }
+        : { _sum: { amount: 1500 } };
     };
 
     const result = await retailerEscrowFloatService.getBalance('pay_retailer_balance');
 
     assert.equal(result.merchantId, 'pay_retailer_balance');
     assert.equal(result.currency, 'KES');
+    assert.equal(result.dailyFloat, 10000);
     assert.equal(result.depositedBalance, 12500);
     assert.equal(result.paidOutBalance, 2000);
     assert.equal(result.reservedBalance, 1500);

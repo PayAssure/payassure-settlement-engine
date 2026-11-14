@@ -253,6 +253,7 @@ Base path: /escrow
     {
       "merchantId": "pay_retailer_001",
       "currency": "KES",
+      "dailyFloat": 10000,
       "depositedBalance": 12500,
       "paidOutBalance": 2000,
       "reservedBalance": 1500,

@@ -102,6 +102,39 @@ test('cash-only customer funding starts an escrow transfer without an MPESA leg'
   }
 });
 
+test('failed escrow balance check sends a settlement failure webhook with the reason', async () => {
+  const fixture = makeContext([{ type: 'CASH', amount: 100, provider: 'ESCROW' }]);
+  const originalHasFloatConfig = retailerEscrowTransferService.hasFloatConfig;
+  const originalStartForSettlement = retailerEscrowTransferService.startForSettlement;
+  const webhookEvents: Array<{ settlementId: string; eventType: string; details: Record<string, unknown> }> = [];
+  const reason = 'Insufficient retailer escrow balance: available 0 KES; requested 100 KES; shortfall 100 KES.';
+  fixture.context.repository.notifyWebhookEvent = async (
+    settlementId: string,
+    eventType: string,
+    details: Record<string, unknown>,
+  ) => {
+    webhookEvents.push({ settlementId, eventType, details });
+  };
+  retailerEscrowTransferService.hasFloatConfig = async () => true;
+  retailerEscrowTransferService.startForSettlement = async () => {
+    throw new Error(reason);
+  };
+
+  try {
+    const result = await initiateCustomerPayment(fixture.context);
+
+    assert.equal(result?.success, false);
+    assert.deepEqual(webhookEvents, [{
+      settlementId: 'settlement-1',
+      eventType: 'payment.settlement.failed',
+      details: { status: 'FAILED', reason },
+    }]);
+  } finally {
+    retailerEscrowTransferService.hasFloatConfig = originalHasFloatConfig;
+    retailerEscrowTransferService.startForSettlement = originalStartForSettlement;
+  }
+});
+
 test('MPESA-only customer funding does not query or start retailer escrow', async () => {
   const fixture = makeContext([
     { type: 'MPESA', amount: 100, provider: 'MPESA', payerPhoneNumber: '+254791614036' },
