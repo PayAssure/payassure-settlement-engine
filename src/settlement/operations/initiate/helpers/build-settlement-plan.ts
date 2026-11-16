@@ -90,11 +90,12 @@ export function buildSettlementPlan(data: InitiateSettlementDto): SettlementPlan
         : paymentMethod === 'CASH_AND_MPESA'
           ? Math.min(retailerAllocation, Math.max(0, mpesaAmount - supplierMpesaFunding))
           : retailerAllocation;
-  const escrowDebitAmount = settlementMode === 'DIRECT'
+  const escrowPayoutAmount = settlementMode === 'DIRECT'
     ? 0
     : paymentMethod === 'CASH'
       ? supplierPayoutAmount
       : Math.min(cashAmount, supplierPayoutAmount);
+  const escrowDebitAmount = escrowPayoutAmount + (cashAmount > 0 ? platformFeeAmount : 0);
   const allocations = supplierGroups.map((supplier) => ({
     supplierMerchantId: supplier.supplierMerchantId == null
       ? null

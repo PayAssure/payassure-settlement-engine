@@ -198,6 +198,8 @@ Base path: /escrow
       "dailyFloat": 10000,
       "depositedBalance": 12500,
       "paidOutBalance": 2000,
+      "balance": 10500,
+      "stagedBalance": 9000,
       "reservedBalance": 1500,
       "availableBalance": 9000,
       "updatedAt": "2026-09-28T19:30:00.000Z"
@@ -516,6 +518,24 @@ Base path: /settlement
   - 404 Not Found: business not found
 
 ### 2) POST /settlement/initiate-settlement
+- Returns HTTP 201 with the created settlement record as soon as persistence succeeds; settlement processing continues after the response.
+- Validation or persistence failures before the record is created are returned as errors. Use the settlement status endpoint and subsequent webhooks to follow processing.
+- Success response:
+  - Status: 201 Created
+  - Body:
+    ```json
+    {
+      "success": true,
+      "settlement": {
+        "settlementId": "settlement_123",
+        "status": "INITIATED",
+        "amount": 127000,
+        "currency": "KES",
+        "reference": "SET-20261116-001"
+      },
+      "message": "Settlement created; processing will continue asynchronously."
+    }
+    ```
 - Purpose: Initiate a settlement request.
 - Required headers:
   - Authorization: Bearer <jwt>

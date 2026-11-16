@@ -80,6 +80,10 @@ Example event:
       "currency": "KES",
       "source": "RETAILER_VIRTUAL_BALANCE"
     },
+    "escrow_balance": {
+      "balance": 900,
+      "currency": "KES"
+    },
     "details": {
       "party": "SUPPLIER",
       "payout_status": "FAILED",
@@ -112,9 +116,16 @@ for both retailer and suppliers; no webhook is sent to suppliers.
 
 `data.cash_funding` is included only after a positive cash amount has been
 reserved from the retailer's database-backed virtual balance for payout. It
-reports the amount used and its source, not the retailer's remaining or
-available float balance. It is omitted for settlements with no cash funding
-and while a mixed settlement is still waiting for its customer M-Pesa callback.
+reports the amount used and its source. When `cash_funding` is present,
+`data.escrow_balance` reports the retailer's confirmed virtual balance:
+successful deposits minus payout debits confirmed by payout callbacks. A
+reservation does not reduce this balance; pending payouts leave it unchanged.
+For cash-funded settlements, the callback-finalized debit includes the retained
+platform fee. The fee is deducted from escrow but is not sent as a payout.
+It is omitted for settlements with no cash funding and while a mixed settlement
+is still waiting for its customer M-Pesa callback. This is the confirmed
+balance, not the amount available for a new settlement; active reservations
+continue to be held separately for balance checks.
 
 ## 3. Verify the signature
 

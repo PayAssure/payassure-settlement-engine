@@ -6,6 +6,7 @@ import { paymentRecordService } from '../payment/services/payment-record.service
 import { prisma } from '../common/database/prisma';
 import { b2bService } from '../payment/services/b2b.service';
 import { b2cService } from '../payment/services/b2c.service';
+import { finalizeSettlementPayoutReservationInTransaction } from '../retailer/services/transfer/helpers/settlement-payout-reservation';
 
 // Mock implementations for new services
 const mockIdempotencyService = {
@@ -797,11 +798,12 @@ test('cash reservation is debited only after all expected payout callbacks confi
       callbackIdentifier: 'callback-retailer',
     },
   ];
-  const transfer: any = { id: 'cash-transfer-callback', settlementId: 'settlement-cash-callback', amount: 40, status: 'BALANCE_VERIFIED' };
+  const transfer: any = { id: 'cash-transfer-callback', settlementId: 'settlement-cash-callback', amount: 42, status: 'BALANCE_VERIFIED' };
   const settlement: any = {
     id: 'settlement-cash-callback',
     status: 'PROCESSING',
     metadata: {
+      settlementPlan: { platformFeeAmount: 2 },
       escrowFunding: { payoutSource: 'CENTRAL_ACCOUNT', transferId: 'cash-transfer-callback' },
       splitRecords: [{ expectedPayoutCount: 2 }],
       allocationPlan: {
@@ -863,12 +865,90 @@ test('cash reservation is debited only after all expected payout callbacks confi
 
   await service.handleB2bPayoutCallback({ reference: 'payout-retailer', ResultCode: 0 });
   assert.equal(transfer.status, 'SUCCEEDED');
-  assert.equal(Number(transfer.debitedAmount), 40);
+  assert.equal(Number(transfer.debitedAmount), 42);
   assert.equal(settlement.status, 'COMPLETED');
   assert.equal(settlement.metadata.allocationPlan.allocations[0].status, 'SUCCESSFUL');
 
   await service.handleB2bPayoutCallback({ reference: 'payout-supplier', ResultCode: 0 });
-  assert.equal(Number(transfer.debitedAmount), 40);
+  assert.equal(Number(transfer.debitedAmount), 42);
+});
+
+test('failed supplier payout releases the parent escrow reservation without debiting the fee', async () => {
+  const parentSettlement: any = {
+    id: 'parent-settlement-failed-payout',
+    merchantTransactionReference: 'TXN-PARENT-FAILED-PAYOUT',
+    status: 'PROCESSING',
+    metadata: {
+      settlementPlan: { platformFeeAmount: 2 },
+      escrowFunding: { payoutSource: 'CENTRAL_ACCOUNT', transferId: 'transfer-failed-payout' },
+      splitRecords: [{ expectedPayoutCount: 1 }],
+    },
+  };
+  const childSettlement: any = {
+    id: 'child-settlement-failed-payout',
+    metadata: { parentSettlementId: parentSettlement.id },
+  };
+  const transfer: any = {
+    id: 'transfer-failed-payout',
+    settlementId: parentSettlement.id,
+    retailerMerchantId: 'retailer-failed-payout',
+    amount: 7,
+    status: 'BALANCE_VERIFIED',
+  };
+  const failedAttempt = {
+    status: 'FAILED',
+    metadata: { escrowFundedAmount: 5 },
+  };
+  const tx: any = {
+    settlement: {
+      findUnique: async ({ where }: any) => (
+        where.id === parentSettlement.id ? parentSettlement : childSettlement
+      ),
+      update: async ({ where, data }: any) => {
+        const settlement = where.id === parentSettlement.id ? parentSettlement : childSettlement;
+        Object.assign(settlement, data);
+        return settlement;
+      },
+    },
+    b2BPayoutAttempt: {
+      findMany: async ({ where }: any) => {
+        assert.deepEqual(where, { merchantTransactionReference: parentSettlement.merchantTransactionReference });
+        return [failedAttempt];
+      },
+    },
+    retailerEscrowTransfer: {
+      findUnique: async () => transfer,
+      updateMany: async ({ where, data }: any) => {
+        if (transfer.id !== where.id || transfer.status !== where.status) return { count: 0 };
+        Object.assign(transfer, data);
+        return { count: 1 };
+      },
+      aggregate: async ({ where }: any) => ({
+        _sum: where.status === 'SUCCEEDED'
+          ? { debitedAmount: 0 }
+          : { amount: 0 },
+      }),
+    },
+    retailerEscrowFloat: {
+      findUnique: async () => ({ id: 'float-failed-payout', currency: 'KES' }),
+    },
+    retailerEscrowFloatDeposit: {
+      aggregate: async () => ({ _sum: { amount: 100 } }),
+    },
+  };
+
+  const result = await finalizeSettlementPayoutReservationInTransaction(
+    tx,
+    childSettlement.id,
+  );
+
+  assert.equal(result.finalized, true);
+  assert.equal(result.status, 'FAILED');
+  assert.equal(result.debitedAmount, 0);
+  assert.equal(transfer.status, 'FAILED');
+  assert.equal(Number(transfer.debitedAmount), 0);
+  assert.equal(parentSettlement.metadata.escrowFunding.availableBalance, 100);
+  assert.equal(parentSettlement.metadata.escrowFunding.debitedAmount, 0);
 });
 
 test('handlePaymentCallback transitions a settlement into pending processing using participant payout records instead of payer payload details', async () => {

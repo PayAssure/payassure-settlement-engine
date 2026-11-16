@@ -181,7 +181,7 @@ test('mixed supplier and direct CASH allocations reserve only whole KES and reta
   assert.equal(allocatedSupplier?.retailerTotalAmount, 4);
   assert.equal(directAllocation?.supplierTotalAmount, 0);
   assert.equal(directAllocation?.retailerTotalAmount, 9);
-  assert.equal(plan.escrowDebitAmount, 4);
+  assert.equal(plan.escrowDebitAmount, 7);
   assert.equal(plan.escrowDebitAmount % 1, 0);
   assert.equal(plan.supplierPayoutAmount, 4);
   assert.equal(normalized.metadata?.calculatedAllocation?.platformFee, 3);
@@ -218,7 +218,7 @@ test('SPLIT cash and MPESA plans constrain payouts to supplier and retailer allo
   assert.equal(cashPlan.settlementMode, 'SPLIT');
   assert.equal(cashPlan.supplierPayoutAmount, 4);
   assert.equal(cashPlan.retailerPayoutAmount, 0);
-  assert.equal(cashPlan.escrowDebitAmount, 4);
+  assert.equal(cashPlan.escrowDebitAmount, 6);
   assert.equal(cashPlan.escrowBalanceCheckRequired, true);
   assert.equal(mpesaPlan.supplierPayoutAmount, 4);
   assert.equal(mpesaPlan.retailerPayoutAmount, 4);

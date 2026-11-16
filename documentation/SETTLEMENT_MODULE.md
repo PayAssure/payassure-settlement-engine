@@ -87,6 +87,8 @@ Content-Type: application/json
 
 The retailer POS/ERP owns the commercial facts. It sends the supplier and retailer amounts; PayAssure does not need to become an inventory or pricing system.
 
+The initiation endpoint validates and persists the settlement record, then returns HTTP `201 Created` with its ID and `INITIATED` status before beginning payment, escrow, or payout processing. Processing continues asynchronously; clients should use the settlement status endpoint and webhooks to follow progress. Failures before settlement creation are still returned directly as HTTP errors.
+
 ### Final request shape
 
 ```json

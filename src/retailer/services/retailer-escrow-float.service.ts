@@ -61,10 +61,38 @@ class RetailerEscrowFloatService {
     return (await this.getBalanceSummary(floatId, client)).availableBalance;
   }
 
+  async getLedgerBalance(
+    merchantId: string,
+    client: Prisma.TransactionClient = prisma,
+  ): Promise<{ balance: number; currency: string }> {
+    if (!merchantId || !String(merchantId).trim()) {
+      return { balance: 0, currency: 'KES' };
+    }
+    const floatModel = (client as any)?.retailerEscrowFloat ?? prisma.retailerEscrowFloat;
+    const config = await floatModel.findUnique({
+      where: { merchantId },
+      select: { id: true, currency: true },
+    });
+    if (!config) throw new NotFoundException(`Escrow float is not configured for retailer ${merchantId}`);
+
+    const summary = await this.getBalanceSummary(config.id, client);
+    return {
+      balance: summary.depositedBalance - summary.paidOutBalance,
+      currency: config.currency,
+    };
+  }
+
   private async getBalanceSummary(
     floatId: string,
     client: Prisma.TransactionClient = prisma,
-  ): Promise<{ depositedBalance: number; paidOutBalance: number; reservedBalance: number; availableBalance: number }> {
+  ): Promise<{
+    depositedBalance: number;
+    paidOutBalance: number;
+    balance: number;
+    stagedBalance: number;
+    reservedBalance: number;
+    availableBalance: number;
+  }> {
     const [deposits, transfers, reservedTransfers] = await Promise.all([
       client.retailerEscrowFloatDeposit.aggregate({
         where: { retailerEscrowFloatId: floatId, status: 'SUCCEEDED' },
@@ -85,11 +113,15 @@ class RetailerEscrowFloatService {
     const depositedBalance = Number(deposits._sum.amount ?? 0);
     const paidOutBalance = Number(transfers._sum.debitedAmount ?? 0);
     const reservedBalance = Number(reservedTransfers._sum.amount ?? 0);
+    const balance = depositedBalance - paidOutBalance;
+    const stagedBalance = balance - reservedBalance;
     return {
       depositedBalance,
       paidOutBalance,
+      balance,
+      stagedBalance,
       reservedBalance,
-      availableBalance: depositedBalance - paidOutBalance - reservedBalance,
+      availableBalance: stagedBalance,
     };
   }
 

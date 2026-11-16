@@ -110,6 +110,17 @@ test('settlement webhook delivery sends only to the retailer endpoint and signs 
     onboardingParticipant: {
       findUnique: async () => null,
     },
+    retailerEscrowFloat: {
+      findUnique: async () => ({ id: 'float-1', currency: 'KES' }),
+    },
+    retailerEscrowFloatDeposit: {
+      aggregate: async () => ({ _sum: { amount: 12500 } }),
+    },
+    retailerEscrowTransfer: {
+      aggregate: async ({ where }: any) => ({
+        _sum: { [where.status === 'SUCCEEDED' ? 'debitedAmount' : 'amount']: where.status === 'SUCCEEDED' ? 2000 : 1500 },
+      }),
+    },
     b2BPayoutAttempt: {
       findMany: async () => [
         { party: 'RETAILER', recipientMerchantId: 'retailer-merchant', amount: 100, status: 'COMPLETED', payoutReference: 'retailer-payout', updatedAt: new Date() },
@@ -144,8 +155,11 @@ test('settlement webhook delivery sends only to the retailer endpoint and signs 
       currency: 'KES',
       source: 'RETAILER_VIRTUAL_BALANCE',
     });
-    assert.equal('availableBalance' in body.data.cash_funding, false);
-    assert.equal('remainingBalance' in body.data.cash_funding, false);
+    assert.deepEqual(body.data.escrow_balance, {
+      balance: 10500,
+      currency: 'KES',
+    });
+    assert.equal('available_balance' in body.data.escrow_balance, false);
     assert.equal(body.data.payouts.length, 2);
     assert.deepEqual(deliveryLogs.map((entry) => entry.message), [
       '[SETTLEMENT_WEBHOOK_DELIVERY][REQUEST]',

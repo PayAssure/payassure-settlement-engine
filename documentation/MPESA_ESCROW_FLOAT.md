@@ -7,22 +7,26 @@ This document describes retailer float deposits, retailer-level available balanc
 Retailers share one M-Pesa escrow account. Each retailer's available amount is derived from callback-confirmed transaction records:
 
 - `dailyFloat`: configuration metadata only; it does not create available funds.
-- `availableBalance`: sum of that retailer's `SUCCEEDED` float deposits minus its `SUCCEEDED` escrow transfers. It is computed from callback-finalized records and is not stored or editable.
+- `balance`: confirmed ledger balance, computed as successful deposits minus callback-confirmed payout debits. A payout reservation does not change it.
+- `stagedBalance`: projected confirmed balance after active payout reservations succeed. It is temporary and returns to the confirmed balance when a payout fails.
+- `availableBalance`: the staged balance available for new settlements; pending payout amounts remain held to prevent double-spending.
 - `activeTransferId`: an internal lock identifying the settlement currently using the float. Only one escrow transfer may be active for a retailer at a time.
 
-Settlement initiation trusts the retailer ledger rather than querying Safaricom for every transaction. An atomic check rejects a request if its CASH amount exceeds that retailer's available balance. The shared account is queried hourly; its observed balance is compared with the sum of all retailer ledger balances. A mismatch is persisted and logged for investigation.
+Settlement initiation trusts the retailer ledger rather than querying Safaricom for every transaction. An atomic check rejects a request if its CASH amount exceeds that retailer's available balance. The reservation stages a projected balance but does not commit a debit. Only successful payout callbacks convert the staged amount into a confirmed ledger debit; failed payouts discard the staged amount. The shared account is queried hourly; its observed balance is compared with the sum of all retailer confirmed ledger balances. A mismatch is persisted and logged for investigation.
 
 Example:
 
 ```text
 Configured remainder:       10,000 KES
 Settlement CASH amount:       2,000 KES
-Available before initiation:  10,000 KES
-Available while pending:      10,000 KES
-Available after success:       8,000 KES
+Confirmed balance before:     10,000 KES
+Confirmed balance while pending: 10,000 KES
+Staged balance while pending:  8,000 KES
+Confirmed balance after success: 8,000 KES
+Confirmed balance after failure: 10,000 KES
 ```
 
-The ledger is only debited after the successful B2B callback. A failed or unresolved transfer does not debit it.
+The confirmed ledger balance is only debited after the successful B2B callback. A failed payout discards its staged debit; unresolved payouts retain the staging reservation until reconciliation.
 
 ## 2. Float configuration endpoints
 
@@ -42,6 +46,9 @@ Successful response:
   "merchantId": "pay_retailer_001",
   "currency": "KES",
   "dailyFloat": 10000,
+  "balance": 8000,
+  "stagedBalance": 8000,
+  "reservedBalance": 0,
   "availableBalance": 8000,
   "updatedAt": "2026-09-28T19:30:00.000Z"
 }
@@ -84,6 +91,9 @@ Successful response:
   "merchantId": "pay_retailer_001",
   "currency": "KES",
   "dailyFloat": 10000,
+  "balance": 8000,
+  "stagedBalance": 8000,
+  "reservedBalance": 0,
   "availableBalance": 8000,
   "updatedAt": "2026-09-28T19:35:00.000Z"
 }
@@ -187,7 +197,9 @@ The token is generated for the deposit and included only in the callback URL sen
 On success, the balance operation is:
 
 ```text
-availableBalance = successful deposit total - successful settlement transfer total
+balance = successful deposit total - callback-confirmed payout debits
+stagedBalance = balance - staged reservations
+availableBalance = stagedBalance
 ```
 
 After a successful deposit is recorded, PayAssure sends the retailer's

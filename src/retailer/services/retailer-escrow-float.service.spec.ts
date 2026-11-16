@@ -139,6 +139,8 @@ test('virtual balance reports confirmed deposits, completed payouts, and active 
     assert.equal(result.dailyFloat, 10000);
     assert.equal(result.depositedBalance, 12500);
     assert.equal(result.paidOutBalance, 2000);
+    assert.equal(result.balance, 10500);
+    assert.equal(result.stagedBalance, 9000);
     assert.equal(result.reservedBalance, 1500);
     assert.equal(result.availableBalance, 9000);
     assert.equal(typeof result.asOf, 'string');
@@ -150,6 +152,61 @@ test('virtual balance reports confirmed deposits, completed payouts, and active 
       'SUCCEEDED',
       { in: ['BALANCE_PENDING', 'BALANCE_VERIFIED', 'WAITING_FOR_MPESA', 'TRANSFER_PENDING'] },
     ]);
+  } finally {
+    floatModel.findUnique = original.floatFindUnique;
+    depositModel.aggregate = original.depositAggregate;
+    transferModel.aggregate = original.transferAggregate;
+  }
+});
+
+test('escrow reservations stage a lower balance without committing it before the payout callback', async () => {
+  const floatModel = (prisma as any).retailerEscrowFloat;
+  const depositModel = (prisma as any).retailerEscrowFloatDeposit;
+  const transferModel = (prisma as any).retailerEscrowTransfer;
+  const original = {
+    floatFindUnique: floatModel.findUnique,
+    depositAggregate: depositModel.aggregate,
+    transferAggregate: transferModel.aggregate,
+  };
+  let transferStatus = 'BALANCE_VERIFIED';
+  let debitedAmount = 0;
+
+  try {
+    floatModel.findUnique = async () => ({
+      id: 'float-staged-balance',
+      merchantId: 'pay_retailer_staged',
+      currency: 'KES',
+      dailyFloat: 10000,
+    });
+    depositModel.aggregate = async () => ({ _sum: { amount: 10000 } });
+    transferModel.aggregate = async ({ where }: any) => {
+      if (where.status === 'SUCCEEDED') {
+        return { _sum: { debitedAmount: transferStatus === 'SUCCEEDED' ? debitedAmount : 0 } };
+      }
+      return {
+        _sum: {
+          amount: ['BALANCE_PENDING', 'BALANCE_VERIFIED', 'WAITING_FOR_MPESA', 'TRANSFER_PENDING']
+            .includes(transferStatus)
+            ? 1500
+            : 0,
+        },
+      };
+    };
+
+    const pending = await retailerEscrowFloatService.getBalance('pay_retailer_staged');
+    assert.equal(pending.balance, 10000);
+    assert.equal(pending.stagedBalance, 8500);
+
+    transferStatus = 'FAILED';
+    const failed = await retailerEscrowFloatService.getBalance('pay_retailer_staged');
+    assert.equal(failed.balance, 10000);
+    assert.equal(failed.stagedBalance, 10000);
+
+    transferStatus = 'SUCCEEDED';
+    debitedAmount = 1500;
+    const succeeded = await retailerEscrowFloatService.getBalance('pay_retailer_staged');
+    assert.equal(succeeded.balance, 8500);
+    assert.equal(succeeded.stagedBalance, 8500);
   } finally {
     floatModel.findUnique = original.floatFindUnique;
     depositModel.aggregate = original.depositAggregate;

@@ -1,6 +1,7 @@
 import { BadRequestException, Logger } from '@nestjs/common';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { prisma } from '../../../../common/database/prisma';
+import { retailerEscrowFloatService } from '../../retailer-escrow-float.service';
 import { updateEscrowSettlementMetadata } from '../../retailer-escrow-transfer.helpers';
 
 const logger = new Logger('SettlementPayoutReservation');
@@ -26,8 +27,16 @@ export async function finalizeSettlementPayoutReservationInTransaction(
   settlementStatus?: string;
   debitedAmount?: number;
 }> {
-  const settlement = await tx.settlement.findUnique({ where: { id: settlementId } });
-  if (!settlement) return { finalized: false };
+  const payoutSettlement = await tx.settlement.findUnique({ where: { id: settlementId } });
+  if (!payoutSettlement) return { finalized: false };
+  const payoutMetadata = payoutSettlement.metadata && typeof payoutSettlement.metadata === 'object'
+    ? payoutSettlement.metadata as Record<string, any>
+    : {};
+  const parentSettlementId = payoutMetadata.parentSettlementId;
+  const parentSettlement = typeof parentSettlementId === 'string'
+    ? await tx.settlement.findUnique({ where: { id: parentSettlementId } })
+    : null;
+  const settlement = parentSettlement ?? payoutSettlement;
   const metadata = settlement.metadata && typeof settlement.metadata === 'object'
     ? settlement.metadata as Record<string, any>
     : {};
@@ -52,11 +61,13 @@ export async function finalizeSettlementPayoutReservationInTransaction(
 
   const transfer = escrowFunding.transferId
     ? await tx.retailerEscrowTransfer.findUnique({ where: { id: escrowFunding.transferId } })
-    : await tx.retailerEscrowTransfer.findUnique({ where: { settlementId } });
+    : await tx.retailerEscrowTransfer.findUnique({ where: { settlementId: settlement.id } });
   if (!transfer || transfer.status !== 'BALANCE_VERIFIED') return { finalized: false };
 
   const attempts = await tx.b2BPayoutAttempt.findMany({
-    where: { settlementId },
+    where: parentSettlement
+      ? { merchantTransactionReference: settlement.merchantTransactionReference }
+      : { settlementId },
     select: { status: true, metadata: true },
   });
   if (attempts.length < expectedPayoutCount) return { finalized: false };
@@ -75,7 +86,11 @@ export async function finalizeSettlementPayoutReservationInTransaction(
   const requestedDebit = hasExplicitFunding
     ? successfulAttempts.reduce((sum: number, attempt: any) => (
       sum + Math.max(0, Number(attempt.metadata?.escrowFundedAmount ?? 0))
-    ), 0)
+    ), 0) + (
+      successfulAttempts.some((attempt: any) => Number(attempt.metadata?.escrowFundedAmount ?? 0) > 0)
+        ? Math.max(0, Number(metadata.settlementPlan?.platformFeeAmount ?? 0))
+        : 0
+    )
     : successfulAttempts.length === attempts.length
       ? Number(transfer.amount)
       : 0;
@@ -111,10 +126,12 @@ export async function finalizeSettlementPayoutReservationInTransaction(
   });
   if (updated.count !== 1) return { finalized: false };
 
-  await updateEscrowSettlementMetadata(settlementId, {
+  const ledgerBalance = await retailerEscrowFloatService.getLedgerBalance(transfer.retailerMerchantId, tx);
+  await updateEscrowSettlementMetadata(settlement.id, {
     escrowStatus: transferStatus,
     reservedAmount,
     debitedAmount: requestedDebit,
+    availableBalance: ledgerBalance.balance,
     payoutReservationFinalizedAt: new Date().toISOString(),
   }, tx, successfulAttempts.length === attempts.length ? 'COMPLETED' : 'PROCESSING_FAILED');
 

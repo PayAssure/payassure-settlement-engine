@@ -97,6 +97,8 @@ Success response (`200 OK`):
   "dailyFloat": 10000,
   "depositedBalance": 12500,
   "paidOutBalance": 2000,
+  "balance": 10500,
+  "stagedBalance": 9000,
   "reservedBalance": 1500,
   "availableBalance": 9000,
   "updatedAt": "2026-11-04T12:19:29.795Z"
@@ -110,8 +112,10 @@ Success response (`200 OK`):
 | `dailyFloat` | Configured daily-float metadata. This is not a credit or the current balance. |
 | `depositedBalance` | Sum of this retailer's `SUCCEEDED` float deposits only. |
 | `paidOutBalance` | Sum of this retailer's `SUCCEEDED` escrow transfers. |
-| `reservedBalance` | Sum held by active transfers that may still complete. |
-| `availableBalance` | `depositedBalance - paidOutBalance - reservedBalance`; this is the amount eligible for a new cash settlement. |
+| `balance` | Confirmed ledger balance: `depositedBalance - paidOutBalance`. A pending payout does not change it. |
+| `stagedBalance` | Projected balance after all currently reserved transfers succeed: `balance - reservedBalance`. This is temporary and is discarded if a payout fails. |
+| `reservedBalance` | Sum staged for active transfers that may still complete. |
+| `availableBalance` | `stagedBalance`; this is the amount eligible for a new cash settlement, so pending amounts cannot be spent twice. |
 | `updatedAt` | Last update time for the retailer's float configuration; use the balance endpoint's `asOf` for balance-read time. |
 
 This route combines configuration and the retailer's DB-derived balance. It does not call Safaricom and does not return the shared physical-account balance.
@@ -161,7 +165,7 @@ Success response (`201 Created`, NestJS POST default):
 
 The balance calculation is scoped to the retailer resolved from the token. Pending/submitted deposits are excluded; only successful deposits count. A pending transfer is reserved so the same balance cannot be spent twice. This response is the source to use for cash-payment affordability checks. The settlement initiation flow independently repeats the balance check under its database lock; clients must not rely on a previously read balance as a reservation.
 
-The response field `dailyFloat` is the retailer's configured expected daily float; it is metadata, not a balance or credit. The fields `depositedBalance`, `paidOutBalance`, `reservedBalance`, and `availableBalance` have the same meanings as in the GET float response above. `asOf` is the timestamp at which this balance response was generated.
+The response field `dailyFloat` is the retailer's configured expected daily float; it is metadata, not a balance or credit. The fields `depositedBalance`, `paidOutBalance`, `balance`, `stagedBalance`, `reservedBalance`, and `availableBalance` have the same meanings as in the GET float response above. `asOf` is the timestamp at which this balance response was generated.
 
 Errors:
 
@@ -279,7 +283,7 @@ PayAssure verifies the retailer's available DB balance under the retailer-float 
 
 For mixed `CASH` and `MPESA` funding, the cash balance/reservation applies only to the `CASH` portion. Customer M-Pesa collection remains a separate flow and is not included in this document's cash balance calculation.
 
-Settlement webhooks include `data.cash_funding.amount`, `currency`, and `source` only after a positive cash amount has been reserved from the retailer's virtual balance for payout. This reports the amount drawn; it never includes the remaining/available float balance. It is omitted for M-Pesa-only settlements and while a mixed settlement is still waiting for its customer M-Pesa callback. See [WEBHOOK_INTEGRATION.md](./WEBHOOK_INTEGRATION.md) for the full webhook contract and receiver troubleshooting.
+Settlement webhooks include `data.cash_funding.amount`, `currency`, and `source` only after a positive cash amount has been reserved from the retailer's virtual balance for payout. The reserved/debited amount includes the retained platform fee as well as the cash-funded payout amount; the platform fee is deducted from the escrow ledger after the payout callbacks finalize, but is not sent as a separate payout. When included, `data.escrow_balance.balance` reports successful deposits less payout debits and retained fees confirmed by callbacks. The confirmed balance therefore does not change just because a payout is pending; it changes after the payout callbacks finalize the debit. Active reservations still reduce `availableBalance` for new settlement checks. Both fields are omitted for M-Pesa-only settlements and while a mixed settlement is still waiting for its customer M-Pesa callback. See [WEBHOOK_INTEGRATION.md](./WEBHOOK_INTEGRATION.md) for the full webhook contract and receiver troubleshooting.
 
 ## Balance, reservation, and payout rules
 

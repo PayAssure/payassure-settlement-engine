@@ -14,6 +14,8 @@ test('retailer escrow balance endpoints return the authenticated retailer ledger
     currency: 'KES',
     depositedBalance: 12500,
     paidOutBalance: 2000,
+    balance: 10500,
+    stagedBalance: 9000,
     reservedBalance: 1500,
     availableBalance: 9000,
   };

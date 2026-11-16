@@ -22,6 +22,12 @@ import { normalizePaymentMethods } from './initiate/payment/normalize-payment-me
 import { retailerEscrowTransferService } from '../../retailer';
 import type { SettlementInitiationContext } from './initiate/context';
 import { buildSettlementPlan } from './initiate/helpers/build-settlement-plan';
+import type { SettlementResponseDto } from '../dto/settlement-response.dto';
+
+export type SettlementAcceptedCallback = (
+  response: SettlementResponseDto,
+  httpStatus: number,
+) => void | Promise<void>;
 
 export { simulateMpesaLandingCallback } from './initiate/payment/simulate-mpesa-landing-callback';
 export { sendStkPushRequestWithRetry } from './initiate/payment/stk-push-with-retry';
@@ -36,6 +42,7 @@ export async function initiateOperation(
   data: InitiateSettlementDto,
   supportedCurrencies: string[],
   allocateCashSettlement?: SettlementInitiationContext['allocateCashSettlement'],
+  onSettlementAccepted?: SettlementAcceptedCallback,
 ) {
   const session = await validateAndGetSession(token, repository, logger);
   const integration = await repository.findIntegrationById(session.integrationId);
@@ -58,7 +65,10 @@ export async function initiateOperation(
   try {
     data = normalizeCanonicalSettlement(data);
     const existingResponse = await findExistingSettlementResponse(repository, businessId, retailerMerchantId, session.id, data);
-    if (existingResponse) return existingResponse;
+    if (existingResponse) {
+      await onSettlementAccepted?.(existingResponse, 200);
+      return existingResponse;
+    }
 
     const invalidSuppliers = await validateAndFilterSuppliers(data, repository, logger, supportedCurrencies);
 
@@ -81,6 +91,26 @@ export async function initiateOperation(
       internalMerchantTransactionReference,
       data,
     );
+
+    await onSettlementAccepted?.({
+      success: true,
+      settlement: {
+        settlementId: primarySettlement.id,
+        merchantId: retailerMerchantId,
+        status: SettlementStatus.INITIATED,
+        amount: Number(primarySettlement.amount),
+        retailerAmount: settlementPlan.retailerEntitlement,
+        supplierAmount: settlementPlan.supplierAmount,
+        systemAmount: settlementPlan.platformFeeAmount,
+        paymentDetails: toPublicPaymentDetails(data.paymentMethod),
+        currency: primarySettlement.currency ?? data.currency,
+        reference: primarySettlement.reference,
+        createdAt: primarySettlement.createdAt,
+        estimatedProcessingTime: 'Processing queued',
+      },
+      message: 'Settlement created; processing will continue asynchronously.',
+      children: [],
+    }, 201);
 
     await repository.touchSession(session.id);
     if (

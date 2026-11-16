@@ -1,6 +1,7 @@
 import { createHmac, randomUUID } from 'crypto';
 import { Logger } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
+import { retailerEscrowFloatService } from '../../retailer/services/retailer-escrow-float.service';
 
 export type SettlementWebhookEvent =
   | 'payment.collection.succeeded'
@@ -53,6 +54,9 @@ export class SettlementWebhookDeliveryService {
     const eventId = randomUUID();
     const createdAt = new Date().toISOString();
     const cashFunding = this.cashFunding(settlement.metadata, settlement.currency);
+    const escrowBalance = cashFunding
+      ? await retailerEscrowFloatService.getLedgerBalance(retailer.merchantId, this.prisma)
+      : undefined;
     const body = JSON.stringify({
       id: eventId,
       type: eventType,
@@ -68,6 +72,7 @@ export class SettlementWebhookDeliveryService {
           status: settlement.status,
         },
         ...(cashFunding ? { cash_funding: cashFunding } : {}),
+        ...(escrowBalance ? { escrow_balance: escrowBalance } : {}),
         details,
         recipient: {
           merchant_id: retailer.merchantId,

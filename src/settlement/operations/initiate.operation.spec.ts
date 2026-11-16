@@ -104,6 +104,8 @@ test('cash settlement allocates after the DB balance has been reserved', async (
   const originalInitiateCustomerPayment = paymentModule.initiateCustomerPayment;
   const originalHasFloatConfig = retailerEscrowTransferService.hasFloatConfig;
   let allocationCalled = false;
+  let acceptedResponse: any;
+  let acceptedStatus: number | undefined;
   paymentModule.initiateCustomerPayment = async () => ({
     success: true,
     cashAllocationReady: true,
@@ -114,7 +116,11 @@ test('cash settlement allocates after the DB balance has been reserved', async (
 
   try {
     const response = await initiateOperation(
-      {},
+      {
+        integration: {
+          findFirst: async () => ({ participant: { payment: { type: 'MPESA', phoneNumber: '254700000000' } } }),
+        },
+      },
       fixture.repository,
       fixture.logger,
       'token',
@@ -126,9 +132,17 @@ test('cash settlement allocates after the DB balance has been reserved', async (
         assert.deepEqual(fixture.created, ['parent', 'supplier']);
         return { success: true, status: 'PROCESSING', message: 'Payouts dispatched' };
       },
+      async (response, statusCode) => {
+        acceptedResponse = response;
+        acceptedStatus = statusCode;
+        assert.deepEqual(fixture.created, ['parent']);
+      },
     );
 
     assert.equal(allocationCalled, true);
+    assert.equal(acceptedStatus, 201);
+    assert.equal(acceptedResponse.settlement.settlementId, 'settlement-1');
+    assert.equal(acceptedResponse.settlement.status, 'INITIATED');
     assert.equal(response.success, true);
     assert.equal(response.settlement.status, 'PROCESSING');
   } finally {

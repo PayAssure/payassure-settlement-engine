@@ -1,10 +1,14 @@
 import type { InitiateSettlementDto } from '../dto/initiate-settlement.dto';
 import { SettlementResponseDto } from '../dto/settlement-response.dto';
-import { initiateOperation } from '../operations/initiate.operation';
+import { initiateOperation, type SettlementAcceptedCallback } from '../operations/initiate.operation';
 import { SettlementAuthenticationBase } from './authentication.base';
 
 export abstract class SettlementInitiationBase extends SettlementAuthenticationBase {
-  async initiateSettlement(token: string, data: InitiateSettlementDto): Promise<SettlementResponseDto> {
+  async initiateSettlement(
+    token: string,
+    data: InitiateSettlementDto,
+    onSettlementAccepted?: SettlementAcceptedCallback,
+  ): Promise<SettlementResponseDto> {
     return initiateOperation(
       this.prisma,
       this.repository,
@@ -13,6 +17,7 @@ export abstract class SettlementInitiationBase extends SettlementAuthenticationB
       data,
       this.SUPPORTED_CURRENCIES,
       ({ merchantTransactionReference }) => this.splitAndAllocateFunds({ merchantTransactionReference }),
+      onSettlementAccepted,
     );
   }
 }

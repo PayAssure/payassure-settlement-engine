@@ -113,7 +113,6 @@ class RetailerEscrowBalanceQueryService {
       transferId: created.id,
       cashAmount: request.cashAmount,
       mpesaAmount: request.mpesaAmount,
-      availableBalance,
       ...(request.mpesaAmount === 0 ? { payoutSource: 'CENTRAL_ACCOUNT' } : {}),
     });
     this.logger.log('[ESCROW_TRANSFER][FLOAT_LOCK][ACQUIRED]', {
