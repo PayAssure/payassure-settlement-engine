@@ -157,9 +157,9 @@ test('settlement webhook delivery sends only to the retailer endpoint and signs 
     });
     assert.deepEqual(body.data.escrow_balance, {
       balance: 10500,
+      available_balance: 9000,
       currency: 'KES',
     });
-    assert.equal('available_balance' in body.data.escrow_balance, false);
     assert.equal(body.data.payouts.length, 2);
     assert.deepEqual(deliveryLogs.map((entry) => entry.message), [
       '[SETTLEMENT_WEBHOOK_DELIVERY][REQUEST]',

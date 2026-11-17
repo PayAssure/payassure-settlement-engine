@@ -64,9 +64,9 @@ class RetailerEscrowFloatService {
   async getLedgerBalance(
     merchantId: string,
     client: Prisma.TransactionClient = prisma,
-  ): Promise<{ balance: number; currency: string }> {
+  ): Promise<{ balance: number; availableBalance: number; currency: string }> {
     if (!merchantId || !String(merchantId).trim()) {
-      return { balance: 0, currency: 'KES' };
+      return { balance: 0, availableBalance: 0, currency: 'KES' };
     }
     const floatModel = (client as any)?.retailerEscrowFloat ?? prisma.retailerEscrowFloat;
     const config = await floatModel.findUnique({
@@ -78,6 +78,7 @@ class RetailerEscrowFloatService {
     const summary = await this.getBalanceSummary(config.id, client);
     return {
       balance: summary.depositedBalance - summary.paidOutBalance,
+      availableBalance: summary.availableBalance,
       currency: config.currency,
     };
   }

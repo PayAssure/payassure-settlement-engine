@@ -72,7 +72,15 @@ export class SettlementWebhookDeliveryService {
           status: settlement.status,
         },
         ...(cashFunding ? { cash_funding: cashFunding } : {}),
-        ...(escrowBalance ? { escrow_balance: escrowBalance } : {}),
+        ...(escrowBalance
+          ? {
+              escrow_balance: {
+                balance: escrowBalance.balance,
+                available_balance: escrowBalance.availableBalance,
+                currency: escrowBalance.currency,
+              },
+            }
+          : {}),
         details,
         recipient: {
           merchant_id: retailer.merchantId,

@@ -71,6 +71,7 @@ Example event:
       "id": "clxsettlement123",
       "reference": "SET-20261103-001",
       "merchant_transaction_reference": "POS-20261103-001",
+      "merchantTransactionReference": "POS-20261103-001",
       "amount": 1000,
       "currency": "KES",
       "status": "FAILED"
@@ -82,6 +83,7 @@ Example event:
     },
     "escrow_balance": {
       "balance": 900,
+      "available_balance": 800,
       "currency": "KES"
     },
     "details": {
@@ -117,15 +119,19 @@ for both retailer and suppliers; no webhook is sent to suppliers.
 `data.cash_funding` is included only after a positive cash amount has been
 reserved from the retailer's database-backed virtual balance for payout. It
 reports the amount used and its source. When `cash_funding` is present,
-`data.escrow_balance` reports the retailer's confirmed virtual balance:
-successful deposits minus payout debits confirmed by payout callbacks. A
-reservation does not reduce this balance; pending payouts leave it unchanged.
+`data.escrow_balance` reports both the retailer's confirmed virtual balance
+and the balance currently available for a new settlement:
+
+| Field | Meaning |
+| --- | --- |
+| `balance` | Successful deposits minus payout debits confirmed by payout callbacks. Pending payouts do not change this value. |
+| `available_balance` | Confirmed `balance` less active escrow reservations; this is the amount eligible for a new settlement. |
+| `currency` | Currency configured for the retailer's escrow float. |
+
 For cash-funded settlements, the callback-finalized debit includes the retained
-platform fee. The fee is deducted from escrow but is not sent as a payout.
-It is omitted for settlements with no cash funding and while a mixed settlement
-is still waiting for its customer M-Pesa callback. This is the confirmed
-balance, not the amount available for a new settlement; active reservations
-continue to be held separately for balance checks.
+platform fee. The fee is deducted from escrow but is not sent as a payout. The
+`escrow_balance` object is omitted for settlements with no cash funding and
+while a mixed settlement is still waiting for its customer M-Pesa callback.
 
 ## 3. Verify the signature
 
